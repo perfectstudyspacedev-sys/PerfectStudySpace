@@ -1,0 +1,24 @@
+# Claude
+.claude/
+
+# Supabase temp
+supabase/.temp/
+
+# Environment
+.env
+.env.*
+
+# Dependencies
+node_modules/
+
+# Build output
+dist/
+build/
+.vercel/
+
+# IDE
+.vscode/
+.idea/
+
+# Logs
+*.log
