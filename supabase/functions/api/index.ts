@@ -392,11 +392,11 @@ Deno.serve(async (req) => {
       const targetDate = date || todayISO();
 
       const { data: duePayments } = await db.from("memberships")
-        .select("*, students(name, phone), branches(name)")
+        .select("*, students(name, phone, course), branches(name)")
         .eq("is_active", true).lte("due_date", targetDate).gt("fee_due", 0)
         .order("due_date");
       const { data: expiredMemberships } = await db.from("memberships")
-        .select("*, students(name, phone), branches(name)")
+        .select("*, students(name, phone, course), branches(name)")
         .eq("is_active", true).eq("end_date", targetDate)
         .order("end_date");
 
@@ -574,7 +574,7 @@ Deno.serve(async (req) => {
     }
 
     if (action === "add_locker") {
-      const { studentId, branchId, lockerNo, paymentMode } = payload;
+      const { studentId, branchId, lockerNo, paymentMode, payLater } = payload;
       if (!requireBranch(staff, branchId)) return err("Branch access denied", 403);
 
       const { data: existing } = await db.from("lockers").select("id").eq("student_id", studentId).eq("is_active", true).maybeSingle();
@@ -597,17 +597,20 @@ Deno.serve(async (req) => {
       const { data: locker, error: lErr } = await db.from("lockers").insert({
         branch_id: branchId, student_id: studentId, locker_no: lockerNo,
         locker_due_date: endDate, deposit_amount: deposit, monthly_fee: 100,
+        amount_paid: payLater ? 0 : amount, fee_due: payLater ? amount : 0,
       }).select("*").single();
       if (lErr) return err(lErr.message);
 
-      await db.from("transactions").insert({
-        student_id: studentId, branch_id: branchId, category: "locker",
-        amount, payment_mode: paymentMode ?? "cash",
-        notes: `Locker added later — prorated ${daysRemaining}d rent (₹${proratedFee}) + deposit (₹${deposit})`,
-        created_by_staff_id: staff.id,
-      });
+      if (!payLater) {
+        await db.from("transactions").insert({
+          student_id: studentId, branch_id: branchId, category: "locker",
+          amount, payment_mode: paymentMode ?? "cash",
+          notes: `Locker added later — prorated ${daysRemaining}d rent (₹${proratedFee}) + deposit (₹${deposit})`,
+          created_by_staff_id: staff.id,
+        });
+      }
 
-      return json({ ok: true, locker, amountCharged: amount, proratedFee, daysRemaining });
+      return json({ ok: true, locker, amountCharged: amount, proratedFee, daysRemaining, payLater: !!payLater });
     }
 
     if (action === "remove_locker") {
@@ -633,10 +636,18 @@ Deno.serve(async (req) => {
         .order("end_date", { ascending: false }).limit(1).maybeSingle();
       if (!membership) return err("No active membership found");
       if (membership.is_paused) return err("Membership is currently on hold");
-      const isExpiredMembership = membership.end_date < todayISO();
+
+      const today = todayISO();
+      const isExpiredMembership = membership.end_date < today;
+      if (isExpiredMembership) {
+        const daysSinceExpiry = Math.floor((new Date(today + "T12:00:00").getTime() - new Date(membership.end_date + "T12:00:00").getTime()) / 86_400_000);
+        const GRACE_DAYS = 7;
+        if (daysSinceExpiry > GRACE_DAYS) {
+          return err(`Membership expired ${daysSinceExpiry} days ago — the ${GRACE_DAYS}-day grace period is over. Please renew before checking in.`);
+        }
+      }
 
       // One check-in per day
-      const today = todayISO();
       const { data: alreadyIn } = await db.from("bookings").select("id")
         .eq("student_id", studentId)
         .in("booking_type", ["temporary", "permanent"])
@@ -888,6 +899,26 @@ Deno.serve(async (req) => {
 
       await db.from("alerts").update({ status: "resolved" }).eq("student_id", mem.student_id).eq("alert_type", "payment_due").eq("status", "pending");
       await refreshStudentStatus(db, mem.student_id);
+      return json({ ok: true });
+    }
+
+    if (action === "record_locker_payment") {
+      const { lockerId, amount, paymentMode } = payload;
+      const { data: locker } = await db.from("lockers").select("*").eq("id", lockerId).single();
+      if (!locker) return err("Locker not found");
+      if (!requireBranch(staff, locker.branch_id)) return err("Branch access denied", 403);
+
+      const newDue = Math.max(Number(locker.fee_due) - Number(amount), 0);
+      await db.from("lockers").update({
+        fee_due: newDue, amount_paid: Number(locker.amount_paid) + Number(amount),
+      }).eq("id", lockerId);
+
+      await db.from("transactions").insert({
+        student_id: locker.student_id, branch_id: locker.branch_id,
+        category: "locker", amount: Number(amount), payment_mode: paymentMode ?? "cash",
+        notes: "Locker pending payment", created_by_staff_id: staff.id,
+      });
+
       return json({ ok: true });
     }
 
@@ -1167,8 +1198,9 @@ Deno.serve(async (req) => {
       const targetDate = date || todayISO();
       const { data: task } = await db.from("tasks").select("*").eq("id", taskId).single();
       if (!task) return err("Task not found");
-      if (!isOwner(staff) && task.assigned_to_staff_id !== staff.id && task.assigned_by_staff_id !== staff.id) {
-        return err("You cannot update this task", 403);
+      // Only the assignee can mark their own task complete — being the assigner (even as owner) isn't enough
+      if (task.assigned_to_staff_id !== staff.id) {
+        return err("Only the person a task is assigned to can complete it", 403);
       }
       if (task.repeat_interval === "none") {
         await db.from("tasks").update({
@@ -1241,7 +1273,8 @@ Deno.serve(async (req) => {
       const presentMap = new Map((present ?? []).map(p => [p.staff_id, p.first_login_at]));
 
       const rows = (allStaff ?? []).map(s => ({
-        staffId: s.id, displayName: s.display_name || s.username, branchName: s.branches?.name ?? null,
+        staffId: s.id, displayName: s.display_name || s.username,
+        branchId: s.branch_id ?? null, branchName: s.branches?.name ?? null,
         present: presentMap.has(s.id), firstLoginAt: presentMap.get(s.id) ?? null,
       }));
 
@@ -1262,19 +1295,26 @@ Deno.serve(async (req) => {
 
     // ─── MESSAGES ───
     if (action === "list_messages") {
-      const { branchId } = payload;
-      if (!requireBranch(staff, branchId)) return err("Branch access denied", 403);
-      const { data } = await db.from("messages")
+      const { branchId, channel } = payload;
+      let q = db.from("messages")
         .select("*, staff:sender_staff_id(display_name, username), students:recipient_student_id(name, phone)")
-        .eq("branch_id", branchId).order("sent_at", { ascending: false }).limit(50);
+        .order("sent_at", { ascending: false }).limit(50);
+      if (channel === "all") {
+        q = q.is("branch_id", null);
+      } else {
+        if (!requireBranch(staff, branchId)) return err("Branch access denied", 403);
+        q = q.eq("branch_id", branchId);
+      }
+      const { data } = await q;
       return json({ messages: data ?? [] });
     }
 
     if (action === "send_message") {
-      const { branchId, recipientType, recipientStudentId, recipientStaffId, content } = payload;
-      if (!requireBranch(staff, branchId)) return err("Branch access denied", 403);
+      const { branchId, channel, recipientType, recipientStudentId, recipientStaffId, content } = payload;
+      const isAllStaffChannel = channel === "all";
+      if (!isAllStaffChannel && !requireBranch(staff, branchId)) return err("Branch access denied", 403);
       await db.from("messages").insert({
-        branch_id: branchId, sender_staff_id: staff.id,
+        branch_id: isAllStaffChannel ? null : branchId, sender_staff_id: staff.id,
         recipient_type: recipientType, recipient_student_id: recipientStudentId,
         recipient_staff_id: recipientStaffId, content,
       });
@@ -1322,14 +1362,25 @@ Deno.serve(async (req) => {
       if (!requireBranch(staff, branchId)) return err("Branch access denied", 403);
       const today = todayISO();
       const { data, error: bErr } = await db.from("bookings")
-        .select("*, students(name, phone, course), desks!desk_id(label, seat_type)")
+        .select("*, students(name, phone, course), desks!desk_id(label, seat_type), memberships:membership_id(total_paid, fee_due, monthly_fee, category)")
         .eq("branch_id", branchId)
         .eq("status", "active")
         .gte("created_at", today + "T00:00:00Z")
         .lte("created_at", today + "T23:59:59Z")
         .order("created_at", { ascending: false });
       if (bErr) return err(bErr.message);
-      return json({ bookings: data ?? [] });
+
+      const bookingIds = (data ?? []).map(b => b.id);
+      const { data: foodBills } = bookingIds.length
+        ? await db.from("food_bills").select("booking_id, total").in("booking_id", bookingIds)
+        : { data: [] };
+      const foodTotals = new Map<string, number>();
+      for (const fb of foodBills ?? []) {
+        foodTotals.set(fb.booking_id, (foodTotals.get(fb.booking_id) ?? 0) + Number(fb.total));
+      }
+
+      const bookings = (data ?? []).map(b => ({ ...b, foodTotal: foodTotals.get(b.id) ?? 0 }));
+      return json({ bookings });
     }
 
     // ─── PAUSE / RESUME SESSION ───
@@ -1440,11 +1491,39 @@ Deno.serve(async (req) => {
     }
 
     // ─── CLOSE MEMBERSHIP ───
+    if (action === "get_membership_closure_summary") {
+      const { membershipId } = payload;
+      const { data: mem } = await db.from("memberships").select("*").eq("id", membershipId).single();
+      if (!mem) return err("Membership not found");
+      if (!requireBranch(staff, mem.branch_id)) return err("Branch access denied", 403);
+
+      const { data: locker } = await db.from("lockers").select("*")
+        .eq("student_id", mem.student_id).eq("is_active", true).maybeSingle();
+
+      const membershipDue = Number(mem.fee_due ?? 0);
+      const lockerDue = Number(locker?.fee_due ?? 0);
+
+      return json({
+        membershipDue, lockerDue, totalDue: membershipDue + lockerDue,
+        canClose: membershipDue <= 0 && lockerDue <= 0,
+        locker: locker ?? null,
+      });
+    }
+
     if (action === "close_membership") {
       const { membershipId } = payload;
       const { data: mem } = await db.from("memberships").select("*").eq("id", membershipId).single();
       if (!mem) return err("Membership not found");
       if (!requireBranch(staff, mem.branch_id)) return err("Branch access denied", 403);
+
+      if (Number(mem.fee_due ?? 0) > 0) {
+        return err(`This membership still has ₹${Number(mem.fee_due)} pending — clear it before closing.`);
+      }
+      const { data: locker } = await db.from("lockers").select("fee_due")
+        .eq("student_id", mem.student_id).eq("is_active", true).maybeSingle();
+      if (locker && Number(locker.fee_due ?? 0) > 0) {
+        return err(`This student's locker still has ₹${Number(locker.fee_due)} pending — clear it before closing.`);
+      }
 
       await db.from("memberships").update({ is_active: false }).eq("id", membershipId);
 

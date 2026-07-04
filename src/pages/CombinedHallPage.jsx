@@ -1,6 +1,17 @@
 import { useState, useEffect, useCallback } from 'react'
+import { Link } from 'react-router-dom'
 import { api } from '../lib/api'
-import { todayISO } from '../lib/utils'
+import { formatCurrency, todayISO } from '../lib/utils'
+
+function groupByBranch(rows) {
+  const groups = new Map()
+  for (const row of rows) {
+    const key = row.branches?.name ?? 'Unknown Branch'
+    if (!groups.has(key)) groups.set(key, [])
+    groups.get(key).push(row)
+  }
+  return [...groups.entries()].sort(([a], [b]) => a.localeCompare(b))
+}
 
 export default function CombinedHallPage() {
   const [tab, setTab] = useState('overview')
@@ -134,47 +145,84 @@ export default function CombinedHallPage() {
             <input type="date" value={pendingDate} onChange={(e) => setPendingDate(e.target.value)} />
           </div>
           {!pending ? <p>Loading…</p> : (
-            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(360px, 1fr))', gap: '1rem' }}>
-              <div className="card">
-                <h3 style={{ color: 'var(--accent)', marginBottom: '0.75rem' }}>Payments Due On/Before {pending.date}</h3>
+            <>
+              <div className="card" style={{ marginBottom: '1rem' }}>
+                <h3 style={{ color: 'var(--accent)', marginBottom: '0.75rem' }}>
+                  Payments Due On/Before {pending.date} — {pending.duePayments.length} student{pending.duePayments.length === 1 ? '' : 's'}
+                </h3>
                 {pending.duePayments.length === 0 ? (
                   <p style={{ color: 'var(--text-muted)' }}>No pending payments.</p>
                 ) : (
-                  <table className="data-table">
-                    <thead><tr><th>Branch</th><th>Student</th><th>Due Date</th><th>Amount</th></tr></thead>
-                    <tbody>
-                      {pending.duePayments.map(m => (
-                        <tr key={m.id} className="row-overdue">
-                          <td>{m.branches?.name}</td>
-                          <td>{m.students?.name}<div className="mono" style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>{m.students?.phone}</div></td>
-                          <td className="mono">{m.due_date}</td>
-                          <td className="mono">₹{m.fee_due}</td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: '1.25rem' }}>
+                    {groupByBranch(pending.duePayments).map(([branchName, rows]) => (
+                      <div key={branchName}>
+                        <h4 style={{ fontSize: '0.85rem', color: '#a78bfa', marginBottom: '0.5rem' }}>
+                          {branchName} · {rows.length} pending
+                        </h4>
+                        <table className="data-table">
+                          <thead>
+                            <tr><th>Student</th><th>Course</th><th>Plan</th><th>Cabin</th><th>Due Date</th><th>Amount Pending</th></tr>
+                          </thead>
+                          <tbody>
+                            {rows.map(m => (
+                              <tr key={m.id} className="row-overdue">
+                                <td>
+                                  <Link to={`/students/${m.student_id}`} style={{ color: 'var(--accent)' }}>{m.students?.name}</Link>
+                                  <div className="mono" style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>{m.students?.phone}</div>
+                                </td>
+                                <td style={{ fontSize: '0.82rem' }}>{m.students?.course ?? '—'}</td>
+                                <td style={{ fontSize: '0.82rem' }}>{m.category} · {m.hours_per_day}h/day</td>
+                                <td style={{ fontSize: '0.82rem' }}>{m.cabin_no ?? '—'}</td>
+                                <td className="mono">{m.due_date}</td>
+                                <td className="mono" style={{ color: '#ff8888', fontWeight: 700 }}>{formatCurrency(m.fee_due)}</td>
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
+                      </div>
+                    ))}
+                  </div>
                 )}
               </div>
+
               <div className="card">
-                <h3 style={{ color: 'var(--accent)', marginBottom: '0.75rem' }}>Memberships Expiring On {pending.date}</h3>
+                <h3 style={{ color: 'var(--accent)', marginBottom: '0.75rem' }}>
+                  Memberships Expiring On {pending.date} — {pending.expiredMemberships.length} student{pending.expiredMemberships.length === 1 ? '' : 's'}
+                </h3>
                 {pending.expiredMemberships.length === 0 ? (
                   <p style={{ color: 'var(--text-muted)' }}>None.</p>
                 ) : (
-                  <table className="data-table">
-                    <thead><tr><th>Branch</th><th>Student</th><th>End Date</th></tr></thead>
-                    <tbody>
-                      {pending.expiredMemberships.map(m => (
-                        <tr key={m.id} className="row-overdue">
-                          <td>{m.branches?.name}</td>
-                          <td>{m.students?.name}<div className="mono" style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>{m.students?.phone}</div></td>
-                          <td className="mono">{m.end_date}</td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: '1.25rem' }}>
+                    {groupByBranch(pending.expiredMemberships).map(([branchName, rows]) => (
+                      <div key={branchName}>
+                        <h4 style={{ fontSize: '0.85rem', color: '#a78bfa', marginBottom: '0.5rem' }}>
+                          {branchName} · {rows.length} expiring
+                        </h4>
+                        <table className="data-table">
+                          <thead>
+                            <tr><th>Student</th><th>Course</th><th>Plan</th><th>Cabin</th><th>End Date</th></tr>
+                          </thead>
+                          <tbody>
+                            {rows.map(m => (
+                              <tr key={m.id} className="row-overdue">
+                                <td>
+                                  <Link to={`/students/${m.student_id}`} style={{ color: 'var(--accent)' }}>{m.students?.name}</Link>
+                                  <div className="mono" style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>{m.students?.phone}</div>
+                                </td>
+                                <td style={{ fontSize: '0.82rem' }}>{m.students?.course ?? '—'}</td>
+                                <td style={{ fontSize: '0.82rem' }}>{m.category} · {m.hours_per_day}h/day</td>
+                                <td style={{ fontSize: '0.82rem' }}>{m.cabin_no ?? '—'}</td>
+                                <td className="mono">{m.end_date}</td>
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
+                      </div>
+                    ))}
+                  </div>
                 )}
               </div>
-            </div>
+            </>
           )}
         </>
       )}

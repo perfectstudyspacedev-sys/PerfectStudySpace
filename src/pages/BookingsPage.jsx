@@ -88,59 +88,90 @@ function CheckoutModal({ booking, onConfirm, onCancel, loading }) {
   const otH = Math.floor(overtimeMinutes / 60)
   const otM = overtimeMinutes % 60
   const otLabel = otH > 0 ? `${otH}h ${otM}m` : `${otM}m`
+  const foodTotal = Number(booking.foodTotal ?? 0)
+  const alreadyPaid = Number(booking.amount) + foodTotal
+  const remainingDue = overtimeCharge // session fee + food are already settled — only overtime is owed now
+  const fullBill = alreadyPaid + remainingDue
+  const membership = booking.memberships
+  const membershipPaid = membership ? Number(membership.total_paid ?? 0) : 0
+  const membershipDue = membership ? Number(membership.fee_due ?? 0) : 0
+  const canClose = membershipDue <= 0
 
   return (
     <div className="modal-overlay" onClick={onCancel}>
       <div className="modal" style={{ maxWidth: 420 }} onClick={(e) => e.stopPropagation()}>
         <h2>Checkout — {booking.students?.name}</h2>
 
-        <div style={{ background: inGrace ? 'rgba(74,222,128,0.07)' : 'rgba(255,60,60,0.08)', border: `1px solid ${inGrace ? 'rgba(74,222,128,0.3)' : 'rgba(255,60,60,0.3)'}`, borderRadius: 6, padding: '0.75rem', marginBottom: '1rem' }}>
-          <p style={{ fontWeight: 700, color: inGrace ? '#4ade80' : '#ff8888', marginBottom: '0.3rem' }}>
-            ⏱ {otLabel} overtime {inGrace ? '— within grace period' : ''}
-          </p>
-          {isWalkin ? (
-            inGrace ? (
-              <p style={{ fontSize: '0.85rem', color: 'var(--text-muted)' }}>
-                Under 15 minutes — no extra charge applies.
-              </p>
+        {overtimeMinutes > 0 && (
+          <div style={{ background: inGrace ? 'rgba(74,222,128,0.07)' : 'rgba(255,60,60,0.08)', border: `1px solid ${inGrace ? 'rgba(74,222,128,0.3)' : 'rgba(255,60,60,0.3)'}`, borderRadius: 6, padding: '0.75rem', marginBottom: '1rem' }}>
+            <p style={{ fontWeight: 700, color: inGrace ? '#4ade80' : '#ff8888', marginBottom: '0.3rem' }}>
+              ⏱ {otLabel} overtime {inGrace ? '— within grace period' : ''}
+            </p>
+            {isWalkin ? (
+              inGrace ? (
+                <p style={{ fontSize: '0.85rem', color: 'var(--text-muted)' }}>
+                  Under 15 minutes — no extra charge applies.
+                </p>
+              ) : (
+                <p style={{ fontSize: '0.85rem', color: 'var(--text-muted)' }}>
+                  15 min grace + {billableMinutes}m billed at ₹{Math.round(hourlyRate)}/hr
+                </p>
+              )
             ) : (
               <p style={{ fontSize: '0.85rem', color: 'var(--text-muted)' }}>
-                15 min grace + {billableMinutes}m billed at ₹{Math.round(hourlyRate)}/hr
+                Overtime will be logged to this member&apos;s profile for settlement at membership end.
               </p>
-            )
+            )}
+          </div>
+        )}
+
+        {/* Payment summary — what's been paid vs what's still pending */}
+        <div className="card" style={{ marginBottom: '1rem', background: 'rgba(255,215,0,0.05)' }}>
+          <h3 style={{ color: 'var(--accent)', fontSize: '0.9rem', marginBottom: '0.5rem' }}>Payment Summary</h3>
+          {isWalkin ? (
+            <>
+              <p className="mono">Session fee (paid): {formatCurrency(Number(booking.amount))}</p>
+              {foodTotal > 0 && <p className="mono" style={{ color: '#4ade80' }}>Food bill (paid): {formatCurrency(foodTotal)}</p>}
+              {overtimeCharge > 0 && <p className="mono" style={{ color: '#ff8888' }}>Overtime (new charge): {formatCurrency(overtimeCharge)}</p>}
+              <p className="mono" style={{ marginTop: '0.4rem' }}>Full bill: {formatCurrency(fullBill)}</p>
+              <p className="mono" style={{ color: remainingDue > 0 ? '#ff8888' : '#4ade80', fontSize: '1.05rem', fontWeight: 700 }}>
+                Remaining to be paid: {formatCurrency(remainingDue)}
+              </p>
+            </>
           ) : (
-            <p style={{ fontSize: '0.85rem', color: 'var(--text-muted)' }}>
-              Overtime will be logged to this member&apos;s profile for settlement at membership end.
-            </p>
+            <>
+              {foodTotal > 0 && <p className="mono" style={{ color: '#4ade80' }}>Food bill (paid separately): {formatCurrency(foodTotal)}</p>}
+              {membership ? (
+                <>
+                  <p className="mono" style={{ color: '#4ade80' }}>Membership paid: {formatCurrency(membershipPaid)}</p>
+                  <p className="mono" style={{ color: membershipDue > 0 ? '#ff8888' : '#4ade80', fontWeight: 700 }}>
+                    Membership pending: {formatCurrency(membershipDue)}
+                  </p>
+                  {membershipDue > 0 && (
+                    <p style={{ fontSize: '0.78rem', color: 'var(--text-muted)', marginTop: '0.3rem' }}>
+                      Collect the pending amount from the student's profile before closing them out.
+                    </p>
+                  )}
+                </>
+              ) : (
+                <p style={{ color: 'var(--text-muted)', fontSize: '0.85rem' }}>No membership payment on file.</p>
+              )}
+            </>
           )}
         </div>
 
-        {isWalkin ? (
-          <>
-            <div className="card" style={{ marginBottom: '1rem', background: 'rgba(255,215,0,0.05)' }}>
-              <p className="mono">Original: {formatCurrency(Number(booking.amount))}</p>
-              {!inGrace && (
-                <>
-                  <p className="mono" style={{ color: 'var(--text-muted)', fontSize: '0.8rem' }}>Grace: first 15m free</p>
-                  <p className="mono" style={{ color: '#ff8888' }}>Overtime ({billableMinutes}m): +{formatCurrency(overtimeCharge)}</p>
-                </>
-              )}
-              <p className="mono" style={{ color: 'var(--accent)', fontSize: '1.1rem', fontWeight: 700, marginTop: '0.4rem' }}>
-                Total: {formatCurrency(Number(booking.amount) + overtimeCharge)}
-              </p>
+        {isWalkin && (
+          <div className="form-group">
+            <label>Payment Mode</label>
+            <div style={{ display: 'flex', gap: '0.5rem' }}>
+              {[{ value: 'cash', label: '💵 Cash' }, { value: 'upi', label: '📱 UPI' }].map(({ value, label }) => (
+                <button key={value} type="button" onClick={() => setPayMode(value)}
+                  style={{ flex: 1, padding: '0.5rem', border: `1px solid ${payMode === value ? 'var(--accent)' : '#333'}`, borderRadius: 4, background: payMode === value ? 'rgba(255,215,0,0.08)' : '#141414', color: payMode === value ? 'var(--accent)' : 'var(--text-muted)', cursor: 'pointer', fontWeight: 600 }}
+                >{label}</button>
+              ))}
             </div>
-            <div className="form-group">
-              <label>Payment Mode</label>
-              <div style={{ display: 'flex', gap: '0.5rem' }}>
-                {[{ value: 'cash', label: '💵 Cash' }, { value: 'upi', label: '📱 UPI' }].map(({ value, label }) => (
-                  <button key={value} type="button" onClick={() => setPayMode(value)}
-                    style={{ flex: 1, padding: '0.5rem', border: `1px solid ${payMode === value ? 'var(--accent)' : '#333'}`, borderRadius: 4, background: payMode === value ? 'rgba(255,215,0,0.08)' : '#141414', color: payMode === value ? 'var(--accent)' : 'var(--text-muted)', cursor: 'pointer', fontWeight: 600 }}
-                  >{label}</button>
-                ))}
-              </div>
-            </div>
-          </>
-        ) : null}
+          </div>
+        )}
 
         <div className="modal-actions">
           <button type="button" className="btn btn-ghost" onClick={onCancel}>Cancel</button>
@@ -148,9 +179,9 @@ function CheckoutModal({ booking, onConfirm, onCancel, loading }) {
             onClick={() => onConfirm({ overtimeMinutes, overtimeCharge, overtimePaymentMode: payMode })}
           >
             {loading ? 'Checking out…'
-              : isWalkin && !inGrace ? `Collect ₹${(Number(booking.amount) + overtimeCharge).toLocaleString('en-IN')} & Check Out`
-              : isWalkin && inGrace ? 'Check Out (No Extra Charge)'
-              : 'Log Overtime & Check Out'}
+              : isWalkin && remainingDue > 0 ? `Collect ₹${remainingDue.toLocaleString('en-IN')} & Check Out`
+              : !isWalkin && !canClose ? 'Check Out Anyway'
+              : 'Both Fine — Check Out'}
           </button>
         </div>
       </div>
@@ -158,8 +189,8 @@ function CheckoutModal({ booking, onConfirm, onCancel, loading }) {
   )
 }
 
-// ── Food order modal — attach a food bill to a student, optionally as a checkout step ──
-function FoodOrderModal({ branchId, booking, standalone = false, onClose, onSkip, onDone }) {
+// ── Food order modal — attach a food bill to a student at any point during their stay ──
+function FoodOrderModal({ branchId, booking, onClose, onDone }) {
   const [items, setItems] = useState([])
   const [search, setSearch] = useState('')
   const [orders, setOrders] = useState([])
@@ -189,10 +220,7 @@ function FoodOrderModal({ branchId, booking, standalone = false, onClose, onSkip
   const total = orders.reduce((s, o) => s + o.price * o.quantity, 0)
 
   const handleSave = async () => {
-    if (orders.length === 0) {
-      if (standalone) return setError('Add at least one item')
-      return onSkip()
-    }
+    if (orders.length === 0) return setError('Add at least one item')
     setSaving(true)
     setError('')
     try {
@@ -212,10 +240,10 @@ function FoodOrderModal({ branchId, booking, standalone = false, onClose, onSkip
   return (
     <div className="modal-overlay" onClick={onClose}>
       <div className="modal" style={{ maxWidth: 420 }} onClick={(e) => e.stopPropagation()}>
-        <h2>{standalone ? 'Food Bill' : 'Checkout'} — {booking.students?.name}</h2>
-        {!standalone && (
-          <p style={{ color: 'var(--text-muted)', fontSize: '0.82rem', marginBottom: '0.75rem' }}>
-            Add any food items before finishing this checkout, or skip if there's nothing to bill.
+        <h2>Food Bill — {booking.students?.name}</h2>
+        {Number(booking.foodTotal ?? 0) > 0 && (
+          <p style={{ fontSize: '0.8rem', color: '#4ade80', marginBottom: '0.75rem' }}>
+            ✓ Already billed {formatCurrency(Number(booking.foodTotal))} for this session
           </p>
         )}
         <div className="form-group">
@@ -263,14 +291,8 @@ function FoodOrderModal({ branchId, booking, standalone = false, onClose, onSkip
         {error && <p className="error-msg">{error}</p>}
         <div className="modal-actions">
           <button type="button" className="btn btn-ghost" onClick={onClose}>Cancel</button>
-          {!standalone && (
-            <button type="button" className="btn btn-ghost" onClick={onSkip}>Skip</button>
-          )}
           <button type="button" className="btn btn-primary" disabled={saving} onClick={handleSave}>
-            {saving ? 'Saving…'
-              : standalone ? `Add Bill — ${formatCurrency(total)}`
-              : orders.length === 0 ? 'Continue'
-              : `Add Bill & Continue — ${formatCurrency(total)}`}
+            {saving ? 'Saving…' : `Add Bill — ${formatCurrency(total)}`}
           </button>
         </div>
       </div>
@@ -285,7 +307,7 @@ export default function BookingsPage() {
   const [actionLoading, setActionLoading] = useState(null)
   const [tick, setTick] = useState(0)
   const [endedAlerts, setEndedAlerts] = useState([])
-  const [checkoutFlow, setCheckoutFlow] = useState(null) // { booking, step: 'food' | 'confirm' }
+  const [checkoutBooking, setCheckoutBooking] = useState(null)
   const [foodOrderBooking, setFoodOrderBooking] = useState(null)
   const notifiedIds = useRef(new Set())
 
@@ -332,26 +354,14 @@ export default function BookingsPage() {
     finally { setActionLoading(null); load() }
   }
 
-  // Checkout always starts with an optional food-bill step, then finishes the session
+  // Checkout always shows a payment summary (paid vs pending) before finishing the session
   const handleCheckout = (b) => {
-    setCheckoutFlow({ booking: b, step: 'food' })
-  }
-
-  const proceedAfterFood = () => {
-    const b = checkoutFlow.booking
-    const totalPauseMs = (b.total_pause_minutes ?? 0) * 60_000
-    const ts = getTimeStatus(b.end_time, totalPauseMs)
-    if (ts.over) {
-      setCheckoutFlow({ booking: b, step: 'confirm' })
-    } else {
-      setCheckoutFlow(null)
-      doAction(b.id + ':checkout', () => api('checkout_booking', { bookingId: b.id }))
-    }
+    setCheckoutBooking(b)
   }
 
   const confirmCheckout = async ({ overtimeMinutes, overtimePaymentMode }) => {
-    if (!checkoutFlow) return
-    const b = checkoutFlow.booking
+    if (!checkoutBooking) return
+    const b = checkoutBooking
     setActionLoading(b.id + ':checkout')
     try {
       await api('checkout_booking', {
@@ -359,7 +369,7 @@ export default function BookingsPage() {
         overtimeMinutes,
         overtimePaymentMode,
       })
-      setCheckoutFlow(null)
+      setCheckoutBooking(null)
       load()
     } catch { /* ignore */ }
     finally { setActionLoading(null) }
@@ -520,9 +530,15 @@ export default function BookingsPage() {
                           padding: '0.25rem 0.55rem', fontSize: '0.78rem', fontWeight: 600,
                           background: 'rgba(255,215,0,0.08)', border: '1px solid rgba(255,215,0,0.3)',
                           color: 'var(--accent)', borderRadius: 4, cursor: 'pointer',
+                          display: 'flex', alignItems: 'center', gap: '0.3rem',
                         }}
                           onClick={() => setFoodOrderBooking(b)}
-                        >🍽 Food</button>
+                        >
+                          🍽 Food
+                          {Number(b.foodTotal) > 0 && (
+                            <span className="mono" style={{ color: '#4ade80', fontWeight: 700 }}>{formatCurrency(Number(b.foodTotal))}</span>
+                          )}
+                        </button>
 
                         {/* Checkout for everyone */}
                         <button type="button" style={{
@@ -545,22 +561,12 @@ export default function BookingsPage() {
       )}
       <span style={{ display: 'none' }}>{tick}</span>
 
-      {checkoutFlow?.step === 'food' && (
-        <FoodOrderModal
-          branchId={branchId}
-          booking={checkoutFlow.booking}
-          onClose={() => setCheckoutFlow(null)}
-          onSkip={proceedAfterFood}
-          onDone={proceedAfterFood}
-        />
-      )}
-
-      {checkoutFlow?.step === 'confirm' && (
+      {checkoutBooking && (
         <CheckoutModal
-          booking={checkoutFlow.booking}
-          loading={actionLoading === checkoutFlow.booking.id + ':checkout'}
+          booking={checkoutBooking}
+          loading={actionLoading === checkoutBooking.id + ':checkout'}
           onConfirm={confirmCheckout}
-          onCancel={() => setCheckoutFlow(null)}
+          onCancel={() => setCheckoutBooking(null)}
         />
       )}
 
@@ -568,9 +574,8 @@ export default function BookingsPage() {
         <FoodOrderModal
           branchId={branchId}
           booking={foodOrderBooking}
-          standalone
           onClose={() => setFoodOrderBooking(null)}
-          onDone={() => setFoodOrderBooking(null)}
+          onDone={() => { setFoodOrderBooking(null); load() }}
         />
       )}
     </>

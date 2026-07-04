@@ -1,8 +1,9 @@
 import { useState, useEffect, useCallback } from 'react'
 import { useAuth } from '../context/AuthContext'
 import { api } from '../lib/api'
+import { todayISO } from '../lib/utils'
 
-function TaskTable({ tasks, allBranches, onToggle }) {
+function TaskTable({ tasks, allBranches, onToggle, currentStaffId }) {
   if (tasks.length === 0) return <p style={{ color: 'var(--text-muted)' }}>No tasks found.</p>
   return (
     <table className="data-table">
@@ -38,14 +39,18 @@ function TaskTable({ tasks, allBranches, onToggle }) {
               </span>
             </td>
             <td>
-              <button
-                type="button"
-                className={t.completedToday ? 'btn btn-ghost' : 'btn btn-primary'}
-                style={{ padding: '0.25rem 0.5rem', fontSize: '0.75rem' }}
-                onClick={() => onToggle(t)}
-              >
-                {t.completedToday ? 'Undo' : 'Complete'}
-              </button>
+              {t.assigned_to_staff_id === currentStaffId ? (
+                <button
+                  type="button"
+                  className={t.completedToday ? 'btn btn-ghost' : 'btn btn-primary'}
+                  style={{ padding: '0.25rem 0.5rem', fontSize: '0.75rem' }}
+                  onClick={() => onToggle(t)}
+                >
+                  {t.completedToday ? 'Undo' : 'Complete'}
+                </button>
+              ) : (
+                <span style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>—</span>
+              )}
             </td>
           </tr>
         ))}
@@ -73,7 +78,7 @@ export default function TasksPage() {
   const [title, setTitle] = useState('')
   const [description, setDescription] = useState('')
   const [assignedTo, setAssignedTo] = useState('')
-  const [dueDate, setDueDate] = useState('')
+  const [dueDate, setDueDate] = useState(todayISO())
   const [repeatInterval, setRepeatInterval] = useState('none')
   const [error, setError] = useState('')
   const [saving, setSaving] = useState(false)
@@ -113,7 +118,7 @@ export default function TasksPage() {
         branchId: targetBranch, assignedToStaffId: assignedTo, title: title.trim(),
         description: description.trim() || null, dueDate: dueDate || null, repeatInterval,
       })
-      setTitle(''); setDescription(''); setDueDate(''); setRepeatInterval('none')
+      setTitle(''); setDescription(''); setDueDate(todayISO()); setRepeatInterval('none')
       load()
     } catch (err) {
       setError(err.message)
@@ -222,7 +227,7 @@ export default function TasksPage() {
             <div className="card">
               <h3 style={{ color: 'var(--accent)', marginBottom: '0.75rem' }}>My Tasks (Owner)</h3>
               {loading ? <p>Loading…</p> : (
-                <TaskTable tasks={filteredOwnerTasks} allBranches={allBranches} onToggle={toggleDone} />
+                <TaskTable tasks={filteredOwnerTasks} allBranches={allBranches} onToggle={toggleDone} currentStaffId={staff?.id} />
               )}
             </div>
           )}
@@ -240,7 +245,7 @@ export default function TasksPage() {
             </div>
 
             {loading ? <p>Loading…</p> : (
-              <TaskTable tasks={filteredTasks} allBranches={allBranches} onToggle={toggleDone} />
+              <TaskTable tasks={filteredTasks} allBranches={allBranches} onToggle={toggleDone} currentStaffId={staff?.id} />
             )}
           </div>
         </div>

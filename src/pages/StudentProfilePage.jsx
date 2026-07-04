@@ -18,6 +18,9 @@ export default function StudentProfilePage() {
   const [holdError, setHoldError] = useState('')
   const [lockerStatus, setLockerStatus] = useState(null)
   const [lockerNo, setLockerNo] = useState('')
+  const [lockerPayType, setLockerPayType] = useState('now')
+  const [lockerPayMode, setLockerPayMode] = useState('cash')
+  const [lockerPayAmount, setLockerPayAmount] = useState('')
   const [lockerLoading, setLockerLoading] = useState(false)
   const [lockerError, setLockerError] = useState('')
 
@@ -47,7 +50,25 @@ export default function StudentProfilePage() {
     setLockerLoading(true)
     setLockerError('')
     try {
-      await api('add_locker', { studentId: id, branchId: data.student.branch_id, lockerNo, paymentMode: 'cash' })
+      await api('add_locker', {
+        studentId: id, branchId: data.student.branch_id, lockerNo,
+        paymentMode: lockerPayMode, payLater: lockerPayType === 'later',
+      })
+      refresh()
+    } catch (err) {
+      setLockerError(err.message)
+    } finally {
+      setLockerLoading(false)
+    }
+  }
+
+  const handleLockerPayment = async (lockerId) => {
+    if (!lockerPayAmount) return
+    setLockerLoading(true)
+    setLockerError('')
+    try {
+      await api('record_locker_payment', { lockerId, amount: Number(lockerPayAmount), paymentMode: lockerPayMode })
+      setLockerPayAmount('')
       refresh()
     } catch (err) {
       setLockerError(err.message)
@@ -249,6 +270,39 @@ export default function StudentProfilePage() {
               <p style={{ fontSize: '0.88rem', marginBottom: '0.5rem' }}>
                 Locker <strong>{locker.locker_no}</strong> · Due {locker.locker_due_date}
               </p>
+              {Number(locker.fee_due) > 0 ? (
+                <div style={{ marginBottom: '0.75rem' }}>
+                  <p className="mono" style={{ color: '#ff8888', fontWeight: 700, marginBottom: '0.5rem' }}>
+                    Pending: {formatCurrency(Number(locker.fee_due))}
+                  </p>
+                  <div className="form-group">
+                    <label>Amount (₹)</label>
+                    <input type="number" value={lockerPayAmount} onChange={(e) => setLockerPayAmount(e.target.value)} />
+                  </div>
+                  <div className="form-group">
+                    <label>Mode</label>
+                    <div style={{ display: 'flex', gap: '0.5rem' }}>
+                      {PAYMENT_OPTIONS.map(({ value, label }) => (
+                        <button
+                          key={value} type="button" onClick={() => setLockerPayMode(value)}
+                          style={{
+                            flex: 1, padding: '0.5rem',
+                            border: `1px solid ${lockerPayMode === value ? 'var(--accent)' : '#333'}`,
+                            borderRadius: 4, background: lockerPayMode === value ? 'rgba(255,215,0,0.08)' : '#141414',
+                            color: lockerPayMode === value ? 'var(--accent)' : 'var(--text-muted)',
+                            cursor: 'pointer', fontWeight: 600, fontSize: '0.85rem',
+                          }}
+                        >{label}</button>
+                      ))}
+                    </div>
+                  </div>
+                  <button type="button" className="btn btn-primary" style={{ width: '100%' }} onClick={() => handleLockerPayment(locker.id)} disabled={lockerLoading}>
+                    Record Locker Payment
+                  </button>
+                </div>
+              ) : (
+                <p style={{ fontSize: '0.82rem', color: '#4ade80', marginBottom: '0.75rem' }}>✓ Paid in full</p>
+              )}
               <button
                 type="button"
                 style={{ width: '100%', padding: '0.6rem', fontWeight: 700, cursor: 'pointer', background: 'rgba(255,60,60,0.08)', border: '1px solid rgba(255,60,60,0.4)', color: '#ff8888', borderRadius: 4 }}
@@ -272,6 +326,47 @@ export default function StudentProfilePage() {
                       {lockerStatus.availableNumbers.map(n => <option key={n} value={n}>Locker {n}</option>)}
                     </select>
                   </div>
+                  <div className="form-group">
+                    <label>Payment</label>
+                    <div style={{ display: 'flex', gap: '0.5rem' }}>
+                      {[{ value: 'now', label: 'Pay Now' }, { value: 'later', label: 'Pay Later' }].map(({ value, label }) => (
+                        <button
+                          key={value} type="button" onClick={() => setLockerPayType(value)}
+                          style={{
+                            flex: 1, padding: '0.5rem',
+                            border: `1px solid ${lockerPayType === value ? 'var(--accent)' : '#333'}`,
+                            borderRadius: 4, background: lockerPayType === value ? 'rgba(255,215,0,0.08)' : '#141414',
+                            color: lockerPayType === value ? 'var(--accent)' : 'var(--text-muted)',
+                            cursor: 'pointer', fontWeight: 600, fontSize: '0.85rem',
+                          }}
+                        >{label}</button>
+                      ))}
+                    </div>
+                  </div>
+                  {lockerPayType === 'now' && (
+                    <div className="form-group">
+                      <label>Mode</label>
+                      <div style={{ display: 'flex', gap: '0.5rem' }}>
+                        {PAYMENT_OPTIONS.map(({ value, label }) => (
+                          <button
+                            key={value} type="button" onClick={() => setLockerPayMode(value)}
+                            style={{
+                              flex: 1, padding: '0.5rem',
+                              border: `1px solid ${lockerPayMode === value ? 'var(--accent)' : '#333'}`,
+                              borderRadius: 4, background: lockerPayMode === value ? 'rgba(255,215,0,0.08)' : '#141414',
+                              color: lockerPayMode === value ? 'var(--accent)' : 'var(--text-muted)',
+                              cursor: 'pointer', fontWeight: 600, fontSize: '0.85rem',
+                            }}
+                          >{label}</button>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+                  {lockerPayType === 'later' && (
+                    <p style={{ fontSize: '0.78rem', color: 'var(--text-muted)', marginBottom: '0.5rem' }}>
+                      The prorated rent + deposit will be added as a pending amount, and must be cleared before the membership can be closed.
+                    </p>
+                  )}
                   <button
                     type="button" className="btn btn-primary" style={{ width: '100%' }}
                     onClick={handleAddLocker}
@@ -303,17 +398,27 @@ export default function StudentProfilePage() {
                   <tr><th>Paused On</th><th>Resumed On</th><th>Days Paused</th></tr>
                 </thead>
                 <tbody>
-                  {holds.map(h => (
-                    <tr key={h.id}>
-                      <td className="mono">{new Date(h.paused_at).toLocaleDateString('en-IN')}</td>
-                      <td className="mono">
-                        {h.resumed_at ? new Date(h.resumed_at).toLocaleDateString('en-IN') : (
-                          <span style={{ color: '#ffaa44', fontWeight: 700 }}>Still on hold</span>
-                        )}
-                      </td>
-                      <td>{h.days_paused ?? '—'}</td>
-                    </tr>
-                  ))}
+                  {holds.map(h => {
+                    const stillOnHold = !h.resumed_at
+                    const elapsedDays = stillOnHold
+                      ? Math.max(1, Math.ceil((Date.now() - new Date(h.paused_at).getTime()) / 86_400_000))
+                      : null
+                    return (
+                      <tr key={h.id}>
+                        <td className="mono">{new Date(h.paused_at).toLocaleDateString('en-IN')}</td>
+                        <td className="mono">
+                          {stillOnHold ? (
+                            <span style={{ color: '#ffaa44', fontWeight: 700 }}>Still on hold</span>
+                          ) : new Date(h.resumed_at).toLocaleDateString('en-IN')}
+                        </td>
+                        <td>
+                          {stillOnHold ? (
+                            <span style={{ color: '#ffaa44' }}>{elapsedDays} so far</span>
+                          ) : (h.days_paused ?? '—')}
+                        </td>
+                      </tr>
+                    )
+                  })}
                 </tbody>
               </table>
             ) : (

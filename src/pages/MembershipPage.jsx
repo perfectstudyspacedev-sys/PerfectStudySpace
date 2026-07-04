@@ -31,6 +31,9 @@ function ActiveMembersTab({ branchId }) {
   const [renewPayMode, setRenewPayMode] = useState('cash')
   const [renewPayType, setRenewPayType] = useState('full')
   const [renewAdvance, setRenewAdvance] = useState('')
+  const [closeModal, setCloseModal] = useState(null)
+  const [closeSummary, setCloseSummary] = useState(null)
+  const [closeLoading, setCloseLoading] = useState(false)
 
   const load = useCallback(async () => {
     if (!branchId) return
@@ -62,14 +65,27 @@ function ActiveMembersTab({ branchId }) {
     finally { setActionLoading(null) }
   }
 
-  const handleClose = async (membershipId) => {
-    if (!window.confirm('Deactivate this membership? This cannot be undone.')) return
-    setActionLoading(membershipId + ':close')
+  const openCloseModal = async (membershipId, studentName) => {
+    setCloseModal({ membershipId, studentName })
+    setCloseSummary(null)
     try {
-      await api('close_membership', { membershipId })
-      load()
+      const summary = await api('get_membership_closure_summary', { membershipId })
+      setCloseSummary(summary)
     } catch { /* ignore */ }
-    finally { setActionLoading(null) }
+  }
+
+  const confirmClose = async () => {
+    if (!closeModal) return
+    setCloseLoading(true)
+    try {
+      await api('close_membership', { membershipId: closeModal.membershipId })
+      setCloseModal(null)
+      load()
+    } catch (err) {
+      window.alert(err.message)
+    } finally {
+      setCloseLoading(false)
+    }
   }
 
   const handleRenewSubmit = async () => {
@@ -251,7 +267,7 @@ function ActiveMembersTab({ branchId }) {
                             type="button"
                             style={{ padding: '0.3rem 0.7rem', fontSize: '0.8rem', background: 'rgba(255,60,60,0.08)', border: '1px solid rgba(255,60,60,0.4)', color: '#ff8888', borderRadius: 4, cursor: 'pointer', fontWeight: 600 }}
                             disabled={actionLoading === m.membership_id + ':close'}
-                            onClick={() => handleClose(m.membership_id)}
+                            onClick={() => openCloseModal(m.membership_id, m.student_name)}
                           >✕ Close</button>
                         </>
                       ) : m.is_paused ? (
@@ -339,6 +355,44 @@ function ActiveMembersTab({ branchId }) {
                 disabled={actionLoading === renewModal.membershipId + ':renew'}
                 onClick={handleRenewSubmit}
               >Confirm Renewal</button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Close membership — blocks closing until membership + locker dues are cleared */}
+      {closeModal && (
+        <div className="modal-overlay" onClick={() => setCloseModal(null)}>
+          <div className="modal" style={{ maxWidth: 420 }} onClick={(e) => e.stopPropagation()}>
+            <h2>Close Membership</h2>
+            <p style={{ color: 'var(--text-muted)', marginBottom: '1rem' }}>{closeModal.studentName}</p>
+
+            {!closeSummary ? (
+              <p>Checking pending dues…</p>
+            ) : (
+              <div className="card" style={{ marginBottom: '1rem', background: closeSummary.canClose ? 'rgba(74,222,128,0.05)' : 'rgba(255,60,60,0.05)' }}>
+                <p className="mono">Membership pending: {formatCurrency(closeSummary.membershipDue)}</p>
+                {closeSummary.locker && <p className="mono">Locker pending: {formatCurrency(closeSummary.lockerDue)}</p>}
+                <p className="mono" style={{ fontWeight: 700, marginTop: '0.4rem', color: closeSummary.canClose ? '#4ade80' : '#ff8888' }}>
+                  Total pending: {formatCurrency(closeSummary.totalDue)}
+                </p>
+                {!closeSummary.canClose && (
+                  <p style={{ fontSize: '0.8rem', color: 'var(--text-muted)', marginTop: '0.5rem' }}>
+                    Everything must be cleared before this membership can be closed. Record the pending payment(s) from the student's profile page first.
+                  </p>
+                )}
+              </div>
+            )}
+
+            <div className="modal-actions">
+              <button type="button" className="btn btn-ghost" onClick={() => setCloseModal(null)}>Cancel</button>
+              <button
+                type="button" className="btn btn-primary"
+                disabled={!closeSummary?.canClose || closeLoading}
+                onClick={confirmClose}
+              >
+                {closeLoading ? 'Closing…' : 'Confirm Close'}
+              </button>
             </div>
           </div>
         </div>
