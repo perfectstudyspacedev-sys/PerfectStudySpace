@@ -6,7 +6,7 @@ import {
 } from 'recharts'
 import { useAuth } from '../context/AuthContext'
 import { api } from '../lib/api'
-import { formatCurrency, todayISO, exportToCSV } from '../lib/utils'
+import { formatCurrency, todayISO, exportToCSV, paymentModeLabel } from '../lib/utils'
 
 const COLORS = ['#FFD700', '#22d3ee', '#a78bfa', '#4ade80', '#f97316']
 const CAT_LABELS = { desk: 'Walk-in', membership: 'Membership', food: 'Food', locker: 'Locker', fine: 'Fine' }
@@ -295,9 +295,9 @@ export default function RevenuePage() {
                 <tr key={t.id}>
                   <td className="mono">{new Date(t.created_at).toLocaleString('en-IN')}</td>
                   <td>{t.students?.name ?? '-'} {t.students?.phone && <span className="mono" style={{ color: 'var(--text-muted)' }}>({t.students.phone})</span>}</td>
-                  <td>{CAT_LABELS[t.category] ?? t.category}</td>
+                  <td className={CAT_LABELS[t.category] ? undefined : 'cap'}>{CAT_LABELS[t.category] ?? t.category}</td>
                   <td className="mono">{formatCurrency(t.amount)}</td>
-                  <td>{t.payment_mode}</td>
+                  <td>{paymentModeLabel(t.payment_mode)}</td>
                   <td>{t.branches?.name ?? '-'}</td>
                 </tr>
               ))}

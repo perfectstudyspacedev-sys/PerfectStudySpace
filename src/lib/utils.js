@@ -56,6 +56,13 @@ export function formatCurrency(n) {
   return `₹${Number(n || 0).toLocaleString('en-IN')}`
 }
 
+export function paymentModeLabel(mode) {
+  if (mode === 'upi') return 'UPI'
+  if (mode === 'cash') return 'Cash'
+  if (mode === 'other') return 'Other'
+  return mode
+}
+
 export function monthName(date = new Date()) {
   return date.toLocaleString('en-US', { month: 'long' }).toUpperCase()
 }

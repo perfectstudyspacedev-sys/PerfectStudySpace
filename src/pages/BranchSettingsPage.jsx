@@ -10,6 +10,8 @@ export default function BranchSettingsPage() {
   const [seatMap, setSeatMap] = useState(null)
   const [newDeskLabel, setNewDeskLabel] = useState('')
   const [feeConfig, setFeeConfig] = useState([])
+  const [feeEdits, setFeeEdits] = useState({})
+  const [savingFees, setSavingFees] = useState(false)
   const [msg, setMsg] = useState('')
 
   const load = useCallback(async () => {
@@ -27,6 +29,12 @@ export default function BranchSettingsPage() {
   }, [branches, selectedBranch])
 
   useEffect(() => { load() }, [load])
+
+  useEffect(() => {
+    const map = {}
+    feeConfig.forEach(f => { map[f.id] = String(f.fee) })
+    setFeeEdits(map)
+  }, [feeConfig])
 
   if (!isOwner) return <Navigate to="/" replace />
 
@@ -49,14 +57,31 @@ export default function BranchSettingsPage() {
     }
   }
 
-  const handleFeeUpdate = async (id, fee) => {
-    await api('update_fee_config', { id, fee: Number(fee) })
-    load()
-    setMsg('Fee updated')
+  const handleFeeInputChange = (id, value) => setFeeEdits(prev => ({ ...prev, [id]: value }))
+
+  const saveFees = async (rows) => {
+    setSavingFees(true)
+    setMsg('')
+    try {
+      const changed = rows.filter(f => Number(feeEdits[f.id]) !== Number(f.fee) && feeEdits[f.id] !== '')
+      if (!changed.length) {
+        setMsg('No changes to save')
+        return
+      }
+      await Promise.all(changed.map(f => api('update_fee_config', { id: f.id, fee: Number(feeEdits[f.id]) })))
+      await load()
+      setMsg(`${changed.length} fee${changed.length > 1 ? 's' : ''} updated — new memberships will use the updated rates`)
+    } catch (e) {
+      setMsg(e.message)
+    } finally {
+      setSavingFees(false)
+    }
   }
 
   const walkinFees = feeConfig.filter(f => f.config_type === 'walkin')
   const membershipFees = feeConfig.filter(f => f.config_type === 'membership')
+  const tempFees = membershipFees.filter(f => f.cabin_type === 'temporary').sort((a, b) => a.hours_per_day - b.hours_per_day)
+  const permFees = membershipFees.filter(f => f.cabin_type === 'permanent').sort((a, b) => a.hours_per_day - b.hours_per_day)
 
   return (
     <>
@@ -94,24 +119,65 @@ export default function BranchSettingsPage() {
         )}
       </div>
 
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(300px, 1fr))', gap: '1rem' }}>
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(320px, 1fr))', gap: '1rem' }}>
         <div className="card">
           <h3 style={{ color: 'var(--accent)', marginBottom: '1rem' }}>Walk-in Fees</h3>
-          {walkinFees.map(f => (
-            <div key={f.id} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.5rem' }}>
-              <span>Up to {f.max_hours} hrs</span>
-              <input type="number" defaultValue={f.fee} style={{ width: 80 }} onBlur={(e) => handleFeeUpdate(f.id, e.target.value)} />
-            </div>
-          ))}
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '0.6rem', marginBottom: '1rem' }}>
+            {walkinFees.map(f => (
+              <div key={f.id} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '0.5rem 0.75rem', background: '#141414', border: '1px solid #2c2c2c', borderRadius: 6 }}>
+                <span style={{ fontSize: '0.88rem' }}>Up to {f.max_hours} hrs</span>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '0.3rem' }}>
+                  <span style={{ color: 'var(--text-muted)' }}>₹</span>
+                  <input
+                    type="number" value={feeEdits[f.id] ?? ''} style={{ width: 90 }}
+                    onChange={(e) => handleFeeInputChange(f.id, e.target.value)}
+                  />
+                </div>
+              </div>
+            ))}
+          </div>
+          <button type="button" className="btn btn-primary" disabled={savingFees} onClick={() => saveFees(walkinFees)}>
+            {savingFees ? 'Saving…' : 'Save Walk-in Fees'}
+          </button>
         </div>
         <div className="card">
           <h3 style={{ color: 'var(--accent)', marginBottom: '1rem' }}>Membership Fees</h3>
-          {membershipFees.map(f => (
-            <div key={f.id} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.5rem' }}>
-              <span>{f.hours_per_day}h/day ({f.cabin_type})</span>
-              <input type="number" defaultValue={f.fee} style={{ width: 80 }} onBlur={(e) => handleFeeUpdate(f.id, e.target.value)} />
-            </div>
-          ))}
+
+          <h4 style={{ color: 'var(--text-muted)', fontSize: '0.78rem', textTransform: 'uppercase', letterSpacing: '0.04em', marginBottom: '0.5rem' }}>Temporary (floating seat)</h4>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem', marginBottom: '1rem' }}>
+            {tempFees.map(f => (
+              <div key={f.id} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '0.5rem 0.75rem', background: '#141414', border: '1px solid #2c2c2c', borderRadius: 6 }}>
+                <span style={{ fontSize: '0.88rem' }}>{f.hours_per_day}h/day</span>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '0.3rem' }}>
+                  <span style={{ color: 'var(--text-muted)' }}>₹</span>
+                  <input
+                    type="number" value={feeEdits[f.id] ?? ''} style={{ width: 90 }}
+                    onChange={(e) => handleFeeInputChange(f.id, e.target.value)}
+                  />
+                </div>
+              </div>
+            ))}
+          </div>
+
+          <h4 style={{ color: 'var(--text-muted)', fontSize: '0.78rem', textTransform: 'uppercase', letterSpacing: '0.04em', marginBottom: '0.5rem' }}>Permanent (fixed cabin)</h4>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem', marginBottom: '1rem' }}>
+            {permFees.map(f => (
+              <div key={f.id} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '0.5rem 0.75rem', background: '#141414', border: '1px solid #2c2c2c', borderRadius: 6 }}>
+                <span style={{ fontSize: '0.88rem' }}>{f.hours_per_day}h/day</span>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '0.3rem' }}>
+                  <span style={{ color: 'var(--text-muted)' }}>₹</span>
+                  <input
+                    type="number" value={feeEdits[f.id] ?? ''} style={{ width: 90 }}
+                    onChange={(e) => handleFeeInputChange(f.id, e.target.value)}
+                  />
+                </div>
+              </div>
+            ))}
+          </div>
+
+          <button type="button" className="btn btn-primary" disabled={savingFees} onClick={() => saveFees(membershipFees)}>
+            {savingFees ? 'Saving…' : 'Save Membership Fees'}
+          </button>
         </div>
       </div>
     </>

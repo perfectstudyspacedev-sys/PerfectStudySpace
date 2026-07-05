@@ -2,7 +2,7 @@ import { useState, useEffect, useCallback, useRef } from 'react'
 import { Link } from 'react-router-dom'
 import { useAuth } from '../context/AuthContext'
 import { api } from '../lib/api'
-import { formatCurrency } from '../lib/utils'
+import { formatCurrency, todayISO } from '../lib/utils'
 
 function getTimeStatus(endIso, totalPauseMs = 0) {
   const ms = new Date(endIso).getTime() + totalPauseMs - Date.now()
@@ -89,13 +89,16 @@ function CheckoutModal({ booking, onConfirm, onCancel, loading }) {
   const otM = overtimeMinutes % 60
   const otLabel = otH > 0 ? `${otH}h ${otM}m` : `${otM}m`
   const foodTotal = Number(booking.foodTotal ?? 0)
-  const alreadyPaid = Number(booking.amount) + foodTotal
-  const remainingDue = overtimeCharge // session fee + food are already settled — only overtime is owed now
+  const unpaidFoodTotal = Number(booking.unpaidFoodTotal ?? 0)
+  const paidFoodTotal = foodTotal - unpaidFoodTotal
+  const alreadyPaid = Number(booking.amount) + paidFoodTotal
+  const remainingDue = overtimeCharge + (isWalkin ? unpaidFoodTotal : 0) // session fee already settled — overtime + any unpaid food are owed now
   const fullBill = alreadyPaid + remainingDue
   const membership = booking.memberships
-  const membershipPaid = membership ? Number(membership.total_paid ?? 0) : 0
   const membershipDue = membership ? Number(membership.fee_due ?? 0) : 0
-  const canClose = membershipDue <= 0
+  const isExpiredUnrenewed = !!membership && membership.end_date < todayISO()
+  const memberDueNow = unpaidFoodTotal // overtime for members is settled later, not at checkout
+  const canClose = !isExpiredUnrenewed || membershipDue <= 0
 
   return (
     <div className="modal-overlay" onClick={onCancel}>
@@ -130,37 +133,47 @@ function CheckoutModal({ booking, onConfirm, onCancel, loading }) {
           <h3 style={{ color: 'var(--accent)', fontSize: '0.9rem', marginBottom: '0.5rem' }}>Payment Summary</h3>
           {isWalkin ? (
             <>
-              <p className="mono">Session fee (paid): {formatCurrency(Number(booking.amount))}</p>
-              {foodTotal > 0 && <p className="mono" style={{ color: '#4ade80' }}>Food bill (paid): {formatCurrency(foodTotal)}</p>}
+              <p className="mono" style={{ color: '#4ade80' }}>Session fee (paid): {formatCurrency(Number(booking.amount))}</p>
+              {paidFoodTotal > 0 && <p className="mono" style={{ color: '#4ade80' }}>Food bill (paid): {formatCurrency(paidFoodTotal)}</p>}
+              {unpaidFoodTotal > 0 && <p className="mono" style={{ color: '#ff8888' }}>Food bill (to collect): {formatCurrency(unpaidFoodTotal)}</p>}
               {overtimeCharge > 0 && <p className="mono" style={{ color: '#ff8888' }}>Overtime (new charge): {formatCurrency(overtimeCharge)}</p>}
               <p className="mono" style={{ marginTop: '0.4rem' }}>Full bill: {formatCurrency(fullBill)}</p>
-              <p className="mono" style={{ color: remainingDue > 0 ? '#ff8888' : '#4ade80', fontSize: '1.05rem', fontWeight: 700 }}>
+              <p className="mono" style={{ color: remainingDue > 0 ? 'var(--accent)' : '#4ade80', fontSize: '1.05rem', fontWeight: 700 }}>
                 Remaining to be paid: {formatCurrency(remainingDue)}
               </p>
             </>
           ) : (
             <>
-              {foodTotal > 0 && <p className="mono" style={{ color: '#4ade80' }}>Food bill (paid separately): {formatCurrency(foodTotal)}</p>}
-              {membership ? (
+              {paidFoodTotal > 0 && <p className="mono" style={{ color: '#4ade80' }}>Food bill (paid separately): {formatCurrency(paidFoodTotal)}</p>}
+              {unpaidFoodTotal > 0 && (
+                <p className="mono" style={{ color: '#ff8888', fontWeight: 700 }}>Food bill (to collect): {formatCurrency(unpaidFoodTotal)}</p>
+              )}
+              {isExpiredUnrenewed && (
                 <>
-                  <p className="mono" style={{ color: '#4ade80' }}>Membership paid: {formatCurrency(membershipPaid)}</p>
-                  <p className="mono" style={{ color: membershipDue > 0 ? '#ff8888' : '#4ade80', fontWeight: 700 }}>
+                  <p style={{ color: '#ff4444', fontWeight: 700, marginTop: paidFoodTotal || unpaidFoodTotal ? '0.5rem' : 0 }}>
+                    ⚠ Membership expired {membership.end_date} — not renewed
+                  </p>
+                  <p className="mono" style={{ color: '#ff4444', fontWeight: 700 }}>
                     Membership pending: {formatCurrency(membershipDue)}
                   </p>
-                  {membershipDue > 0 && (
-                    <p style={{ fontSize: '0.78rem', color: 'var(--text-muted)', marginTop: '0.3rem' }}>
-                      Collect the pending amount from the student's profile before closing them out.
-                    </p>
-                  )}
+                  <p style={{ fontSize: '0.78rem', color: 'var(--text-muted)', marginTop: '0.3rem' }}>
+                    Renew the membership from the student's profile before checking them out again.
+                  </p>
                 </>
-              ) : (
-                <p style={{ color: 'var(--text-muted)', fontSize: '0.85rem' }}>No membership payment on file.</p>
+              )}
+              {!paidFoodTotal && !unpaidFoodTotal && !isExpiredUnrenewed && (
+                <p style={{ color: 'var(--text-muted)', fontSize: '0.85rem' }}>Nothing pending — membership in good standing.</p>
+              )}
+              {memberDueNow > 0 && (
+                <p className="mono" style={{ color: 'var(--accent)', fontSize: '1.05rem', fontWeight: 700, marginTop: '0.5rem' }}>
+                  Remaining to be paid: {formatCurrency(memberDueNow)}
+                </p>
               )}
             </>
           )}
         </div>
 
-        {isWalkin && (
+        {(isWalkin ? remainingDue > 0 : memberDueNow > 0) && (
           <div className="form-group">
             <label>Payment Mode</label>
             <div style={{ display: 'flex', gap: '0.5rem' }}>
@@ -180,6 +193,7 @@ function CheckoutModal({ booking, onConfirm, onCancel, loading }) {
           >
             {loading ? 'Checking out…'
               : isWalkin && remainingDue > 0 ? `Collect ₹${remainingDue.toLocaleString('en-IN')} & Check Out`
+              : !isWalkin && memberDueNow > 0 ? `Collect ₹${memberDueNow.toLocaleString('en-IN')} & Check Out`
               : !isWalkin && !canClose ? 'Check Out Anyway'
               : 'Both Fine — Check Out'}
           </button>
@@ -194,7 +208,6 @@ function FoodOrderModal({ branchId, booking, onClose, onDone }) {
   const [items, setItems] = useState([])
   const [search, setSearch] = useState('')
   const [orders, setOrders] = useState([])
-  const [paymentMode, setPaymentMode] = useState('cash')
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState('')
 
@@ -226,7 +239,7 @@ function FoodOrderModal({ branchId, booking, onClose, onDone }) {
     try {
       await api('create_food_bill', {
         branchId, studentId: booking.student_id, studentName: booking.students?.name ?? null,
-        studentPhone: booking.students?.phone ?? null, bookingId: booking.id, paymentMode,
+        studentPhone: booking.students?.phone ?? null, bookingId: booking.id,
         items: orders.map(o => ({ foodItemId: o.foodItemId, quantity: o.quantity })),
       })
       onDone()
@@ -278,21 +291,14 @@ function FoodOrderModal({ branchId, booking, onClose, onDone }) {
             </div>
           </div>
         )}
-        <div className="form-group">
-          <label>Payment Mode</label>
-          <div style={{ display: 'flex', gap: '0.5rem' }}>
-            {[{ value: 'cash', label: '💵 Cash' }, { value: 'upi', label: '📱 UPI' }].map(({ value, label }) => (
-              <button key={value} type="button" onClick={() => setPaymentMode(value)}
-                style={{ flex: 1, padding: '0.5rem', border: `1px solid ${paymentMode === value ? 'var(--accent)' : '#333'}`, borderRadius: 4, background: paymentMode === value ? 'rgba(255,215,0,0.08)' : '#141414', color: paymentMode === value ? 'var(--accent)' : 'var(--text-muted)', cursor: 'pointer', fontWeight: 600 }}
-              >{label}</button>
-            ))}
-          </div>
-        </div>
+        <p style={{ fontSize: '0.78rem', color: 'var(--text-muted)', marginBottom: '0.75rem' }}>
+          Payment for this isn't collected now — it's added to the bill and settled (cash/UPI) at final checkout.
+        </p>
         {error && <p className="error-msg">{error}</p>}
         <div className="modal-actions">
           <button type="button" className="btn btn-ghost" onClick={onClose}>Cancel</button>
-          <button type="button" className="btn btn-primary" disabled={saving} onClick={handleSave}>
-            {saving ? 'Saving…' : `Add Bill — ${formatCurrency(total)}`}
+          <button type="button" className="btn btn-primary" disabled={saving || orders.length === 0} onClick={handleSave}>
+            {saving ? 'Saving…' : `Save Order — ${formatCurrency(total)}`}
           </button>
         </div>
       </div>

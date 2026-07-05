@@ -4,11 +4,12 @@ import { useAuth } from '../context/AuthContext'
 import { api, uploadPhoto } from '../lib/api'
 import { formatCurrency, getMultiMonthDiscount, todayISO } from '../lib/utils'
 
-const TEMP_PACKAGES = [
+// Fallback packages — used only until live rates are fetched from fee_config (Branch Settings)
+const DEFAULT_TEMP_PACKAGES = [
   { hours: 2, fee: 500 }, { hours: 3, fee: 650 }, { hours: 4, fee: 800 },
   { hours: 5, fee: 1000 }, { hours: 6, fee: 1250 }, { hours: 8, fee: 1500 },
 ]
-const PERM_PACKAGES = [
+const DEFAULT_PERM_PACKAGES = [
   { hours: 12, fee: 2100 }, { hours: 13, fee: 2200 }, { hours: 14, fee: 2300 },
   { hours: 15, fee: 2400 }, { hours: 24, fee: 2500 },
 ]
@@ -20,13 +21,15 @@ const REFERRAL_OPTIONS = [
 ]
 
 // ── Active Members tab ─────────────────────────────────────────────────────
-function ActiveMembersTab({ branchId }) {
+function ActiveMembersTab({ branchId, tempPackages, permPackages }) {
   const [members, setMembers] = useState([])
   const [loading, setLoading] = useState(true)
   const [actionLoading, setActionLoading] = useState(null)
   const [search, setSearch] = useState('')
   const [pillFilter, setPillFilter] = useState(null)
   const [renewModal, setRenewModal] = useState(null)
+  const [renewCategory, setRenewCategory] = useState('temporary')
+  const [renewHoursPerDay, setRenewHoursPerDay] = useState(4)
   const [renewMonths, setRenewMonths] = useState(1)
   const [renewPayMode, setRenewPayMode] = useState('cash')
   const [renewPayType, setRenewPayType] = useState('full')
@@ -47,6 +50,16 @@ function ActiveMembersTab({ branchId }) {
 
   useEffect(() => { load() }, [load])
 
+  // Keep the selected hours-per-day valid whenever the renewal category changes
+  useEffect(() => {
+    if (!renewModal) return
+    const pkgs = renewCategory === 'permanent' ? permPackages : tempPackages
+    if (pkgs.length && !pkgs.some(p => p.hours === renewHoursPerDay)) {
+      setRenewHoursPerDay(pkgs[0].hours)
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [renewCategory, renewModal])
+
   const handleHold = async (membershipId) => {
     setActionLoading(membershipId + ':hold')
     try {
@@ -63,6 +76,16 @@ function ActiveMembersTab({ branchId }) {
       load()
     } catch { /* ignore */ }
     finally { setActionLoading(null) }
+  }
+
+  const openRenewModal = (m) => {
+    setRenewModal({ membershipId: m.membership_id, studentName: m.student_name })
+    setRenewCategory(m.category)
+    setRenewHoursPerDay(m.hours_per_day)
+    setRenewMonths(1)
+    setRenewPayMode('cash')
+    setRenewPayType('full')
+    setRenewAdvance('')
   }
 
   const openCloseModal = async (membershipId, studentName) => {
@@ -94,9 +117,11 @@ function ActiveMembersTab({ branchId }) {
     try {
       await api('renew_membership', {
         membershipId: renewModal.membershipId,
+        category: renewCategory,
+        hoursPerDay: renewHoursPerDay,
         monthsPaid: renewMonths,
         paymentMode: renewPayMode,
-        advanceAmount: renewPayType === 'partial' ? Number(renewAdvance) || null : null,
+        advanceAmount: renewPayType === 'partial' ? (Number(renewAdvance) || null) : renewPayType === 'pending' ? 0 : null,
       })
       setRenewModal(null)
       load()
@@ -128,14 +153,12 @@ function ActiveMembersTab({ branchId }) {
   const expiringSoon = members.filter(m => {
     if (m.end_date < today) return false
     const daysLeft = Math.ceil((new Date(m.end_date) - new Date()) / 86_400_000)
-    return daysLeft <= 3
+    return daysLeft <= 7
   })
 
-  // Compute renewal fee for the renewal modal
-  const renewPkg = renewModal
-    ? (renewModal.category === 'permanent' ? PERM_PACKAGES : TEMP_PACKAGES)
-        .find(p => p.hours === renewModal.hoursPerDay) ?? TEMP_PACKAGES[0]
-    : null
+  // Compute renewal fee for the renewal modal — plan (category/hours) is editable at renewal time
+  const renewPackages = renewCategory === 'permanent' ? permPackages : tempPackages
+  const renewPkg = renewPackages.find(p => p.hours === renewHoursPerDay) ?? renewPackages[0]
   const renewDiscount = renewMonths >= 6 ? 10 : renewMonths >= 3 ? 5 : renewMonths >= 2 ? 2 : 0
   const renewGross = renewPkg ? renewPkg.fee * renewMonths : 0
   const renewTotal = renewGross * (1 - renewDiscount / 100)
@@ -144,11 +167,11 @@ function ActiveMembersTab({ branchId }) {
 
   return (
     <div className="card">
-      {/* Expiry reminder banner */}
+      {/* Expiry reminder banner — stays up for the entire final week of validity */}
       {expiringSoon.length > 0 && (
         <div style={{ marginBottom: '1rem', background: 'rgba(255,150,0,0.07)', border: '1px solid rgba(255,150,0,0.3)', borderRadius: 6, padding: '0.65rem 1rem' }}>
           <span style={{ color: '#ffaa44', fontWeight: 700, fontSize: '0.85rem' }}>
-            ⚠ {expiringSoon.length} membership{expiringSoon.length > 1 ? 's' : ''} expiring within 3 days:
+            ⚠ {expiringSoon.length} membership{expiringSoon.length > 1 ? 's' : ''} expiring within the next 7 days — remind them to renew:
           </span>
           <span style={{ color: 'var(--text-muted)', fontSize: '0.82rem', marginLeft: 8 }}>
             {expiringSoon.map(m => m.student_name).join(', ')}
@@ -209,15 +232,15 @@ function ActiveMembersTab({ branchId }) {
             {filtered.map(m => {
               const isExpired = m.end_date < today
               const daysLeft = Math.ceil((new Date(m.end_date) - new Date()) / 86_400_000)
-              const expiringSoonRow = !isExpired && daysLeft <= 3
+              const expiringSoonRow = !isExpired && daysLeft <= 7
               return (
-                <tr key={m.membership_id} style={{ background: isExpired ? 'rgba(255,60,60,0.07)' : undefined }}>
+                <tr key={m.membership_id} className={isExpired ? 'row-overdue' : ''}>
                   <td>
                     <Link to={`/students/${m.student_id}`} style={{ color: isExpired ? '#ff8888' : 'var(--accent)' }}>{m.student_name}</Link>
                     <div className="mono" style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>{m.student_phone}</div>
                   </td>
                   <td>
-                    <span style={{ fontSize: '0.85rem' }}>{m.category} · {m.hours_per_day}h/day</span>
+                    <span style={{ fontSize: '0.85rem' }} className="cap">{m.category} · {m.hours_per_day}h/day</span>
                     {m.cabin_no && <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>Cabin {m.cabin_no}</div>}
                   </td>
                   <td className="mono" style={{ fontSize: '0.85rem', color: isExpired ? '#ff8888' : undefined }}>
@@ -261,29 +284,41 @@ function ActiveMembersTab({ branchId }) {
                             type="button"
                             style={{ padding: '0.3rem 0.7rem', fontSize: '0.8rem', background: 'rgba(255,215,0,0.08)', border: '1px solid rgba(255,215,0,0.4)', color: 'var(--accent)', borderRadius: 4, cursor: 'pointer', fontWeight: 600 }}
                             disabled={actionLoading === m.membership_id + ':renew'}
-                            onClick={() => { setRenewModal({ membershipId: m.membership_id, studentName: m.student_name, category: m.category, hoursPerDay: m.hours_per_day }); setRenewMonths(1); setRenewPayMode('cash'); setRenewPayType('full'); setRenewAdvance('') }}
+                            onClick={() => openRenewModal(m)}
                           >↺ Renew</button>
                           <button
                             type="button"
                             style={{ padding: '0.3rem 0.7rem', fontSize: '0.8rem', background: 'rgba(255,60,60,0.08)', border: '1px solid rgba(255,60,60,0.4)', color: '#ff8888', borderRadius: 4, cursor: 'pointer', fontWeight: 600 }}
                             disabled={actionLoading === m.membership_id + ':close'}
                             onClick={() => openCloseModal(m.membership_id, m.student_name)}
-                          >✕ Close</button>
+                          >✕ Finish</button>
                         </>
-                      ) : m.is_paused ? (
-                        <button
-                          type="button" className="btn btn-primary"
-                          style={{ padding: '0.3rem 0.7rem', fontSize: '0.8rem' }}
-                          disabled={actionLoading === m.membership_id + ':resume'}
-                          onClick={() => handleResume(m.membership_id)}
-                        >▶ Resume</button>
                       ) : (
-                        <button
-                          type="button"
-                          style={{ padding: '0.3rem 0.7rem', fontSize: '0.8rem', background: 'rgba(255,150,0,0.08)', border: '1px solid rgba(255,150,0,0.4)', color: '#ffaa44', borderRadius: 4, cursor: 'pointer', fontWeight: 600 }}
-                          disabled={actionLoading === m.membership_id + ':hold'}
-                          onClick={() => handleHold(m.membership_id)}
-                        >⏸ Hold</button>
+                        <>
+                          {expiringSoonRow && (
+                            <button
+                              type="button"
+                              style={{ padding: '0.3rem 0.7rem', fontSize: '0.8rem', background: 'rgba(255,215,0,0.08)', border: '1px solid rgba(255,215,0,0.4)', color: 'var(--accent)', borderRadius: 4, cursor: 'pointer', fontWeight: 600 }}
+                              disabled={actionLoading === m.membership_id + ':renew'}
+                              onClick={() => openRenewModal(m)}
+                            >↺ Renew</button>
+                          )}
+                          {m.is_paused ? (
+                            <button
+                              type="button" className="btn btn-primary"
+                              style={{ padding: '0.3rem 0.7rem', fontSize: '0.8rem' }}
+                              disabled={actionLoading === m.membership_id + ':resume'}
+                              onClick={() => handleResume(m.membership_id)}
+                            >▶ Resume</button>
+                          ) : (
+                            <button
+                              type="button"
+                              style={{ padding: '0.3rem 0.7rem', fontSize: '0.8rem', background: 'rgba(255,150,0,0.08)', border: '1px solid rgba(255,150,0,0.4)', color: '#ffaa44', borderRadius: 4, cursor: 'pointer', fontWeight: 600 }}
+                              disabled={actionLoading === m.membership_id + ':hold'}
+                              onClick={() => handleHold(m.membership_id)}
+                            >⏸ Hold</button>
+                          )}
+                        </>
                       )}
                     </div>
                   </td>
@@ -300,6 +335,23 @@ function ActiveMembersTab({ branchId }) {
           <div className="modal" style={{ maxWidth: 420 }} onClick={(e) => e.stopPropagation()}>
             <h2>Renew Membership</h2>
             <p style={{ color: 'var(--text-muted)', marginBottom: '1rem' }}>{renewModal.studentName}</p>
+
+            <div className="form-group">
+              <label>Plan</label>
+              <select value={renewCategory} onChange={(e) => setRenewCategory(e.target.value)}>
+                <option value="temporary">Temporary (floating seat)</option>
+                <option value="permanent">Permanent (fixed cabin)</option>
+              </select>
+            </div>
+
+            <div className="form-group">
+              <label>Hours per Day</label>
+              <select value={renewHoursPerDay} onChange={(e) => setRenewHoursPerDay(Number(e.target.value))}>
+                {renewPackages.map(p => (
+                  <option key={p.hours} value={p.hours}>{p.hours} hrs/day — {formatCurrency(p.fee)}/mo</option>
+                ))}
+              </select>
+            </div>
 
             <div className="form-group">
               <label>Months</label>
@@ -324,9 +376,9 @@ function ActiveMembersTab({ branchId }) {
             <div className="form-group">
               <label>Payment Type</label>
               <div style={{ display: 'flex', gap: '0.5rem' }}>
-                {[{ value: 'full', label: 'Full' }, { value: 'partial', label: 'Partial' }].map(({ value, label }) => (
+                {[{ value: 'full', label: 'Full' }, { value: 'partial', label: 'Partial' }, { value: 'pending', label: 'Pay Later' }].map(({ value, label }) => (
                   <button key={value} type="button" onClick={() => setRenewPayType(value)}
-                    style={{ flex: 1, padding: '0.5rem', border: `1px solid ${renewPayType === value ? 'var(--accent)' : '#333'}`, borderRadius: 4, background: renewPayType === value ? 'rgba(255,215,0,0.08)' : '#141414', color: renewPayType === value ? 'var(--accent)' : 'var(--text-muted)', cursor: 'pointer', fontWeight: 600 }}
+                    style={{ flex: 1, padding: '0.5rem', border: `1px solid ${renewPayType === value ? 'var(--accent)' : '#333'}`, borderRadius: 4, background: renewPayType === value ? 'rgba(255,215,0,0.08)' : '#141414', color: renewPayType === value ? 'var(--accent)' : 'var(--text-muted)', cursor: 'pointer', fontWeight: 600, fontSize: '0.85rem' }}
                   >{label}</button>
                 ))}
               </div>
@@ -341,10 +393,13 @@ function ActiveMembersTab({ branchId }) {
 
             <div className="card" style={{ marginBottom: '1rem', background: 'rgba(255,215,0,0.05)' }}>
               <p className="mono">Total: {formatCurrency(renewTotal)}</p>
+              {renewPayType === 'pending' && (
+                <p className="mono" style={{ color: 'var(--accent)', fontWeight: 700 }}>Remaining to be paid: {formatCurrency(renewTotal)}</p>
+              )}
               {renewPayType === 'partial' && renewAdvanceNum > 0 && (
                 <>
                   <p className="mono" style={{ color: '#4ade80' }}>Paid now: {formatCurrency(renewAdvanceNum)}</p>
-                  <p className="mono" style={{ color: '#ff8c42', fontWeight: 700 }}>Remaining: {formatCurrency(renewRemaining)}</p>
+                  <p className="mono" style={{ color: 'var(--accent)', fontWeight: 700 }}>Remaining to be paid: {formatCurrency(renewRemaining)}</p>
                 </>
               )}
             </div>
@@ -360,24 +415,30 @@ function ActiveMembersTab({ branchId }) {
         </div>
       )}
 
-      {/* Close membership — blocks closing until membership + locker dues are cleared */}
+      {/* Finish membership — permanently ends it; blocks until membership + locker dues are cleared */}
       {closeModal && (
         <div className="modal-overlay" onClick={() => setCloseModal(null)}>
           <div className="modal" style={{ maxWidth: 420 }} onClick={(e) => e.stopPropagation()}>
-            <h2>Close Membership</h2>
-            <p style={{ color: 'var(--text-muted)', marginBottom: '1rem' }}>{closeModal.studentName}</p>
+            <h2>Finish Membership — {closeModal.studentName}</h2>
 
             {!closeSummary ? (
               <p>Checking pending dues…</p>
             ) : (
-              <div className="card" style={{ marginBottom: '1rem', background: closeSummary.canClose ? 'rgba(74,222,128,0.05)' : 'rgba(255,60,60,0.05)' }}>
-                <p className="mono">Membership pending: {formatCurrency(closeSummary.membershipDue)}</p>
-                {closeSummary.locker && <p className="mono">Locker pending: {formatCurrency(closeSummary.lockerDue)}</p>}
-                <p className="mono" style={{ fontWeight: 700, marginTop: '0.4rem', color: closeSummary.canClose ? '#4ade80' : '#ff8888' }}>
-                  Total pending: {formatCurrency(closeSummary.totalDue)}
+              <div className="card" style={{ marginBottom: '1rem', background: 'rgba(255,215,0,0.05)' }}>
+                <h3 style={{ color: 'var(--accent)', fontSize: '0.9rem', marginBottom: '0.5rem' }}>Payment Summary</h3>
+                <p className="mono" style={{ color: closeSummary.membershipDue > 0 ? '#ff8888' : '#4ade80' }}>
+                  Membership pending: {formatCurrency(closeSummary.membershipDue)}
+                </p>
+                {closeSummary.locker && (
+                  <p className="mono" style={{ color: closeSummary.lockerDue > 0 ? '#ff8888' : '#4ade80' }}>
+                    Locker pending: {formatCurrency(closeSummary.lockerDue)}
+                  </p>
+                )}
+                <p className="mono" style={{ fontWeight: 700, marginTop: '0.4rem', fontSize: '1.05rem', color: closeSummary.canClose ? '#4ade80' : 'var(--accent)' }}>
+                  Remaining to be paid: {formatCurrency(closeSummary.totalDue)}
                 </p>
                 {!closeSummary.canClose && (
-                  <p style={{ fontSize: '0.8rem', color: 'var(--text-muted)', marginTop: '0.5rem' }}>
+                  <p style={{ fontSize: '0.78rem', color: 'var(--text-muted)', marginTop: '0.5rem' }}>
                     Everything must be cleared before this membership can be closed. Record the pending payment(s) from the student's profile page first.
                   </p>
                 )}
@@ -391,7 +452,7 @@ function ActiveMembersTab({ branchId }) {
                 disabled={!closeSummary?.canClose || closeLoading}
                 onClick={confirmClose}
               >
-                {closeLoading ? 'Closing…' : 'Confirm Close'}
+                {closeLoading ? 'Finishing…' : 'Confirm Finish'}
               </button>
             </div>
           </div>
@@ -402,7 +463,7 @@ function ActiveMembersTab({ branchId }) {
 }
 
 // ── New Membership form ────────────────────────────────────────────────────
-function NewMembershipForm({ branchId, onCreated }) {
+function NewMembershipForm({ branchId, onCreated, tempPackages, permPackages }) {
   const navigate = useNavigate()
   const [name, setName] = useState('')
   const [phone, setPhone] = useState('')
@@ -433,7 +494,7 @@ function NewMembershipForm({ branchId, onCreated }) {
       .catch(() => setLockerStatus(null))
   }, [branchId])
 
-  const packages = category === 'permanent' ? PERM_PACKAGES : TEMP_PACKAGES
+  const packages = category === 'permanent' ? permPackages : tempPackages
 
   useEffect(() => {
     const pkg = packages[0]
@@ -551,8 +612,8 @@ function NewMembershipForm({ branchId, onCreated }) {
         {receipt.amountRemaining > 0 && (
           <>
             <p className="mono" style={{ color: '#4ade80' }}>Paid: {formatCurrency(receipt.amountPaid)}</p>
-            <p className="mono" style={{ color: '#ff8c42', fontWeight: 700, fontSize: '1.05rem' }}>
-              Balance Due: {formatCurrency(receipt.amountRemaining)}
+            <p className="mono" style={{ color: 'var(--accent)', fontWeight: 700, fontSize: '1.05rem' }}>
+              Remaining to be paid: {formatCurrency(receipt.amountRemaining)}
             </p>
           </>
         )}
@@ -569,7 +630,7 @@ function NewMembershipForm({ branchId, onCreated }) {
       <form onSubmit={handleSubmit}>
         <div className="form-group" style={{ position: 'relative' }}>
           <label>Full Name *</label>
-          <input value={name} onChange={(e) => setName(e.target.value)} placeholder="Enter the full name" autoComplete="off" required />
+          <input value={name} onChange={(e) => setName(e.target.value)} placeholder="Enter your Full Name" autoComplete="off" required />
           {selectedStudent && (
             <p style={{ fontSize: '0.75rem', color: '#4ade80', marginTop: '0.3rem' }}>✓ Matched existing student</p>
           )}
@@ -764,15 +825,15 @@ function NewMembershipForm({ branchId, onCreated }) {
             Total: {formatCurrency(grandTotal)}
           </p>
           {paymentType === 'pending' && (
-            <p className="mono" style={{ color: '#ff8c42', fontWeight: 700 }}>
-              Fully pending: {formatCurrency(amountRemaining)} due
+            <p className="mono" style={{ color: 'var(--accent)', fontWeight: 700 }}>
+              Remaining to be paid: {formatCurrency(amountRemaining)}
             </p>
           )}
           {paymentType === 'partial' && (
             <>
               <p className="mono" style={{ color: '#4ade80' }}>Paid now: {formatCurrency(amountPaid)}</p>
-              <p className="mono" style={{ color: '#ff8c42', fontWeight: 700 }}>
-                Remaining: {formatCurrency(amountRemaining)}
+              <p className="mono" style={{ color: 'var(--accent)', fontWeight: 700 }}>
+                Remaining to be paid: {formatCurrency(amountRemaining)}
               </p>
             </>
           )}
@@ -790,6 +851,26 @@ function NewMembershipForm({ branchId, onCreated }) {
 export default function MembershipPage() {
   const { branchId } = useAuth()
   const [tab, setTab] = useState('active')
+  const [tempPackages, setTempPackages] = useState(DEFAULT_TEMP_PACKAGES)
+  const [permPackages, setPermPackages] = useState(DEFAULT_PERM_PACKAGES)
+
+  // Pull live membership fee rates so a change in Branch Settings shows up here immediately
+  const loadFeeConfig = useCallback(async () => {
+    try {
+      const { config } = await api('list_fee_config')
+      const membershipRows = (config ?? []).filter(f => f.config_type === 'membership')
+      const toPackages = (category) => membershipRows
+        .filter(f => f.cabin_type === category)
+        .map(f => ({ hours: f.hours_per_day, fee: Number(f.fee) }))
+        .sort((a, b) => a.hours - b.hours)
+      const temp = toPackages('temporary')
+      const perm = toPackages('permanent')
+      if (temp.length) setTempPackages(temp)
+      if (perm.length) setPermPackages(perm)
+    } catch { /* fall back to defaults */ }
+  }, [])
+
+  useEffect(() => { loadFeeConfig() }, [loadFeeConfig])
 
   return (
     <>
@@ -799,8 +880,13 @@ export default function MembershipPage() {
         <button type="button" className={tab === 'new' ? 'active' : ''} onClick={() => setTab('new')}>New Registration</button>
       </div>
 
-      {tab === 'active' && <ActiveMembersTab branchId={branchId} />}
-      {tab === 'new' && <NewMembershipForm branchId={branchId} onCreated={() => setTab('active')} />}
+      {tab === 'active' && <ActiveMembersTab branchId={branchId} tempPackages={tempPackages} permPackages={permPackages} />}
+      {tab === 'new' && (
+        <NewMembershipForm
+          branchId={branchId} onCreated={() => setTab('active')}
+          tempPackages={tempPackages} permPackages={permPackages}
+        />
+      )}
     </>
   )
 }

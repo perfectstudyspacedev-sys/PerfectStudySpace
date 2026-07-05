@@ -106,13 +106,9 @@ function WalkInModal({ branchId, onClose, onDone }) {
           <>
             <h2>Walk-in Booking</h2>
             <form onSubmit={handleSubmit}>
-              <div className="form-group">
-                <label>Phone Number</label>
-                <input value={phone} onChange={(e) => setPhone(e.target.value.replace(/\D/g, '').slice(0, 10))} placeholder="10-digit mobile" autoFocus required />
-              </div>
               <div className="form-group" style={{ position: 'relative' }}>
                 <label>Name</label>
-                <input value={name} onChange={(e) => setName(e.target.value)} autoComplete="off" required />
+                <input value={name} onChange={(e) => setName(e.target.value)} placeholder="Enter your Full Name" autoComplete="off" autoFocus required />
                 {selectedStudent && (
                   <p style={{ fontSize: '0.75rem', color: '#4ade80', marginTop: '0.3rem' }}>✓ Matched existing student</p>
                 )}
@@ -136,6 +132,10 @@ function WalkInModal({ branchId, onClose, onDone }) {
                     ))}
                   </div>
                 )}
+              </div>
+              <div className="form-group">
+                <label>Phone Number</label>
+                <input value={phone} onChange={(e) => setPhone(e.target.value.replace(/\D/g, '').slice(0, 10))} placeholder="10-digit mobile" required />
               </div>
               <div className="form-group">
                 <label>Start Time</label>
@@ -217,18 +217,17 @@ function CheckInModal({ branchId, onClose, onDone }) {
 
   const handleSubmit = async (e) => {
     e.preventDefault()
-    if (!selectedStudent && !/^\d{10}$/.test(phone)) return setError('Select a student or enter a valid 10-digit phone number')
+    const lookupPhone = selectedStudent?.phone || phone
+    if (!/^\d{10}$/.test(lookupPhone || '')) return setError('Select a student or enter a valid 10-digit phone number')
     setError('')
     setLoading(true)
     try {
-      let student = selectedStudent
-      if (!student) {
-        const res = await api('lookup_student', { phone })
-        student = res.student
-      }
+      // Always resolve the authoritative record by phone — the name-search dropdown only
+      // returns {id, name, phone}, not membership status, so it can't be trusted directly.
+      const res = await api('lookup_student', { phone: lookupPhone })
+      const student = res.student
       if (!student) return setError('No student found')
-      const mem = student.active_membership || student.membership
-      if (!mem && !student.is_member) return setError('This student does not have an active membership')
+      if (!student.is_member) return setError('This student does not have an active membership')
 
       const result = await api('check_in_member', {
         branchId,
@@ -470,18 +469,14 @@ export default function DashboardPage() {
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(300px, 1fr))', gap: '1rem', marginTop: '1.5rem' }}>
         <div className="card">
           <h3 style={{ color: 'var(--accent)', marginBottom: '0.75rem' }}>Today&apos;s Action Items</h3>
-          {(data?.actionable?.dueToday?.length ?? 0) === 0 && (data?.actionable?.expiredToday?.length ?? 0) === 0 ? (
+          {(data?.actionable?.expiredToday?.length ?? 0) === 0 ? (
             <p style={{ color: 'var(--text-muted)', fontSize: '0.85rem' }}>No urgent items today.</p>
           ) : (
             <div className="activity-feed">
-              {data?.actionable?.dueToday?.map(m => (
-                <div key={m.id} className="activity-item">
-                  Payment due: <strong>{m.students?.name}</strong> — {m.students?.phone}
-                </div>
-              ))}
               {data?.actionable?.expiredToday?.map(m => (
                 <div key={m.id} className="activity-item" style={{ borderColor: '#ff6b6b' }}>
-                  Subscription ended: <strong>{m.students?.name}</strong>
+                  <strong>{m.students?.name}</strong>
+                  <span className="mono" style={{ color: 'var(--text-muted)' }}> · expired {m.end_date}</span>
                 </div>
               ))}
             </div>

@@ -158,7 +158,7 @@ export default function StudentsPage() {
                         </td>
                       ))}
                       <td>
-                        <span className={`badge badge-${row.status}`}>{row.status}</span>
+                        <span className={`badge badge-${row.status} cap`}>{row.status}</span>
                       </td>
                     </tr>
                   ))}

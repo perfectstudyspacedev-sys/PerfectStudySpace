@@ -29,6 +29,10 @@ body {
   min-height: 100vh;
 }
 
+a {
+  text-decoration: none;
+}
+
 h1, h2, h3 {
   font-family: var(--font-display);
   letter-spacing: 0.02em;
@@ -36,6 +40,10 @@ h1, h2, h3 {
 
 .mono {
   font-family: var(--font-mono);
+}
+
+.cap {
+  text-transform: capitalize;
 }
 
 .app-shell {

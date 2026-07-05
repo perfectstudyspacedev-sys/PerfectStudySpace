@@ -1,7 +1,7 @@
 import { useState, useEffect, useCallback } from 'react'
 import { useAuth } from '../context/AuthContext'
 import { api } from '../lib/api'
-import { formatCurrency, todayISO, exportToCSV } from '../lib/utils'
+import { formatCurrency, todayISO, exportToCSV, paymentModeLabel } from '../lib/utils'
 
 export default function ReportsPage() {
   const { branchId, isOwner } = useAuth()
@@ -42,6 +42,31 @@ export default function ReportsPage() {
 
   const canSeeCollections = report?.totalCollections != null
 
+  // One row per student — a student who is both expired and payment-due shows up once,
+  // with every applicable status badge, instead of duplicating them across separate rows.
+  const buildActionableRows = (act) => {
+    if (!act) return []
+    const rows = new Map()
+    const upsert = (studentId, name, phone, status, dueDate, amount, overdue) => {
+      const key = studentId ?? phone ?? name
+      if (!key) return
+      const row = rows.get(key) ?? { name, phone, statuses: [], dueDate: null, amount: 0, overdue: false }
+      if (!row.statuses.includes(status)) row.statuses.push(status)
+      if (!row.dueDate || (dueDate && dueDate < row.dueDate)) row.dueDate = dueDate
+      row.amount += Number(amount || 0)
+      if (overdue) row.overdue = true
+      rows.set(key, row)
+    }
+    ;(act.expiredMemberships ?? []).forEach(m => upsert(m.student_id, m.students?.name, m.students?.phone, 'Expired', m.end_date, 0, true))
+    ;(act.dueToday ?? []).forEach(m => upsert(m.student_id, m.students?.name, m.students?.phone, 'Payment Due', m.due_date, m.fee_due, true))
+    ;(act.expiringSoon ?? []).forEach(m => upsert(m.student_id, m.students?.name, m.students?.phone, 'Expiring This Week', m.end_date, 0, false))
+    ;(act.overdueLockers ?? []).forEach(l => upsert(l.student_id, l.students?.name, l.students?.phone, 'Locker Overdue', l.locker_due_date, l.fee_due, true))
+    return [...rows.entries()].map(([key, row]) => ({ key, ...row }))
+      .sort((a, b) => (a.dueDate ?? '').localeCompare(b.dueDate ?? ''))
+  }
+
+  const actionableRows = buildActionableRows(actionable)
+
   const exportDaily = () => {
     if (!report) return
     exportToCSV(`daily-report-${date}.csv`,
@@ -55,13 +80,9 @@ export default function ReportsPage() {
   }
 
   const exportActionable = () => {
-    if (!actionable) return
-    const rows = [
-      ...(actionable.dueToday ?? []).map(m => ['Payment Due', m.students?.name, m.students?.phone, m.due_date, m.fee_due]),
-      ...(actionable.expiringSoon ?? []).map(m => ['Expiring', m.students?.name, m.students?.phone, m.end_date, '']),
-      ...(actionable.overdueLockers ?? []).map(l => ['Locker Overdue', l.students?.name, l.students?.phone, l.locker_due_date, l.locker_no]),
-    ]
-    exportToCSV(`actionable-${todayISO()}.csv`, ['Type', 'Name', 'Phone', 'Date', 'Extra'], rows)
+    if (!actionableRows.length) return
+    const rows = actionableRows.map(r => [r.statuses.join(', '), r.name, r.phone, r.dueDate ?? '', r.amount])
+    exportToCSV(`actionable-${todayISO()}.csv`, ['Status', 'Name', 'Phone', 'Date', 'Amount'], rows)
   }
 
   return (
@@ -117,9 +138,9 @@ export default function ReportsPage() {
                   {(report.transactions ?? []).map(t => (
                     <tr key={t.id}>
                       <td className="mono">{new Date(t.created_at).toLocaleTimeString('en-IN')}</td>
-                      <td>{t.category}</td>
+                      <td className="cap">{t.category}</td>
                       <td className="mono">{formatCurrency(t.amount)}</td>
-                      <td>{t.payment_mode}</td>
+                      <td>{paymentModeLabel(t.payment_mode)}</td>
                     </tr>
                   ))}
                 </tbody>
@@ -183,28 +204,31 @@ export default function ReportsPage() {
       {actionable && (
         <div className="card">
           <h3 style={{ color: 'var(--accent)', marginBottom: '0.75rem' }}>Actionable Items (Today)</h3>
-          {(actionable.dueToday?.length ?? 0) === 0 && (actionable.overdueLockers?.length ?? 0) === 0 ? (
+          {actionableRows.length === 0 ? (
             <p style={{ color: 'var(--text-muted)' }}>All clear — no urgent follow-ups.</p>
           ) : (
             <table className="data-table">
-              <thead><tr><th>Type</th><th>Student</th><th>Phone</th><th>Due Date</th><th>Amount</th></tr></thead>
+              <thead><tr><th>Status</th><th>Student</th><th>Phone</th><th>Since / Due</th><th>Amount</th></tr></thead>
               <tbody>
-                {actionable.dueToday?.map(m => (
-                  <tr key={m.id} className="row-overdue">
-                    <td>Payment Due</td>
-                    <td>{m.students?.name}</td>
-                    <td className="mono">{m.students?.phone}</td>
-                    <td className="mono">{m.due_date}</td>
-                    <td className="mono">{formatCurrency(m.fee_due)}</td>
-                  </tr>
-                ))}
-                {actionable.overdueLockers?.map(l => (
-                  <tr key={l.id} className="row-overdue">
-                    <td>Locker Overdue</td>
-                    <td>{l.students?.name}</td>
-                    <td className="mono">{l.students?.phone}</td>
-                    <td className="mono">{l.locker_due_date}</td>
-                    <td>Locker {l.locker_no}</td>
+                {actionableRows.map(r => (
+                  <tr key={r.key} className={r.overdue ? 'row-overdue' : ''}>
+                    <td>
+                      <div style={{ display: 'flex', gap: '0.3rem', flexWrap: 'wrap' }}>
+                        {r.statuses.map(s => (
+                          <span key={s} style={{
+                            padding: '2px 8px', borderRadius: 4, fontSize: '0.72rem', fontWeight: 700,
+                            background: s === 'Expiring This Week' ? 'rgba(255,150,0,0.15)' : 'rgba(255,70,70,0.15)',
+                            color: s === 'Expiring This Week' ? '#ffaa44' : '#ff8888',
+                          }}>
+                            {s}
+                          </span>
+                        ))}
+                      </div>
+                    </td>
+                    <td>{r.name}</td>
+                    <td className="mono">{r.phone}</td>
+                    <td className="mono">{r.dueDate ?? '—'}</td>
+                    <td className="mono">{r.amount > 0 ? formatCurrency(r.amount) : '—'}</td>
                   </tr>
                 ))}
               </tbody>

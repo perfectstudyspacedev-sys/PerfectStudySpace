@@ -66,12 +66,18 @@ function addMonths(dateStr: string, months: number): string {
   return d.toISOString().slice(0, 10);
 }
 
+function addDays(dateStr: string, days: number): string {
+  const d = new Date(dateStr + "T12:00:00");
+  d.setDate(d.getDate() + days);
+  return d.toISOString().slice(0, 10);
+}
+
 // A recurring task's "anchor" is its due_date (or, failing that, the day it was created).
 // daily tasks are due every day from the anchor onward; weekly/monthly repeat on the
 // anchor's weekday / day-of-month.
 function isTaskDueOn(task: { repeat_interval: string; due_date: string | null; created_at: string; status?: string }, dateStr: string): boolean {
-  if (task.repeat_interval === "none") return task.status !== "done";
   const anchor = task.due_date ?? task.created_at.slice(0, 10);
+  if (task.repeat_interval === "none") return anchor === dateStr && task.status !== "done";
   if (anchor > dateStr) return false;
   if (task.repeat_interval === "daily") return true;
   const anchorDate = new Date(anchor + "T12:00:00");
@@ -182,11 +188,13 @@ Deno.serve(async (req) => {
       const row = data[0];
       const token = await signToken({ sub: row.id, role: row.role, username: row.username });
 
-      // Auto-mark attendance on first login of the day (no-op if already marked)
-      await db.from("staff_attendance").upsert(
-        { staff_id: row.id, branch_id: row.branch_id, attendance_date: todayISO() },
-        { onConflict: "staff_id,attendance_date", ignoreDuplicates: true },
-      );
+      // Auto-mark attendance on first login of the day (no-op if already marked) — owner is exempt
+      if (row.role !== "owner") {
+        await db.from("staff_attendance").upsert(
+          { staff_id: row.id, branch_id: row.branch_id, attendance_date: todayISO() },
+          { onConflict: "staff_id,attendance_date", ignoreDuplicates: true },
+        );
+      }
 
       return json({
         token,
@@ -272,11 +280,13 @@ Deno.serve(async (req) => {
       const { data: recentBookings } = await db.from("bookings").select("*, students(name, phone)")
         .eq("branch_id", branchId).order("created_at", { ascending: false }).limit(5);
 
+      // Not just "due/expired exactly today" — any membership that's overdue and hasn't
+      // been settled/renewed yet should keep showing up until it's dealt with.
       const { data: dueToday } = await db.from("memberships").select("*, students(name, phone)")
-        .eq("branch_id", branchId).eq("is_active", true).eq("due_date", today);
+        .eq("branch_id", branchId).eq("is_active", true).lte("due_date", today).gt("fee_due", 0);
 
       const { data: expiredToday } = await db.from("memberships").select("*, students(name, phone)")
-        .eq("branch_id", branchId).eq("end_date", today);
+        .eq("branch_id", branchId).eq("is_active", true).lt("end_date", today);
 
       const { count: checkedInToday } = await db.from("bookings")
         .select("*", { count: "exact", head: true })
@@ -758,6 +768,22 @@ Deno.serve(async (req) => {
         }
       }
 
+      // Settle any food bills that were recorded unpaid during the session, using
+      // whatever payment mode was chosen at checkout.
+      const { data: unpaidBills } = await db.from("food_bills").select("id, total")
+        .eq("booking_id", bookingId).eq("paid", false);
+      if (unpaidBills?.length) {
+        const settleMode = overtimePaymentMode ?? booking.payment_mode ?? "cash";
+        for (const bill of unpaidBills) {
+          await db.from("food_bills").update({ paid: true, payment_mode: settleMode }).eq("id", bill.id);
+          await db.from("transactions").insert({
+            student_id: booking.student_id, branch_id: booking.branch_id,
+            food_bill_id: bill.id, category: "food", amount: bill.total,
+            payment_mode: settleMode, created_by_staff_id: staff.id,
+          });
+        }
+      }
+
       const otMinutes = Number(overtimeMinutes) || 0;
 
       if (otMinutes > 0) {
@@ -949,12 +975,15 @@ Deno.serve(async (req) => {
 
       const disc = Number(discountAmount) || 0;
       const total = Math.max(subtotal - disc, 0);
+      // No payment mode yet ⇒ bill is recorded but left unpaid, to be settled (cash/upi chosen)
+      // together with any overtime at final checkout instead of asking now.
+      const isPaid = paymentMode != null;
 
       const { data: bill, error } = await db.from("food_bills").insert({
         branch_id: branchId, student_id: studentId, booking_id: bookingId,
         student_name: studentName, student_phone: studentPhone,
         subtotal, discount_type: discountType, discount_value: discountValue ?? 0,
-        discount_amount: disc, total, payment_mode: paymentMode ?? "cash",
+        discount_amount: disc, total, payment_mode: isPaid ? paymentMode : null, paid: isPaid,
         created_by_staff_id: staff.id,
       }).select("id").single();
       if (error) return err(error.message);
@@ -963,16 +992,19 @@ Deno.serve(async (req) => {
         await db.from("food_bill_items").insert({ food_bill_id: bill!.id, ...li });
       }
 
-      await db.from("transactions").insert({
-        student_id: studentId, branch_id: branchId, food_bill_id: bill!.id,
-        category: "food", amount: total, payment_mode: paymentMode ?? "cash",
-        created_by_staff_id: staff.id,
-      });
+      if (isPaid) {
+        await db.from("transactions").insert({
+          student_id: studentId, branch_id: branchId, food_bill_id: bill!.id,
+          category: "food", amount: total, payment_mode: paymentMode,
+          created_by_staff_id: staff.id,
+        });
+      }
 
-      return json({ bill: { id: bill!.id, total, subtotal, discountAmount: disc, items: lineItems } });
+      return json({ bill: { id: bill!.id, total, subtotal, discountAmount: disc, items: lineItems, paid: isPaid } });
     }
 
     if (action === "create_food_item") {
+      if (!isOwner(staff)) return err("Owner only", 403);
       const { branchId, name, price } = payload;
       if (!requireBranch(staff, branchId)) return err("Branch access denied", 403);
       if (!name?.trim() || !price) return err("Name and price are required");
@@ -984,6 +1016,7 @@ Deno.serve(async (req) => {
     }
 
     if (action === "update_food_item") {
+      if (!isOwner(staff)) return err("Owner only", 403);
       const { itemId, isActive, price } = payload;
       const updates: Record<string, unknown> = {};
       if (isActive !== undefined) updates.is_active = isActive;
@@ -1267,7 +1300,7 @@ Deno.serve(async (req) => {
       const targetDate = payload?.date || todayISO();
 
       const { data: allStaff } = await db.from("staff").select("id, username, display_name, branch_id, is_active, branches(name)")
-        .eq("is_active", true).order("display_name");
+        .eq("is_active", true).neq("role", "owner").order("display_name");
       const { data: present } = await db.from("staff_attendance").select("staff_id, first_login_at")
         .eq("attendance_date", targetDate);
       const presentMap = new Map((present ?? []).map(p => [p.staff_id, p.first_login_at]));
@@ -1348,12 +1381,18 @@ Deno.serve(async (req) => {
 
       const { data: expiringSoon } = await db.from("memberships").select("*, students(name, phone)")
         .eq("branch_id", branchId).eq("is_active", true)
-        .gte("end_date", today).lte("end_date", addMonths(today, 0));
+        .gte("end_date", today).lte("end_date", addDays(today, 7));
+
+      const { data: expiredMemberships } = await db.from("memberships").select("*, students(name, phone)")
+        .eq("branch_id", branchId).eq("is_active", true).lt("end_date", today);
 
       const { data: overdueLockers } = await db.from("lockers").select("*, students(name, phone)")
         .eq("branch_id", branchId).eq("is_active", true).lt("locker_due_date", today);
 
-      return json({ dueToday: dueToday ?? [], expiringSoon: expiringSoon ?? [], overdueLockers: overdueLockers ?? [] });
+      return json({
+        dueToday: dueToday ?? [], expiringSoon: expiringSoon ?? [],
+        expiredMemberships: expiredMemberships ?? [], overdueLockers: overdueLockers ?? [],
+      });
     }
 
     // ─── TODAY'S BOOKINGS ───
@@ -1362,7 +1401,7 @@ Deno.serve(async (req) => {
       if (!requireBranch(staff, branchId)) return err("Branch access denied", 403);
       const today = todayISO();
       const { data, error: bErr } = await db.from("bookings")
-        .select("*, students(name, phone, course), desks!desk_id(label, seat_type), memberships:membership_id(total_paid, fee_due, monthly_fee, category)")
+        .select("*, students(name, phone, course), desks!desk_id(label, seat_type), memberships:membership_id(total_paid, fee_due, monthly_fee, category, end_date)")
         .eq("branch_id", branchId)
         .eq("status", "active")
         .gte("created_at", today + "T00:00:00Z")
@@ -1372,14 +1411,29 @@ Deno.serve(async (req) => {
 
       const bookingIds = (data ?? []).map(b => b.id);
       const { data: foodBills } = bookingIds.length
-        ? await db.from("food_bills").select("booking_id, total").in("booking_id", bookingIds)
+        ? await db.from("food_bills").select("booking_id, total, paid").in("booking_id", bookingIds)
         : { data: [] };
       const foodTotals = new Map<string, number>();
+      const unpaidFoodTotals = new Map<string, number>();
       for (const fb of foodBills ?? []) {
         foodTotals.set(fb.booking_id, (foodTotals.get(fb.booking_id) ?? 0) + Number(fb.total));
+        if (!fb.paid) unpaidFoodTotals.set(fb.booking_id, (unpaidFoodTotals.get(fb.booking_id) ?? 0) + Number(fb.total));
       }
 
-      const bookings = (data ?? []).map(b => ({ ...b, foodTotal: foodTotals.get(b.id) ?? 0 }));
+      // A student can renew mid-session — pull each member's *current* active membership
+      // rather than trusting the (possibly now-superseded) membership_id stored on the booking.
+      const memberStudentIds = [...new Set((data ?? []).filter((b: any) => b.booking_type !== "walkin").map((b: any) => b.student_id))];
+      const { data: activeMems } = memberStudentIds.length
+        ? await db.from("memberships").select("student_id, total_paid, fee_due, monthly_fee, category, end_date")
+            .in("student_id", memberStudentIds).eq("is_active", true)
+        : { data: [] };
+      const activeMemByStudent = new Map((activeMems ?? []).map((m: any) => [m.student_id, m]));
+
+      const bookings = (data ?? []).map(b => ({
+        ...b,
+        memberships: activeMemByStudent.get(b.student_id) ?? b.memberships,
+        foodTotal: foodTotals.get(b.id) ?? 0, unpaidFoodTotal: unpaidFoodTotals.get(b.id) ?? 0,
+      }));
       return json({ bookings });
     }
 
@@ -1440,18 +1494,34 @@ Deno.serve(async (req) => {
         fee_due: m.fee_due,
         total_paid: m.total_paid,
       }));
+
+      // Remind staff to collect renewal during the student's final week of validity —
+      // kept alive (re-upserted) every time this list loads, resolved on renew/close.
+      const today = todayISO();
+      const weekOut = addDays(today, 7);
+      for (const m of members) {
+        if (!m.student_id) continue;
+        if (m.end_date >= today && m.end_date <= weekOut) {
+          await createAlert(db, m.student_id, branchId, "expiry", m.end_date,
+            `${m.student_name}'s membership expires on ${m.end_date} — remind them to renew.`);
+        }
+      }
+
       return json({ members });
     }
 
     // ─── RENEW MEMBERSHIP ───
     if (action === "renew_membership") {
-      const { membershipId, monthsPaid, paymentMode, advanceAmount } = payload;
+      const { membershipId, monthsPaid, paymentMode, advanceAmount, category, hoursPerDay } = payload;
       const { data: mem } = await db.from("memberships").select("*").eq("id", membershipId).single();
       if (!mem) return err("Membership not found");
       if (!requireBranch(staff, mem.branch_id)) return err("Branch access denied", 403);
 
+      const newCategory = category ?? mem.category;
+      const newHoursPerDay = Number(hoursPerDay ?? mem.hours_per_day);
+
       const months = Number(monthsPaid) || 1;
-      const monthlyFee = await getMembershipPackage(db, Number(mem.hours_per_day), mem.category);
+      const monthlyFee = await getMembershipPackage(db, newHoursPerDay, newCategory);
       if (!monthlyFee) return err("Invalid membership package");
 
       const discount = multiMonthDiscount(months);
@@ -1466,11 +1536,32 @@ Deno.serve(async (req) => {
       const dueDate = addMonths(startDate, 1);
       const monthLabel = new Date(startDate).toLocaleString("en-US", { month: "long", year: "numeric" });
 
+      // Plan can change on renewal — reassign the cabin/seat if the category changed
+      let seatType = mem.seat_type;
+      let deskId = mem.desk_id;
+      let cabinNo = mem.cabin_no;
+      if (newCategory !== mem.category) {
+        if (mem.desk_id) {
+          await db.from("desks").update({ status: "free", seat_type: "floating", assigned_student_id: null }).eq("id", mem.desk_id);
+          deskId = null;
+          cabinNo = null;
+        }
+        seatType = newCategory === "permanent" ? "fixed" : "floating";
+        if (newCategory === "permanent") {
+          const { data: freeDesk } = await db.from("desks").select("*")
+            .eq("branch_id", mem.branch_id).eq("status", "free").order("sort_order").limit(1).maybeSingle();
+          if (!freeDesk) return err("No cabin available for permanent membership");
+          deskId = freeDesk.id;
+          cabinNo = freeDesk.label;
+          await db.from("desks").update({ status: "reserved", seat_type: "fixed", assigned_student_id: mem.student_id }).eq("id", deskId);
+        }
+      }
+
       const { data: newMem, error: mErr } = await db.from("memberships").insert({
         student_id: mem.student_id, branch_id: mem.branch_id,
-        category: mem.category, seat_type: mem.seat_type,
-        desk_id: mem.desk_id, cabin_no: mem.cabin_no,
-        month: monthLabel, hours_per_day: mem.hours_per_day,
+        category: newCategory, seat_type: seatType,
+        desk_id: deskId, cabin_no: cabinNo,
+        month: monthLabel, hours_per_day: newHoursPerDay,
         timings: mem.timings ?? '', start_date: startDate, end_date: endDate,
         due_date: dueDate, months_paid: months, discount_percent: discount,
         monthly_fee: monthlyFee, total_paid: feePaid, fee_due: feeDue,
@@ -1486,6 +1577,7 @@ Deno.serve(async (req) => {
 
       // Deactivate old membership
       await db.from("memberships").update({ is_active: false }).eq("id", membershipId);
+      await db.from("alerts").update({ status: "resolved" }).eq("student_id", mem.student_id).eq("alert_type", "expiry").eq("status", "pending");
       await refreshStudentStatus(db, mem.student_id);
       return json({ ok: true, membershipId: newMem!.id });
     }
@@ -1534,6 +1626,7 @@ Deno.serve(async (req) => {
         }).eq("id", mem.desk_id);
       }
 
+      await db.from("alerts").update({ status: "resolved" }).eq("student_id", mem.student_id).eq("alert_type", "expiry").eq("status", "pending");
       await refreshStudentStatus(db, mem.student_id);
       return json({ ok: true });
     }

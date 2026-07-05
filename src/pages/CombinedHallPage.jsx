@@ -171,7 +171,7 @@ export default function CombinedHallPage() {
                                   <div className="mono" style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>{m.students?.phone}</div>
                                 </td>
                                 <td style={{ fontSize: '0.82rem' }}>{m.students?.course ?? '—'}</td>
-                                <td style={{ fontSize: '0.82rem' }}>{m.category} · {m.hours_per_day}h/day</td>
+                                <td style={{ fontSize: '0.82rem' }} className="cap">{m.category} · {m.hours_per_day}h/day</td>
                                 <td style={{ fontSize: '0.82rem' }}>{m.cabin_no ?? '—'}</td>
                                 <td className="mono">{m.due_date}</td>
                                 <td className="mono" style={{ color: '#ff8888', fontWeight: 700 }}>{formatCurrency(m.fee_due)}</td>
@@ -210,7 +210,7 @@ export default function CombinedHallPage() {
                                   <div className="mono" style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>{m.students?.phone}</div>
                                 </td>
                                 <td style={{ fontSize: '0.82rem' }}>{m.students?.course ?? '—'}</td>
-                                <td style={{ fontSize: '0.82rem' }}>{m.category} · {m.hours_per_day}h/day</td>
+                                <td style={{ fontSize: '0.82rem' }} className="cap">{m.category} · {m.hours_per_day}h/day</td>
                                 <td style={{ fontSize: '0.82rem' }}>{m.cabin_no ?? '—'}</td>
                                 <td className="mono">{m.end_date}</td>
                               </tr>

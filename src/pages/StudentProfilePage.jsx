@@ -1,7 +1,7 @@
 import { useState, useEffect, useCallback } from 'react'
 import { useParams, Link } from 'react-router-dom'
 import { api } from '../lib/api'
-import { formatCurrency } from '../lib/utils'
+import { formatCurrency, paymentModeLabel } from '../lib/utils'
 
 const PAYMENT_OPTIONS = [
   { value: 'cash', label: '💵 Cash' },
@@ -149,7 +149,7 @@ export default function StudentProfilePage() {
         </div>
         <div className="card stat-card">
           <div className="value">
-            <span className={`badge badge-${student.status}`}>{student.status}</span>
+            <span className={`badge badge-${student.status} cap`}>{student.status}</span>
           </div>
           <div className="label">Status</div>
         </div>
@@ -166,7 +166,7 @@ export default function StudentProfilePage() {
                 ['Course', student.course || '—'],
                 activeMem && ['Membership', (
                   <span key="mem">
-                    {activeMem.category} · {activeMem.hours_per_day}h/day
+                    <span className="cap">{activeMem.category}</span> · {activeMem.hours_per_day}h/day
                     {isPaused && <span style={{ marginLeft: 6, background: '#ff990020', color: '#ffaa44', padding: '1px 6px', borderRadius: 4, fontSize: '0.72rem', fontWeight: 700 }}>ON HOLD</span>}
                   </span>
                 )],
@@ -468,9 +468,9 @@ export default function StudentProfilePage() {
             {(transactions ?? []).map(t => (
               <tr key={t.id}>
                 <td className="mono">{new Date(t.created_at).toLocaleDateString('en-IN')}</td>
-                <td>{t.category}</td>
+                <td className="cap">{t.category}</td>
                 <td className="mono">{formatCurrency(t.amount)}</td>
-                <td>{t.payment_mode}</td>
+                <td>{paymentModeLabel(t.payment_mode)}</td>
               </tr>
             ))}
           </tbody>

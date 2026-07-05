@@ -1,10 +1,10 @@
 import { useState, useEffect, useCallback } from 'react'
 import { useAuth } from '../context/AuthContext'
 import { api } from '../lib/api'
-import { formatCurrency, todayISO } from '../lib/utils'
+import { formatCurrency, todayISO, paymentModeLabel } from '../lib/utils'
 
 export default function FoodMenuPage() {
-  const { branchId } = useAuth()
+  const { branchId, isOwner } = useAuth()
   const [foodItems, setFoodItems] = useState([])
   const [tab, setTab] = useState('menu')
   const [bills, setBills] = useState([])
@@ -75,26 +75,33 @@ export default function FoodMenuPage() {
 
       {tab === 'menu' && (
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(280px, 1fr))', gap: '1rem' }}>
-          <div className="card">
-            <h3 style={{ color: 'var(--accent)', marginBottom: '0.75rem' }}>Add New Item</h3>
-            <form onSubmit={handleAddMenuItem}>
-              <div className="form-group">
-                <label>Item Name</label>
-                <input value={newItemName} onChange={(e) => setNewItemName(e.target.value)} placeholder="e.g. Masala Chai" required />
-              </div>
-              <div className="form-group">
-                <label>Price (₹)</label>
-                <input type="number" min="1" value={newItemPrice} onChange={(e) => setNewItemPrice(e.target.value)} placeholder="20" required />
-              </div>
-              {menuError && <p className="error-msg">{menuError}</p>}
-              {menuSuccess && <p style={{ color: '#4ade80', fontSize: '0.85rem' }}>{menuSuccess}</p>}
-              <button type="submit" className="btn btn-primary" disabled={menuSaving}>
-                {menuSaving ? 'Adding…' : 'Add to Menu'}
-              </button>
-            </form>
-          </div>
+          {isOwner && (
+            <div className="card">
+              <h3 style={{ color: 'var(--accent)', marginBottom: '0.75rem' }}>Add New Item</h3>
+              <form onSubmit={handleAddMenuItem}>
+                <div className="form-group">
+                  <label>Item Name</label>
+                  <input value={newItemName} onChange={(e) => setNewItemName(e.target.value)} placeholder="e.g. Masala Chai" required />
+                </div>
+                <div className="form-group">
+                  <label>Price (₹)</label>
+                  <input type="number" min="1" value={newItemPrice} onChange={(e) => setNewItemPrice(e.target.value)} placeholder="20" required />
+                </div>
+                {menuError && <p className="error-msg">{menuError}</p>}
+                {menuSuccess && <p style={{ color: '#4ade80', fontSize: '0.85rem' }}>{menuSuccess}</p>}
+                <button type="submit" className="btn btn-primary" disabled={menuSaving}>
+                  {menuSaving ? 'Adding…' : 'Add to Menu'}
+                </button>
+              </form>
+            </div>
+          )}
           <div className="card">
             <h3 style={{ color: 'var(--accent)', marginBottom: '0.75rem' }}>Current Menu</h3>
+            {!isOwner && (
+              <p style={{ color: 'var(--text-muted)', fontSize: '0.8rem', marginBottom: '0.75rem' }}>
+                Only the owner can add or change menu items.
+              </p>
+            )}
             {foodItems.length === 0 && <p style={{ color: 'var(--text-muted)' }}>No items yet.</p>}
             {foodItems.map(item => (
               <div key={item.id} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.5rem' }}>
@@ -102,9 +109,11 @@ export default function FoodMenuPage() {
                   <span>{item.name}</span>
                   <span className="mono" style={{ color: 'var(--accent)', marginLeft: '0.5rem', fontSize: '0.85rem' }}>{formatCurrency(item.price)}</span>
                 </div>
-                <button type="button" className="btn btn-ghost" style={{ fontSize: '0.75rem', padding: '0.2rem 0.5rem' }} onClick={() => toggleItemActive(item)}>
-                  {item.is_active ? 'Disable' : 'Enable'}
-                </button>
+                {isOwner && (
+                  <button type="button" className="btn btn-ghost" style={{ fontSize: '0.75rem', padding: '0.2rem 0.5rem' }} onClick={() => toggleItemActive(item)}>
+                    {item.is_active ? 'Disable' : 'Enable'}
+                  </button>
+                )}
               </div>
             ))}
           </div>
@@ -129,7 +138,7 @@ export default function FoodMenuPage() {
                   <td>{b.student_name ?? b.student_phone ?? '-'}</td>
                   <td>{b.food_bill_items?.map(i => `${i.name}×${i.quantity}`).join(', ')}</td>
                   <td className="mono">{formatCurrency(b.total)}</td>
-                  <td>{b.payment_mode}</td>
+                  <td>{paymentModeLabel(b.payment_mode)}</td>
                 </tr>
               ))}
             </tbody>
