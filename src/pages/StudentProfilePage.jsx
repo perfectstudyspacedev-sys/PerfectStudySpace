@@ -1,11 +1,21 @@
 import { useState, useEffect, useCallback } from 'react'
 import { useParams, Link } from 'react-router-dom'
 import { api } from '../lib/api'
-import { formatCurrency, paymentModeLabel } from '../lib/utils'
+import { formatCurrency, paymentModeLabel, getMultiMonthDiscount, todayISO } from '../lib/utils'
 
 const PAYMENT_OPTIONS = [
   { value: 'cash', label: '💵 Cash' },
   { value: 'upi', label: '📱 UPI' },
+]
+
+// Fallback packages — used only until live rates are fetched from fee_config (Branch Settings)
+const DEFAULT_TEMP_PACKAGES = [
+  { hours: 2, fee: 500 }, { hours: 3, fee: 650 }, { hours: 4, fee: 800 },
+  { hours: 5, fee: 1000 }, { hours: 6, fee: 1250 }, { hours: 8, fee: 1500 },
+]
+const DEFAULT_PERM_PACKAGES = [
+  { hours: 12, fee: 2100 }, { hours: 13, fee: 2200 }, { hours: 14, fee: 2300 },
+  { hours: 15, fee: 2400 }, { hours: 24, fee: 2500 },
 ]
 
 export default function StudentProfilePage() {
@@ -23,6 +33,17 @@ export default function StudentProfilePage() {
   const [lockerPayAmount, setLockerPayAmount] = useState('')
   const [lockerLoading, setLockerLoading] = useState(false)
   const [lockerError, setLockerError] = useState('')
+  const [tempPackages, setTempPackages] = useState(DEFAULT_TEMP_PACKAGES)
+  const [permPackages, setPermPackages] = useState(DEFAULT_PERM_PACKAGES)
+  const [renewOpen, setRenewOpen] = useState(false)
+  const [renewCategory, setRenewCategory] = useState('temporary')
+  const [renewHoursPerDay, setRenewHoursPerDay] = useState(4)
+  const [renewMonths, setRenewMonths] = useState(1)
+  const [renewPayMode, setRenewPayMode] = useState('cash')
+  const [renewPayType, setRenewPayType] = useState('full')
+  const [renewAdvance, setRenewAdvance] = useState('')
+  const [renewLoading, setRenewLoading] = useState(false)
+  const [renewError, setRenewError] = useState('')
 
   const refresh = useCallback(() => {
     setLoading(true)
@@ -33,6 +54,21 @@ export default function StudentProfilePage() {
   }, [id])
 
   useEffect(() => { refresh() }, [refresh])
+
+  // Pull live membership fee rates so renewal pricing reflects Branch Settings
+  useEffect(() => {
+    api('list_fee_config').then(({ config }) => {
+      const membershipRows = (config ?? []).filter(f => f.config_type === 'membership')
+      const toPackages = (category) => membershipRows
+        .filter(f => f.cabin_type === category)
+        .map(f => ({ hours: f.hours_per_day, fee: Number(f.fee) }))
+        .sort((a, b) => a.hours - b.hours)
+      const temp = toPackages('temporary')
+      const perm = toPackages('permanent')
+      if (temp.length) setTempPackages(temp)
+      if (perm.length) setPermPackages(perm)
+    }).catch(() => { /* keep defaults */ })
+  }, [])
 
   useEffect(() => {
     const branchId = data?.student?.branch_id
@@ -45,6 +81,16 @@ export default function StudentProfilePage() {
       setLockerNo(lockerStatus.availableNumbers[0])
     }
   }, [lockerStatus, lockerNo])
+
+  // Keep the selected hours-per-day valid whenever the renewal category changes
+  useEffect(() => {
+    if (!renewOpen) return
+    const pkgs = renewCategory === 'permanent' ? permPackages : tempPackages
+    if (pkgs.length && !pkgs.some(p => p.hours === renewHoursPerDay)) {
+      setRenewHoursPerDay(pkgs[0].hours)
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [renewCategory, renewOpen])
 
   const handleAddLocker = async () => {
     setLockerLoading(true)
@@ -124,12 +170,54 @@ export default function StudentProfilePage() {
     }
   }
 
+  const openRenew = (mem) => {
+    setRenewOpen(true)
+    setRenewCategory(mem.category)
+    setRenewHoursPerDay(mem.hours_per_day)
+    setRenewMonths(1)
+    setRenewPayMode('cash')
+    setRenewPayType('full')
+    setRenewAdvance('')
+    setRenewError('')
+  }
+
+  const handleRenewSubmit = async (membershipId) => {
+    setRenewLoading(true)
+    setRenewError('')
+    try {
+      await api('renew_membership', {
+        membershipId,
+        category: renewCategory,
+        hoursPerDay: renewHoursPerDay,
+        monthsPaid: renewMonths,
+        paymentMode: renewPayMode,
+        advanceAmount: renewPayType === 'partial' ? (Number(renewAdvance) || null) : renewPayType === 'pending' ? 0 : null,
+      })
+      setRenewOpen(false)
+      refresh()
+    } catch (err) {
+      setRenewError(err.message)
+    } finally {
+      setRenewLoading(false)
+    }
+  }
+
   if (loading) return <p>Loading profile…</p>
   if (!data?.student) return <p>Student not found.</p>
 
   const { student, memberships, bookings, transactions, locker, overtimeSessions, holds } = data
   const activeMem = memberships?.find(m => m.is_active)
   const isPaused = activeMem?.is_paused || activeMem?.status === 'paused'
+  const isExpired = !!activeMem && activeMem.end_date < todayISO()
+
+  // Renewal pricing — plan (category/hours) is editable at renewal time
+  const renewPackages = renewCategory === 'permanent' ? permPackages : tempPackages
+  const renewPkg = renewPackages.find(p => p.hours === renewHoursPerDay) ?? renewPackages[0]
+  const renewDiscount = getMultiMonthDiscount(renewMonths)
+  const renewGross = renewPkg ? renewPkg.fee * renewMonths : 0
+  const renewTotal = renewGross * (1 - renewDiscount / 100)
+  const renewAdvanceNum = Number(renewAdvance) || 0
+  const renewRemaining = renewPayType === 'partial' ? Math.max(renewTotal - renewAdvanceNum, 0) : 0
 
   return (
     <>
@@ -190,10 +278,28 @@ export default function StudentProfilePage() {
           </table>
         </div>
 
-        {/* Hold / Resume */}
+        {/* Hold / Resume / Renew — only students who have an availed membership see this card at all */}
         {activeMem && (
           <div className="card">
             <h3 style={{ color: 'var(--accent)', marginBottom: '0.75rem' }}>Membership Control</h3>
+            {isExpired && (
+              <>
+                <p style={{ color: '#ff8888', fontWeight: 700, fontSize: '0.85rem', marginBottom: '0.75rem' }}>
+                  ⚠ Membership expired {activeMem.end_date} — renew to continue.
+                </p>
+                <button
+                  type="button"
+                  style={{
+                    width: '100%', padding: '0.6rem', fontWeight: 700, cursor: 'pointer',
+                    background: 'rgba(255,215,0,0.08)', border: '1px solid rgba(255,215,0,0.4)',
+                    color: 'var(--accent)', borderRadius: 4, marginBottom: '0.5rem',
+                  }}
+                  onClick={() => openRenew(activeMem)}
+                >
+                  ↺ Renew Membership
+                </button>
+              </>
+            )}
             {isPaused ? (
               <>
                 <p style={{ color: 'var(--text-muted)', fontSize: '0.85rem', marginBottom: '0.75rem' }}>
@@ -476,6 +582,95 @@ export default function StudentProfilePage() {
           </tbody>
         </table>
       </div>
+
+      {renewOpen && activeMem && (
+        <div className="modal-overlay" onClick={() => setRenewOpen(false)}>
+          <div className="modal" style={{ maxWidth: 420 }} onClick={(e) => e.stopPropagation()}>
+            <h2>Renew Membership</h2>
+            <p style={{ color: 'var(--text-muted)', marginBottom: '1rem' }}>{student.name}</p>
+
+            <div className="form-group">
+              <label>Plan</label>
+              <select value={renewCategory} onChange={(e) => setRenewCategory(e.target.value)}>
+                <option value="temporary">Temporary (floating seat)</option>
+                <option value="permanent">Permanent (fixed cabin)</option>
+              </select>
+            </div>
+
+            <div className="form-group">
+              <label>Hours per Day</label>
+              <select value={renewHoursPerDay} onChange={(e) => setRenewHoursPerDay(Number(e.target.value))}>
+                {renewPackages.map(p => (
+                  <option key={p.hours} value={p.hours}>{p.hours} hrs/day — {formatCurrency(p.fee)}/mo</option>
+                ))}
+              </select>
+            </div>
+
+            <div className="form-group">
+              <label>Months</label>
+              <select value={renewMonths} onChange={(e) => setRenewMonths(Number(e.target.value))}>
+                {[1, 2, 3, 6].map(m => (
+                  <option key={m} value={m}>{m} month{m > 1 ? 's' : ''}{getMultiMonthDiscount(m) ? ` (${getMultiMonthDiscount(m)}% off)` : ''}</option>
+                ))}
+              </select>
+            </div>
+
+            <div className="form-group">
+              <label>Payment Mode</label>
+              <div style={{ display: 'flex', gap: '0.5rem' }}>
+                {PAYMENT_OPTIONS.map(({ value, label }) => (
+                  <button key={value} type="button" onClick={() => setRenewPayMode(value)}
+                    style={{ flex: 1, padding: '0.5rem', border: `1px solid ${renewPayMode === value ? 'var(--accent)' : '#333'}`, borderRadius: 4, background: renewPayMode === value ? 'rgba(255,215,0,0.08)' : '#141414', color: renewPayMode === value ? 'var(--accent)' : 'var(--text-muted)', cursor: 'pointer', fontWeight: 600 }}
+                  >{label}</button>
+                ))}
+              </div>
+            </div>
+
+            <div className="form-group">
+              <label>Payment Type</label>
+              <div style={{ display: 'flex', gap: '0.5rem' }}>
+                {[{ value: 'full', label: 'Full' }, { value: 'partial', label: 'Partial' }, { value: 'pending', label: 'Pay Later' }].map(({ value, label }) => (
+                  <button key={value} type="button" onClick={() => setRenewPayType(value)}
+                    style={{ flex: 1, padding: '0.5rem', border: `1px solid ${renewPayType === value ? 'var(--accent)' : '#333'}`, borderRadius: 4, background: renewPayType === value ? 'rgba(255,215,0,0.08)' : '#141414', color: renewPayType === value ? 'var(--accent)' : 'var(--text-muted)', cursor: 'pointer', fontWeight: 600, fontSize: '0.85rem' }}
+                  >{label}</button>
+                ))}
+              </div>
+            </div>
+
+            {renewPayType === 'partial' && (
+              <div className="form-group">
+                <label>Advance Amount (₹)</label>
+                <input type="number" value={renewAdvance} onChange={(e) => setRenewAdvance(e.target.value)} placeholder="Amount paid now" min={0} max={renewTotal} />
+              </div>
+            )}
+
+            <div className="card" style={{ marginBottom: '1rem', background: 'rgba(255,215,0,0.05)' }}>
+              <p className="mono">Total: {formatCurrency(renewTotal)}</p>
+              {renewPayType === 'pending' && (
+                <p className="mono" style={{ color: 'var(--accent)', fontWeight: 700 }}>Remaining to be paid: {formatCurrency(renewTotal)}</p>
+              )}
+              {renewPayType === 'partial' && renewAdvanceNum > 0 && (
+                <>
+                  <p className="mono" style={{ color: '#4ade80' }}>Paid now: {formatCurrency(renewAdvanceNum)}</p>
+                  <p className="mono" style={{ color: 'var(--accent)', fontWeight: 700 }}>Remaining to be paid: {formatCurrency(renewRemaining)}</p>
+                </>
+              )}
+            </div>
+
+            {renewError && <p className="error-msg">{renewError}</p>}
+
+            <div className="modal-actions">
+              <button type="button" className="btn btn-ghost" onClick={() => setRenewOpen(false)}>Cancel</button>
+              <button type="button" className="btn btn-primary"
+                disabled={renewLoading}
+                onClick={() => handleRenewSubmit(activeMem.id)}
+              >
+                {renewLoading ? 'Renewing…' : 'Confirm Renewal'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </>
   )
 }
