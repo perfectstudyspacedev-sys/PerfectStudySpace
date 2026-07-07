@@ -28,9 +28,12 @@ export default function LoginPage() {
 
   return (
     <div className="login-page">
-      <div className="card login-card">
+      <div className="login-brand">
+        <img src="/pss-logo.png" alt="" className="login-brand-logo" />
         <h1>Perfect Study Space</h1>
         <p>Staff & owner portal — manage desks, memberships, and billing</p>
+      </div>
+      <div className="card login-card">
         <form onSubmit={handleSubmit}>
           <div className="form-group">
             <label>Username</label>

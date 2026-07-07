@@ -129,6 +129,44 @@ h1, h2, h3 {
   flex-shrink: 0;
 }
 
+.topbar-brand {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  transform: translate(-50%, -50%);
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  pointer-events: none;
+  white-space: nowrap;
+}
+
+.topbar-brand-logo {
+  height: 34px;
+  width: 34px;
+  border-radius: 50%;
+  object-fit: cover;
+  flex-shrink: 0;
+}
+
+.topbar-brand-logo-mobile,
+.topbar-brand-text-mobile {
+  display: none;
+}
+
+@media (max-width: 900px) {
+  .topbar-brand { display: none; }
+  .topbar-brand-logo-mobile {
+    display: block;
+    height: 26px;
+    width: 26px;
+    border-radius: 50%;
+    object-fit: cover;
+    flex-shrink: 0;
+  }
+  .topbar-brand-text-mobile { display: inline; }
+}
+
 .subnav {
   position: relative;
   z-index: 10;
@@ -329,25 +367,43 @@ h1, h2, h3 {
 .login-page {
   min-height: 100vh;
   display: flex;
+  flex-direction: column;
   align-items: center;
   justify-content: center;
   padding: 1rem;
+  gap: 1.5rem;
+}
+
+.login-brand {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  text-align: center;
+  gap: 0.5rem;
+}
+
+.login-brand-logo {
+  height: 72px;
+  width: 72px;
+  border-radius: 50%;
+  object-fit: cover;
+  margin-bottom: 0.25rem;
+}
+
+.login-brand h1 {
+  color: var(--accent);
+  margin: 0;
+}
+
+.login-brand p {
+  color: var(--text-muted);
+  font-size: 0.9rem;
+  max-width: 380px;
 }
 
 .login-card {
   width: 100%;
   max-width: 400px;
-}
-
-.login-card h1 {
-  color: var(--accent);
-  margin-bottom: 0.25rem;
-}
-
-.login-card p {
-  color: var(--text-muted);
-  margin-bottom: 1.5rem;
-  font-size: 0.9rem;
 }
 
 .page-header {

@@ -176,7 +176,8 @@ export default function Shell() {
       <BackgroundSketches />
       <header className="topbar">
         <div className="topbar-left">
-          <span className="nav-brand" style={{ margin: 0 }}>Perfect Study Space</span>
+          <img src="/pss-logo.png" alt="" className="topbar-brand-logo-mobile" />
+          <span className="nav-brand topbar-brand-text-mobile">Perfect Study Space</span>
           {isOwner && branches.length > 1 && (
             <div className="branch-switcher">
               <select
@@ -196,6 +197,11 @@ export default function Shell() {
           {!isOwner && activeBranch && (
             <span className="mono" style={{ fontSize: '0.8rem', color: 'var(--accent)' }}>{activeBranch.name}</span>
           )}
+        </div>
+
+        <div className="topbar-brand">
+          <img src="/pss-logo.png" alt="" className="topbar-brand-logo" />
+          <span className="nav-brand" style={{ margin: 0 }}>Perfect Study Space</span>
         </div>
 
         <div className="topbar-right">
