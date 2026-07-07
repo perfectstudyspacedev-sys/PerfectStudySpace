@@ -31,7 +31,6 @@ export default function LoginPage() {
       <div className="login-brand">
         <img src="/pss-logo.png" alt="" className="login-brand-logo" />
         <h1>Perfect Study Space</h1>
-        <p>Staff & owner portal — manage desks, memberships, and billing</p>
       </div>
       <div className="card login-card">
         <form onSubmit={handleSubmit}>
