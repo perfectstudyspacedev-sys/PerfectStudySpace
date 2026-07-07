@@ -5,6 +5,7 @@ import LoginPage from './pages/LoginPage'
 import DashboardPage from './pages/DashboardPage'
 import MembershipPage from './pages/MembershipPage'
 import StudentsPage from './pages/StudentsPage'
+import EnquiriesPage from './pages/EnquiriesPage'
 import StudentProfilePage from './pages/StudentProfilePage'
 import FoodMenuPage from './pages/FoodMenuPage'
 import RevenuePage from './pages/RevenuePage'
@@ -40,6 +41,7 @@ export default function App() {
             <Route path="bookings" element={<BookingsPage />} />
             <Route path="membership" element={<MembershipPage />} />
             <Route path="students" element={<StudentsPage />} />
+            <Route path="enquiries" element={<EnquiriesPage />} />
             <Route path="students/:id" element={<StudentProfilePage />} />
             <Route path="food-menu" element={<FoodMenuPage />} />
             <Route path="revenue" element={<OwnerRoute><RevenuePage /></OwnerRoute>} />

@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useState, useEffect, useRef } from 'react'
 import { NavLink, Outlet, useNavigate } from 'react-router-dom'
 import { useAuth } from '../../context/AuthContext'
 import { useSessionAlerts } from '../../hooks/useSessionAlerts'
@@ -81,11 +81,21 @@ function SessionToasts({ toasts, dismiss, dismissAll }) {
 
 function NotificationBell({ toasts, dismiss, dismissAll }) {
   const [open, setOpen] = useState(false)
+  const wrapRef = useRef(null)
   const warnCount = toasts.filter(t => t.level === 'warn').length
   const endCount = toasts.filter(t => t.level === 'end').length
 
+  useEffect(() => {
+    if (!open) return
+    const handler = (e) => {
+      if (wrapRef.current && !wrapRef.current.contains(e.target)) setOpen(false)
+    }
+    document.addEventListener('mousedown', handler)
+    return () => document.removeEventListener('mousedown', handler)
+  }, [open])
+
   return (
-    <div style={{ position: 'relative', display: 'flex', alignItems: 'center' }}>
+    <div ref={wrapRef} style={{ position: 'relative', display: 'flex', alignItems: 'center', flexShrink: 0 }}>
       <button
         type="button"
         onClick={() => setOpen(o => !o)}
@@ -113,9 +123,10 @@ function NotificationBell({ toasts, dismiss, dismissAll }) {
 
       {open && (
         <div style={{
-          position: 'absolute', top: '2rem', right: 0, width: 320, maxHeight: 360, overflowY: 'auto',
-          background: '#141414', border: '1px solid #333', borderRadius: 8, boxShadow: '0 8px 32px rgba(0,0,0,0.5)',
-          zIndex: 400, padding: '0.5rem',
+          position: 'absolute', top: 'calc(100% + 10px)', right: 0,
+          width: 'min(320px, calc(100vw - 2rem))', maxHeight: 360, overflowY: 'auto',
+          background: '#141414', border: '1px solid var(--border)', borderRadius: 10, boxShadow: '0 16px 44px rgba(0,0,0,0.55)',
+          zIndex: 400, padding: '0.5rem', boxSizing: 'border-box',
         }}>
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '0.3rem 0.5rem' }}>
             <span style={{ fontWeight: 700, fontSize: '0.85rem' }}>Notifications</span>
@@ -163,32 +174,56 @@ export default function Shell() {
   return (
     <div className="app-shell">
       <BackgroundSketches />
-      <nav className="nav-bar">
-        <span className="nav-brand">Perfect Study Space</span>
-        {isOwner && branches.length > 1 && (
-          <div className="branch-switcher">
-            <select
-              value={branchId || ''}
-              onChange={(e) => {
-                if (e.target.value === '__combined_hall__') navigate('/combined-hall')
-                else selectBranch(e.target.value)
-              }}
-            >
-              {branches.map(b => (
-                <option key={b.id} value={b.id}>{b.name}</option>
-              ))}
-              <option value="__combined_hall__">🏢 Combined Hall</option>
-            </select>
-          </div>
-        )}
-        {!isOwner && activeBranch && (
-          <span className="mono" style={{ fontSize: '0.8rem', color: 'var(--accent)' }}>{activeBranch.name}</span>
-        )}
+      <header className="topbar">
+        <div className="topbar-left">
+          <span className="nav-brand" style={{ margin: 0 }}>Perfect Study Space</span>
+          {isOwner && branches.length > 1 && (
+            <div className="branch-switcher">
+              <select
+                value={branchId || ''}
+                onChange={(e) => {
+                  if (e.target.value === '__combined_hall__') navigate('/combined-hall')
+                  else selectBranch(e.target.value)
+                }}
+              >
+                {branches.map(b => (
+                  <option key={b.id} value={b.id}>{b.name}</option>
+                ))}
+                <option value="__combined_hall__">🏢 Combined Hall</option>
+              </select>
+            </div>
+          )}
+          {!isOwner && activeBranch && (
+            <span className="mono" style={{ fontSize: '0.8rem', color: 'var(--accent)' }}>{activeBranch.name}</span>
+          )}
+        </div>
+
+        <div className="topbar-right">
+          <NotificationBell toasts={toasts} dismiss={dismiss} dismissAll={dismissAll} />
+
+          <span style={{
+            display: 'inline-block',
+            padding: '0.55rem 1.4rem', borderRadius: 30,
+            background: 'rgba(255,215,0,0.1)', border: '1px solid rgba(255,215,0,0.35)',
+          }}>
+            <span className="mono" style={{ fontSize: '1rem', fontWeight: 700, color: 'var(--accent)', display: 'block', lineHeight: 1.2, whiteSpace: 'nowrap' }}>
+              {staff?.displayName || staff?.username}
+            </span>
+            <span style={{ fontSize: '0.72rem', color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
+              {staff?.role}
+            </span>
+          </span>
+          <button type="button" className="btn btn-ghost" onClick={handleLogout}>Logout</button>
+        </div>
+      </header>
+
+      <nav className="subnav">
         <div className="nav-links">
           <NavLink to="/" end>Dashboard</NavLink>
           <NavLink to="/bookings">Bookings</NavLink>
           <NavLink to="/membership">Membership</NavLink>
           <NavLink to="/students">Students</NavLink>
+          <NavLink to="/enquiries">Enquiries</NavLink>
           <NavLink to="/food-menu">Food Menu</NavLink>
           {isOwner && <NavLink to="/revenue">Revenue</NavLink>}
           <NavLink to="/messages">Messages</NavLink>
@@ -201,23 +236,6 @@ export default function Shell() {
             </>
           )}
         </div>
-
-        {/* Notification bell */}
-        <NotificationBell toasts={toasts} dismiss={dismiss} dismissAll={dismissAll} />
-
-        <span style={{
-          display: 'inline-block',
-          padding: '0.55rem 1.4rem', borderRadius: 30,
-          background: 'rgba(255,215,0,0.1)', border: '1px solid rgba(255,215,0,0.35)',
-        }}>
-          <span className="mono" style={{ fontSize: '1rem', fontWeight: 700, color: 'var(--accent)', display: 'block', lineHeight: 1.2, whiteSpace: 'nowrap' }}>
-            {staff?.displayName || staff?.username}
-          </span>
-          <span style={{ fontSize: '0.72rem', color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
-            {staff?.role}
-          </span>
-        </span>
-        <button type="button" className="btn btn-ghost" onClick={handleLogout}>Logout</button>
       </nav>
       <main className="main-content">
         <Outlet />

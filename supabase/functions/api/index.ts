@@ -1295,6 +1295,59 @@ Deno.serve(async (req) => {
       return json({ date: targetDate, tasks });
     }
 
+    if (action === "list_incomplete_tasks") {
+      const { branchId, allBranches } = payload;
+      let q = db.from("tasks").select("*, assigned_to:assigned_to_staff_id(display_name, username), assigned_by:assigned_by_staff_id(display_name, username), branches(name)");
+      if (isOwner(staff)) {
+        if (!allBranches && branchId) q = q.eq("branch_id", branchId);
+      } else {
+        const bid = staff.branch_id;
+        if (!bid) return err("Branch access denied", 403);
+        q = q.eq("branch_id", bid).or(`assigned_to_staff_id.eq.${staff.id},assigned_by_staff_id.eq.${staff.id}`);
+      }
+      const { data, error: tErr } = await q;
+      if (tErr) return err(tErr.message);
+
+      const today = todayISO();
+      const LOOKBACK_DAYS = 7;
+      const windowStart = addDays(today, -LOOKBACK_DAYS);
+
+      const recurringIds = (data ?? []).filter(t => t.repeat_interval !== "none").map(t => t.id);
+      const { data: completions } = recurringIds.length
+        ? await db.from("task_completions").select("task_id, completion_date").in("task_id", recurringIds).gte("completion_date", windowStart)
+        : { data: [] };
+      const completedSet = new Set((completions ?? []).map(c => `${c.task_id}:${c.completion_date}`));
+
+      const missed: Array<Record<string, unknown>> = [];
+      for (const t of data ?? []) {
+        if (t.repeat_interval === "none") {
+          if (t.due_date && t.due_date < today && t.due_date >= windowStart && t.status !== "done") {
+            missed.push({
+              id: `${t.id}:${t.due_date}`, taskId: t.id, title: t.title, description: t.description,
+              repeatInterval: t.repeat_interval, missedDate: t.due_date, branchName: t.branches?.name ?? null,
+              assignedTo: t.assigned_to, assignedBy: t.assigned_by, assignedToStaffId: t.assigned_to_staff_id,
+            });
+          }
+          continue;
+        }
+        const anchor = t.due_date ?? t.created_at.slice(0, 10);
+        let cursor = anchor > windowStart ? anchor : windowStart;
+        while (cursor < today) {
+          if (isTaskDueOn(t, cursor) && !completedSet.has(`${t.id}:${cursor}`)) {
+            missed.push({
+              id: `${t.id}:${cursor}`, taskId: t.id, title: t.title, description: t.description,
+              repeatInterval: t.repeat_interval, missedDate: cursor, branchName: t.branches?.name ?? null,
+              assignedTo: t.assigned_to, assignedBy: t.assigned_by, assignedToStaffId: t.assigned_to_staff_id,
+            });
+          }
+          cursor = addDays(cursor, 1);
+        }
+      }
+
+      missed.sort((a, b) => (b.missedDate as string).localeCompare(a.missedDate as string));
+      return json({ tasks: missed });
+    }
+
     if (action === "list_staff_attendance") {
       if (!isOwner(staff)) return err("Owner only", 403);
       const targetDate = payload?.date || todayISO();
@@ -1629,6 +1682,105 @@ Deno.serve(async (req) => {
       await db.from("alerts").update({ status: "resolved" }).eq("student_id", mem.student_id).eq("alert_type", "expiry").eq("status", "pending");
       await refreshStudentStatus(db, mem.student_id);
       return json({ ok: true });
+    }
+
+    // ─── ENQUIRIES (leads pipeline) ───
+    if (action === "list_enquiries") {
+      const { branchId } = payload;
+      if (!requireBranch(staff, branchId)) return err("Branch access denied", 403);
+      const { data } = await db.from("enquiries").select("*").eq("branch_id", branchId).order("created_at", { ascending: false });
+      return json({ enquiries: data ?? [] });
+    }
+
+    if (action === "create_enquiry") {
+      const { branchId, name, phone, email, source, message } = payload;
+      if (!requireBranch(staff, branchId)) return err("Branch access denied", 403);
+      if (!name?.trim()) return err("Name is required");
+      const { data, error } = await db.from("enquiries").insert({
+        branch_id: branchId, name: name.trim(), phone: phone || null, email: email || null,
+        source: source || "walk_in", message: message || null, created_by_staff_id: staff.id,
+      }).select("*").single();
+      if (error) return err(error.message);
+      return json({ enquiry: data });
+    }
+
+    if (action === "update_enquiry") {
+      const { id, fields } = payload;
+      const { data: enq } = await db.from("enquiries").select("branch_id").eq("id", id).single();
+      if (!enq) return err("Enquiry not found");
+      if (!requireBranch(staff, enq.branch_id)) return err("Branch access denied", 403);
+      const { error } = await db.from("enquiries").update({ ...fields, updated_at: new Date().toISOString() }).eq("id", id);
+      if (error) return err(error.message);
+      return json({ ok: true });
+    }
+
+    if (action === "delete_enquiries") {
+      const ids: string[] = payload.ids ?? (payload.id ? [payload.id] : []);
+      if (!ids.length) return err("No enquiry ids provided");
+      const { data: rows } = await db.from("enquiries").select("id, branch_id").in("id", ids);
+      if (!rows?.length) return err("Enquiry not found");
+      if (!rows.every(r => requireBranch(staff, r.branch_id))) return err("Branch access denied", 403);
+      const { error } = await db.from("enquiries").delete().in("id", ids);
+      if (error) return err(error.message);
+      return json({ ok: true });
+    }
+
+    if (action === "add_enquiry_activity") {
+      const { enquiryId, type, note } = payload;
+      const { data: enq } = await db.from("enquiries").select("branch_id").eq("id", enquiryId).single();
+      if (!enq) return err("Enquiry not found");
+      if (!requireBranch(staff, enq.branch_id)) return err("Branch access denied", 403);
+      const { error } = await db.from("enquiry_activities").insert({ enquiry_id: enquiryId, type, note: note || null });
+      if (error) return err(error.message);
+      return json({ ok: true });
+    }
+
+    if (action === "list_enquiry_activities") {
+      const { enquiryId } = payload;
+      const { data: enq } = await db.from("enquiries").select("branch_id").eq("id", enquiryId).single();
+      if (!enq) return err("Enquiry not found");
+      if (!requireBranch(staff, enq.branch_id)) return err("Branch access denied", 403);
+      const { data } = await db.from("enquiry_activities").select("*").eq("enquiry_id", enquiryId).order("created_at", { ascending: true });
+      return json({ activities: data ?? [] });
+    }
+
+    if (action === "add_enquiry_followup") {
+      const { enquiryId, note, dueAt } = payload;
+      const { data: enq } = await db.from("enquiries").select("branch_id").eq("id", enquiryId).single();
+      if (!enq) return err("Enquiry not found");
+      if (!requireBranch(staff, enq.branch_id)) return err("Branch access denied", 403);
+      if (!dueAt) return err("Due date/time is required");
+      const { error } = await db.from("enquiry_followups").insert({
+        enquiry_id: enquiryId, branch_id: enq.branch_id, note: note || "Follow up", due_at: dueAt,
+      });
+      if (error) return err(error.message);
+      return json({ ok: true });
+    }
+
+    if (action === "list_enquiry_followups") {
+      const { enquiryId } = payload;
+      const { data: enq } = await db.from("enquiries").select("branch_id").eq("id", enquiryId).single();
+      if (!enq) return err("Enquiry not found");
+      if (!requireBranch(staff, enq.branch_id)) return err("Branch access denied", 403);
+      const { data } = await db.from("enquiry_followups").select("*").eq("enquiry_id", enquiryId).order("due_at", { ascending: true });
+      return json({ followups: data ?? [] });
+    }
+
+    if (action === "update_enquiry_followup") {
+      const { id, fields } = payload;
+      const { data: fu } = await db.from("enquiry_followups").select("branch_id").eq("id", id).single();
+      if (!fu) return err("Follow-up not found");
+      if (!requireBranch(staff, fu.branch_id)) return err("Branch access denied", 403);
+      const { error } = await db.from("enquiry_followups").update(fields).eq("id", id);
+      if (error) return err(error.message);
+      return json({ ok: true });
+    }
+
+    if (action === "list_open_enquiry_followups") {
+      const { branchId } = payload;
+      if (!requireBranch(staff, branchId)) return err("Branch access denied", 403);
+      const { data } = await db.from("enquiry_followups").select("*").eq("branch_id", branchId).eq("done", false).order("due_at", { ascending: true });
+      return json({ followups: data ?? [] });
     }
 
     return err(`Unknown action: ${action}`);

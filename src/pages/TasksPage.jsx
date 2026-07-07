@@ -59,6 +59,54 @@ function TaskTable({ tasks, allBranches, onToggle, currentStaffId }) {
   )
 }
 
+function IncompleteTaskTable({ tasks, allBranches, onComplete, currentStaffId }) {
+  if (tasks.length === 0) return <p style={{ color: 'var(--text-muted)' }}>No incomplete tasks in the last 7 days. 🎉</p>
+  return (
+    <table className="data-table">
+      <thead>
+        <tr>
+          <th>Title</th>
+          {allBranches && <th>Branch</th>}
+          <th>Assigned To</th>
+          <th>Assigned By</th>
+          <th>Repeat</th>
+          <th>Missed Date</th>
+          <th>Actions</th>
+        </tr>
+      </thead>
+      <tbody>
+        {tasks.map(t => (
+          <tr key={t.id} className="row-overdue">
+            <td>
+              <strong>{t.title}</strong>
+              {t.description && <div style={{ fontSize: '0.78rem', color: 'var(--text-muted)' }}>{t.description}</div>}
+            </td>
+            {allBranches && <td style={{ fontSize: '0.82rem' }}>{t.branchName ?? '—'}</td>}
+            <td style={{ fontSize: '0.85rem' }}>{t.assignedTo?.display_name || t.assignedTo?.username}</td>
+            <td style={{ fontSize: '0.85rem' }}>{t.assignedBy?.display_name || t.assignedBy?.username}</td>
+            <td style={{ fontSize: '0.8rem', textTransform: 'capitalize' }}>{t.repeatInterval === 'none' ? '—' : t.repeatInterval}</td>
+            <td className="mono" style={{ fontSize: '0.82rem', color: '#ff8888', fontWeight: 700 }}>{t.missedDate}</td>
+            <td>
+              {t.assignedToStaffId === currentStaffId ? (
+                <button
+                  type="button"
+                  className="btn btn-primary"
+                  style={{ padding: '0.25rem 0.5rem', fontSize: '0.75rem' }}
+                  onClick={() => onComplete(t)}
+                >
+                  Complete
+                </button>
+              ) : (
+                <span style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>—</span>
+              )}
+            </td>
+          </tr>
+        ))}
+      </tbody>
+    </table>
+  )
+}
+
 const REPEAT_OPTIONS = [
   { value: 'none', label: 'One-time' },
   { value: 'daily', label: 'Daily' },
@@ -69,6 +117,7 @@ const REPEAT_OPTIONS = [
 export default function TasksPage() {
   const { staff, isOwner, branchId, branches } = useAuth()
   const [tasks, setTasks] = useState([])
+  const [incompleteTasks, setIncompleteTasks] = useState([])
   const [staffOptions, setStaffOptions] = useState([])
   const [loading, setLoading] = useState(true)
   const [allBranches, setAllBranches] = useState(isOwner)
@@ -86,8 +135,12 @@ export default function TasksPage() {
   const load = useCallback(async () => {
     setLoading(true)
     try {
-      const t = await api('list_tasks', { branchId, allBranches: isOwner ? allBranches : false })
+      const [t, incomplete] = await Promise.all([
+        api('list_tasks', { branchId, allBranches: isOwner ? allBranches : false }),
+        api('list_incomplete_tasks', { branchId, allBranches: isOwner ? allBranches : false }),
+      ])
       setTasks(t.tasks ?? [])
+      setIncompleteTasks(incomplete.tasks ?? [])
     } catch (e) { console.error(e) }
     finally { setLoading(false) }
   }, [branchId, isOwner, allBranches])
@@ -130,6 +183,13 @@ export default function TasksPage() {
   const toggleDone = async (task) => {
     try {
       await api('update_task_status', { taskId: task.id, done: !task.completedToday })
+      load()
+    } catch { /* ignore */ }
+  }
+
+  const completeMissed = async (missed) => {
+    try {
+      await api('update_task_status', { taskId: missed.taskId, done: true, date: missed.missedDate })
       load()
     } catch { /* ignore */ }
   }
@@ -246,6 +306,16 @@ export default function TasksPage() {
 
             {loading ? <p>Loading…</p> : (
               <TaskTable tasks={filteredTasks} allBranches={allBranches} onToggle={toggleDone} currentStaffId={staff?.id} />
+            )}
+          </div>
+
+          <div className="card">
+            <h3 style={{ color: 'var(--accent)', marginBottom: '0.75rem' }}>Incomplete Tasks</h3>
+            <p style={{ color: 'var(--text-muted)', fontSize: '0.8rem', marginBottom: '0.75rem' }}>
+              Tasks that were due on a past date and were never marked done, from the last 7 days.
+            </p>
+            {loading ? <p>Loading…</p> : (
+              <IncompleteTaskTable tasks={incompleteTasks} allBranches={allBranches} onComplete={completeMissed} currentStaffId={staff?.id} />
             )}
           </div>
         </div>

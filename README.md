@@ -18,6 +18,7 @@ Built with the same stack and black-and-yellow UI theme as [Cue Court Coffee](..
 - **Walk-in** hourly bookings with auto desk assignment
 - **Membership** — temporary (floating) or permanent (fixed cabin), multi-month discounts, locker add-on
 - **Spreadsheet-style student table** — S.No, Name, Cabin, Due Date, Month, Hours, Timings, Locker, Locker Due, Course, Contact — sortable, filterable, overdue highlighting, CSV export
+- **Enquiries pipeline** — new/contacted/converted/dropped funnel, duplicate detection & merge, notes, activity timeline, follow-up tasks, bulk actions, saved filter chips, CSV export, WhatsApp/email quick actions
 - **Food billing** with separate revenue tracking
 - **Revenue & reporting** — category breakdown (desk / membership / food / locker), payment mode charts, transactions list
 - **Daily reports** & actionable items export

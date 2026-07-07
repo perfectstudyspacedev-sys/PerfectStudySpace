@@ -103,15 +103,12 @@ export default function BranchSettingsPage() {
           <button type="button" className="btn btn-primary" onClick={handleAddDesk}>Add Desk</button>
         </div>
         {seatMap && (
-          <div className="seat-map">
+          <div className="desk-manage-grid">
             {seatMap.desks.map(d => (
-              <div key={d.id} className={`seat-cell ${d.status}`} style={{ position: 'relative' }}>
+              <div key={d.id} className={`desk-chip ${d.status}`}>
                 {d.label}
                 {d.status === 'free' && (
-                  <button type="button" onClick={() => handleRemoveDesk(d.id)} style={{
-                    position: 'absolute', top: 2, right: 2, background: 'none', border: 'none',
-                    color: '#ff6b6b', cursor: 'pointer', fontSize: '0.65rem',
-                  }}>×</button>
+                  <button type="button" className="desk-chip-remove" onClick={() => handleRemoveDesk(d.id)} title="Remove desk">×</button>
                 )}
               </div>
             ))}
