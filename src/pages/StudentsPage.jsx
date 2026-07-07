@@ -18,7 +18,7 @@ const COLUMNS = [
 ]
 
 export default function StudentsPage() {
-  const { branchId } = useAuth()
+  const { branchId, isOwner } = useAuth()
   const [students, setStudents] = useState([])
   const [loading, setLoading] = useState(true)
   const [sortKey, setSortKey] = useState('sNo')
@@ -94,9 +94,11 @@ export default function StudentsPage() {
     <>
       <div className="page-header">
         <h1>Students</h1>
-        <div style={{ display: 'flex', gap: '0.5rem' }}>
-          <button type="button" className="btn btn-ghost" onClick={handleExport}>Export Excel</button>
-        </div>
+        {isOwner && (
+          <div style={{ display: 'flex', gap: '0.5rem' }}>
+            <button type="button" className="btn btn-ghost" onClick={handleExport}>Export Excel</button>
+          </div>
+        )}
       </div>
 
       <div className="tabs">

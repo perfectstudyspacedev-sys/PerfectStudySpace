@@ -305,9 +305,13 @@ h1, h2, h3 {
   font-family: var(--font-mono);
   font-size: 0.9rem;
 }
-.form-group input[type="date"]::-webkit-calendar-picker-indicator,
-.form-group input[type="time"]::-webkit-calendar-picker-indicator {
+input[type="date"]::-webkit-calendar-picker-indicator,
+input[type="time"]::-webkit-calendar-picker-indicator,
+input[type="datetime-local"]::-webkit-calendar-picker-indicator,
+input[type="month"]::-webkit-calendar-picker-indicator,
+input[type="week"]::-webkit-calendar-picker-indicator {
   filter: invert(1);
+  cursor: pointer;
 }
 
 .form-group input:focus,
@@ -1225,7 +1229,6 @@ h1, h2, h3 {
   color: var(--text);
   font-family: var(--font-mono);
   font-size: 0.8rem;
-  color-scheme: dark;
 }
 
 .dr-input:focus {

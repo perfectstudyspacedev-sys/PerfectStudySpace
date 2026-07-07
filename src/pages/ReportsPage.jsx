@@ -90,10 +90,12 @@ export default function ReportsPage() {
       <div className="page-header">
         <h1>Daily Reports</h1>
         <div style={{ display: 'flex', gap: '0.5rem' }}>
-          {canSeeCollections && (
+          {isOwner && canSeeCollections && (
             <button type="button" className="btn btn-ghost" onClick={exportDaily}>Export Daily (CSV)</button>
           )}
-          <button type="button" className="btn btn-ghost" onClick={exportActionable}>Export Action Items (CSV)</button>
+          {isOwner && (
+            <button type="button" className="btn btn-ghost" onClick={exportActionable}>Export Action Items (CSV)</button>
+          )}
         </div>
       </div>
 

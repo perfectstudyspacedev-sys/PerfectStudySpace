@@ -41,7 +41,7 @@ function fmtDate(d) {
 }
 
 export default function EnquiriesPage() {
-  const { branchId } = useAuth()
+  const { branchId, isOwner } = useAuth()
   const [enquiries, setEnquiries] = useState([])
   const [loading, setLoading] = useState(true)
   const [errBanner, setErrBanner] = useState(false)
@@ -71,6 +71,7 @@ export default function EnquiriesPage() {
   const [addError, setAddError] = useState('')
 
   const [emailModal, setEmailModal] = useState(null)
+  const [confirmDialog, setConfirmDialog] = useState(null)
   const [savedFilters, setSavedFilters] = useState([])
   const [showTodayPanel, setShowTodayPanel] = useState(true)
   const [todayFollowups, setTodayFollowups] = useState({ overdue: [], today: [] })
@@ -233,13 +234,19 @@ export default function EnquiriesPage() {
     showToast(`${enq?.name || 'Enquiry'} → ${STATUS_LABEL[status]}`, 'ok')
   }
 
-  const removeOne = async (id) => {
-    if (!window.confirm('Delete this enquiry? This cannot be undone.')) return
+  const doRemoveOne = async (id) => {
     await api('delete_enquiries', { id })
     setEnquiries(list => list.filter(e => e.id !== id))
     setSelected(s => { const n = new Set(s); n.delete(id); return n })
     if (drawerEnq?.id === id) setDrawerEnq(null)
     showToast('Enquiry deleted', 'err')
+  }
+
+  const removeOne = (id) => {
+    setConfirmDialog({
+      message: 'Delete this enquiry? This cannot be undone.',
+      onConfirm: () => doRemoveOne(id),
+    })
   }
 
   const toggleCheck = (id, checked) => {
@@ -256,14 +263,20 @@ export default function EnquiriesPage() {
     showToast(`${ids.length} enquir${ids.length > 1 ? 'ies' : 'y'} → ${STATUS_LABEL[status]}`, 'ok')
     clearSelection()
   }
-  const bulkDelete = async () => {
-    if (!selected.size) return
-    if (!window.confirm(`Delete ${selected.size} enquir${selected.size > 1 ? 'ies' : 'y'}? This cannot be undone.`)) return
+  const doBulkDelete = async () => {
     const ids = [...selected]
     await api('delete_enquiries', { ids })
     setEnquiries(list => list.filter(e => !ids.includes(e.id)))
     clearSelection()
     showToast(`${ids.length} enquiries deleted`, 'err')
+  }
+
+  const bulkDelete = () => {
+    if (!selected.size) return
+    setConfirmDialog({
+      message: `Delete ${selected.size} enquir${selected.size > 1 ? 'ies' : 'y'}? This cannot be undone.`,
+      onConfirm: doBulkDelete,
+    })
   }
   const handleExport = (useSelected) => {
     const data = useSelected && selected.size ? enquiries.filter(e => selected.has(e.id)) : filtered
@@ -452,7 +465,7 @@ export default function EnquiriesPage() {
       <div className="page-header">
         <h1>Enquiries</h1>
         <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap' }}>
-          <button type="button" className="btn btn-ghost" onClick={() => handleExport(false)}>Export CSV</button>
+          {isOwner && <button type="button" className="btn btn-ghost" onClick={() => handleExport(false)}>Export CSV</button>}
           <button type="button" className="btn btn-primary" onClick={() => { setDrawerEnq(null); setMergeGroup(null); setAddOpen(true); setAddError('') }}>+ Add Enquiry</button>
         </div>
       </div>
@@ -607,7 +620,7 @@ export default function EnquiriesPage() {
           <div className="bulk-left">
             <span className="bulk-count">{selected.size} selected</span>
             <button type="button" className="btn btn-ghost" onClick={(e) => openStatusDrop(e, '__bulk__')}>Set Status ▾</button>
-            <button type="button" className="btn btn-ghost" onClick={() => handleExport(true)}>Export CSV</button>
+            {isOwner && <button type="button" className="btn btn-ghost" onClick={() => handleExport(true)}>Export CSV</button>}
             <button type="button" className="btn btn-danger" onClick={bulkDelete}>Delete</button>
           </div>
           <button type="button" className="btn btn-ghost" onClick={clearSelection}>✕ Clear</button>
@@ -643,6 +656,26 @@ export default function EnquiriesPage() {
             <div className="modal-actions">
               <button type="button" className="btn btn-ghost" onClick={() => setAddOpen(false)}>Cancel</button>
               <button type="button" className="btn btn-primary" disabled={addSaving} onClick={submitAdd}>{addSaving ? 'Saving…' : 'Add Enquiry'}</button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ─── Confirm Dialog ─── */}
+      {confirmDialog && (
+        <div className="modal-overlay" style={{ zIndex: 300 }} onClick={() => setConfirmDialog(null)}>
+          <div className="modal" style={{ maxWidth: 400 }} onClick={(e) => e.stopPropagation()}>
+            <h2>Are you sure?</h2>
+            <p style={{ color: 'var(--text-muted)', fontSize: '0.9rem', marginBottom: '1.5rem' }}>{confirmDialog.message}</p>
+            <div className="modal-actions">
+              <button type="button" className="btn btn-ghost" onClick={() => setConfirmDialog(null)}>Cancel</button>
+              <button
+                type="button"
+                className="btn btn-danger"
+                onClick={() => { const { onConfirm } = confirmDialog; setConfirmDialog(null); onConfirm() }}
+              >
+                Delete
+              </button>
             </div>
           </div>
         </div>

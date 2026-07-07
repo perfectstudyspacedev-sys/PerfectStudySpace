@@ -58,6 +58,11 @@ function requireBranch(staff: StaffRow, branchId: string) {
   return staff.branch_id === branchId;
 }
 
+async function getOwnerStaffIds(db: ReturnType<typeof adminClient>): Promise<string[]> {
+  const { data } = await db.from("staff").select("id").eq("role", "owner");
+  return (data ?? []).map(r => r.id);
+}
+
 function todayISO() { return new Date().toISOString().slice(0, 10); }
 
 function addMonths(dateStr: string, months: number): string {
@@ -1207,6 +1212,8 @@ Deno.serve(async (req) => {
         const bid = staff.branch_id;
         if (!bid) return err("Branch access denied", 403);
         q = q.eq("branch_id", bid).or(`assigned_to_staff_id.eq.${staff.id},assigned_by_staff_id.eq.${staff.id}`);
+        const ownerIds = await getOwnerStaffIds(db);
+        if (ownerIds.length) q = q.not("assigned_to_staff_id", "in", `(${ownerIds.join(",")})`);
       }
       const { data, error: lErr } = await q;
       if (lErr) return err(lErr.message);
@@ -1276,6 +1283,8 @@ Deno.serve(async (req) => {
         const bid = staff.branch_id;
         if (!bid) return err("Branch access denied", 403);
         q = q.eq("branch_id", bid);
+        const ownerIds = await getOwnerStaffIds(db);
+        if (ownerIds.length) q = q.not("assigned_to_staff_id", "in", `(${ownerIds.join(",")})`);
       }
       const { data, error: rErr } = await q;
       if (rErr) return err(rErr.message);
@@ -1304,6 +1313,8 @@ Deno.serve(async (req) => {
         const bid = staff.branch_id;
         if (!bid) return err("Branch access denied", 403);
         q = q.eq("branch_id", bid).or(`assigned_to_staff_id.eq.${staff.id},assigned_by_staff_id.eq.${staff.id}`);
+        const ownerIds = await getOwnerStaffIds(db);
+        if (ownerIds.length) q = q.not("assigned_to_staff_id", "in", `(${ownerIds.join(",")})`);
       }
       const { data, error: tErr } = await q;
       if (tErr) return err(tErr.message);
