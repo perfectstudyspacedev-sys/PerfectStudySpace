@@ -4,13 +4,13 @@ import { useAuth } from '../context/AuthContext'
 
 export default function LoginPage() {
   const { staff, login } = useAuth()
-  if (staff) return <Navigate to="/" replace />
-
   const [username, setUsername] = useState('')
   const [password, setPassword] = useState('')
   const [error, setError] = useState('')
   const [loading, setLoading] = useState(false)
   const navigate = useNavigate()
+
+  if (staff) return <Navigate to="/" replace />
 
   const handleSubmit = async (e) => {
     e.preventDefault()

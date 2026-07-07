@@ -82,8 +82,8 @@ export function setStoredBranchId(branchId) {
 
 export async function uploadPhoto(file, folder) {
   const ext = file.name.split('.').pop() || 'jpg'
-  const path = `${folder}/${crypto.randomUUID()}.${ext}`
-  const { error } = await supabase.storage.from('student-photos').upload(path, file, { upsert: false })
+  const { path, token } = await api('get_upload_url', { folder, ext })
+  const { error } = await supabase.storage.from('student-photos').uploadToSignedUrl(path, token, file)
   if (error) throw new Error(error.message)
   const { data } = supabase.storage.from('student-photos').getPublicUrl(path)
   return data.publicUrl

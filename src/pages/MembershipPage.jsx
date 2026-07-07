@@ -159,7 +159,7 @@ function ActiveMembersTab({ branchId, tempPackages, permPackages }) {
   // Compute renewal fee for the renewal modal — plan (category/hours) is editable at renewal time
   const renewPackages = renewCategory === 'permanent' ? permPackages : tempPackages
   const renewPkg = renewPackages.find(p => p.hours === renewHoursPerDay) ?? renewPackages[0]
-  const renewDiscount = renewMonths >= 6 ? 10 : renewMonths >= 3 ? 5 : renewMonths >= 2 ? 2 : 0
+  const renewDiscount = getMultiMonthDiscount(renewMonths)
   const renewGross = renewPkg ? renewPkg.fee * renewMonths : 0
   const renewTotal = renewGross * (1 - renewDiscount / 100)
   const renewAdvanceNum = Number(renewAdvance) || 0
@@ -496,10 +496,13 @@ function NewMembershipForm({ branchId, onCreated, tempPackages, permPackages }) 
 
   const packages = category === 'permanent' ? permPackages : tempPackages
 
+  // Keep hoursPerDay valid whenever category changes or live fee_config packages load in
   useEffect(() => {
-    const pkg = packages[0]
-    if (pkg) setHoursPerDay(pkg.hours)
-  }, [category])
+    if (packages.length && !packages.some(p => p.hours === hoursPerDay)) {
+      setHoursPerDay(packages[0].hours)
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [category, packages])
 
   const [selectedStudent, setSelectedStudent] = useState(null)
   const [nameMatches, setNameMatches] = useState([])

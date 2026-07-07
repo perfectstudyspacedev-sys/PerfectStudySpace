@@ -148,7 +148,17 @@ async function upsertStudent(db: ReturnType<typeof adminClient>, name: string, p
   const { data: s, error } = await db.from("students").insert({
     name, phone, branch_id: branchId, s_no: (count ?? 0) + 1, status: "pending", ...extra,
   }).select("id").single();
-  if (error) throw new Error(error.message);
+  if (error) {
+    // Unique-violation on `phone` means a concurrent request just created this student — attach to it instead of failing.
+    if (error.code === "23505") {
+      const { data: raced } = await db.from("students").select("id").eq("phone", phone).single();
+      if (raced) {
+        await db.from("students").update({ name, branch_id: branchId, ...extra, updated_at: new Date().toISOString() }).eq("id", raced.id);
+        return raced.id;
+      }
+    }
+    throw new Error(error.message);
+  }
   return s!.id;
 }
 
@@ -450,7 +460,7 @@ Deno.serve(async (req) => {
       // Desk is optional for walk-ins — staff no longer assigns a desk
       let desk = null;
       if (manualDeskId) {
-        const { data: d } = await db.from("desks").select("*").eq("id", manualDeskId).single();
+        const { data: d } = await db.from("desks").select("*").eq("id", manualDeskId).eq("branch_id", branchId).single();
         if (!d || d.status !== "free") return err("Selected desk is not available");
         desk = d;
       }
@@ -483,6 +493,21 @@ Deno.serve(async (req) => {
       }).eq("id", studentId);
 
       return json({ booking: { ...booking, deskLabel: desk?.label ?? null, amount, studentName: name } });
+    }
+
+    // ─── STORAGE ───
+    // Staff-only signed upload URL — the frontend no longer writes to storage with the
+    // anon key directly (that required an anon INSERT/UPDATE policy on the bucket, which
+    // let anyone on the internet upload or overwrite Aadhaar/photo files unauthenticated).
+    if (action === "get_upload_url") {
+      const { folder } = payload;
+      const allowedFolders = ["aadhaar", "photos"];
+      if (!allowedFolders.includes(folder)) return err("Invalid upload folder");
+      const ext = String(payload.ext ?? "jpg").replace(/[^a-zA-Z0-9]/g, "").slice(0, 8) || "jpg";
+      const path = `${folder}/${crypto.randomUUID()}.${ext}`;
+      const { data, error } = await db.storage.from("student-photos").createSignedUploadUrl(path);
+      if (error) return err(error.message);
+      return json({ path: data.path, token: data.token });
     }
 
     // ─── MEMBERSHIP ───
@@ -676,7 +701,7 @@ Deno.serve(async (req) => {
 
       let desk = null;
       if (deskId) {
-        const { data: d } = await db.from("desks").select("*").eq("id", deskId).single();
+        const { data: d } = await db.from("desks").select("*").eq("id", deskId).eq("branch_id", branchId).single();
         if (!d) return err("Desk not found");
         if (membership.category !== "permanent" && d.status !== "free") return err("Selected desk is not available");
         desk = d;
@@ -917,7 +942,9 @@ Deno.serve(async (req) => {
       if (!requireBranch(staff, mem.branch_id)) return err("Branch access denied", 403);
 
       const newDue = Math.max(Number(mem.fee_due) - Number(amount), 0);
-      const newDueDate = addMonths(mem.due_date, 1);
+      // Only push the due date forward once the balance is fully cleared — otherwise a
+      // partial payment would make a still-overdue membership vanish from overdue views.
+      const newDueDate = newDue === 0 ? addMonths(mem.due_date, 1) : mem.due_date;
       await db.from("memberships").update({
         fee_due: newDue, due_date: newDueDate, total_paid: Number(mem.total_paid) + Number(amount),
       }).eq("id", membershipId);
@@ -928,7 +955,9 @@ Deno.serve(async (req) => {
         created_by_staff_id: staff.id,
       });
 
-      await db.from("alerts").update({ status: "resolved" }).eq("student_id", mem.student_id).eq("alert_type", "payment_due").eq("status", "pending");
+      if (newDue === 0) {
+        await db.from("alerts").update({ status: "resolved" }).eq("student_id", mem.student_id).eq("alert_type", "payment_due").eq("status", "pending");
+      }
       await refreshStudentStatus(db, mem.student_id);
       return json({ ok: true });
     }
@@ -957,7 +986,10 @@ Deno.serve(async (req) => {
     if (action === "list_food_items") {
       const { branchId } = payload;
       let q = db.from("food_items").select("*").eq("is_active", true).order("name");
-      if (branchId) q = q.eq("branch_id", branchId);
+      if (branchId) {
+        if (!requireBranch(staff, branchId)) return err("Branch access denied", 403);
+        q = q.eq("branch_id", branchId);
+      }
       const { data } = await q;
       return json({ items: data ?? [] });
     }
@@ -1429,6 +1461,9 @@ Deno.serve(async (req) => {
 
     if (action === "resolve_alert") {
       const { alertId } = payload;
+      const { data: alert } = await db.from("alerts").select("branch_id").eq("id", alertId).single();
+      if (!alert) return err("Alert not found", 404);
+      if (!requireBranch(staff, alert.branch_id)) return err("Branch access denied", 403);
       await db.from("alerts").update({ status: "resolved" }).eq("id", alertId);
       return json({ ok: true });
     }
