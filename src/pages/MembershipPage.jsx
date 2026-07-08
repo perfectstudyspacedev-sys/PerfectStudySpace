@@ -35,6 +35,7 @@ function ActiveMembersTab({ branchId, tempPackages, permPackages }) {
   const [renewPayMode, setRenewPayMode] = useState('cash')
   const [renewPayType, setRenewPayType] = useState('full')
   const [renewAdvance, setRenewAdvance] = useState('')
+  const [renewError, setRenewError] = useState('')
   const [closeModal, setCloseModal] = useState(null)
   const [closeSummary, setCloseSummary] = useState(null)
   const [closeLoading, setCloseLoading] = useState(false)
@@ -88,6 +89,7 @@ function ActiveMembersTab({ branchId, tempPackages, permPackages }) {
     setRenewPayMode('cash')
     setRenewPayType('full')
     setRenewAdvance('')
+    setRenewError('')
   }
 
   const openCloseModal = async (membershipId, studentName) => {
@@ -119,6 +121,7 @@ function ActiveMembersTab({ branchId, tempPackages, permPackages }) {
   const handleRenewSubmit = async () => {
     if (!renewModal) return
     setActionLoading(renewModal.membershipId + ':renew')
+    setRenewError('')
     try {
       const res = await api('renew_membership', {
         membershipId: renewModal.membershipId,
@@ -133,8 +136,9 @@ function ActiveMembersTab({ branchId, tempPackages, permPackages }) {
         setCashbackNotice({ type: 'applied', amount: res.cashbackApplied })
       }
       load()
-    } catch { /* ignore */ }
-    finally { setActionLoading(null) }
+    } catch (err) {
+      setRenewError(err.message)
+    } finally { setActionLoading(null) }
   }
 
   const today = todayISO()
@@ -411,6 +415,8 @@ function ActiveMembersTab({ branchId, tempPackages, permPackages }) {
                 </>
               )}
             </div>
+
+            {renewError && <p className="error-msg">{renewError}</p>}
 
             <div className="modal-actions">
               <button type="button" className="btn btn-ghost" onClick={() => setRenewModal(null)}>Cancel</button>

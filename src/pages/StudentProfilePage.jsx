@@ -58,12 +58,6 @@ export default function StudentProfilePage() {
   const [foodPassPayMode, setFoodPassPayMode] = useState('cash')
   const [foodPassLoading, setFoodPassLoading] = useState(false)
   const [foodPassError, setFoodPassError] = useState('')
-  const [editingBooking, setEditingBooking] = useState(null)
-  const [editStartTime, setEditStartTime] = useState('')
-  const [editHours, setEditHours] = useState('')
-  const [editStatus, setEditStatus] = useState('active')
-  const [editLoading, setEditLoading] = useState(false)
-  const [editError, setEditError] = useState('')
 
   const refresh = useCallback(() => {
     setLoading(true)
@@ -233,39 +227,6 @@ export default function StudentProfilePage() {
     }
   }
 
-  const toLocalDateTimeInput = (isoString) => {
-    const d = new Date(isoString)
-    const pad = (n) => String(n).padStart(2, '0')
-    return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`
-  }
-
-  const openEditBooking = (booking) => {
-    setEditingBooking(booking)
-    setEditStartTime(toLocalDateTimeInput(booking.start_time))
-    setEditHours(booking.hours ?? '')
-    setEditStatus(booking.status)
-    setEditError('')
-  }
-
-  const handleUpdateAttendance = async () => {
-    setEditLoading(true)
-    setEditError('')
-    try {
-      await api('update_attendance', {
-        bookingId: editingBooking.id,
-        startTime: new Date(editStartTime).toISOString(),
-        hours: editHours,
-        status: editStatus,
-      })
-      setEditingBooking(null)
-      refresh()
-    } catch (err) {
-      setEditError(err.message)
-    } finally {
-      setEditLoading(false)
-    }
-  }
-
   const openRenew = (mem) => {
     setRenewOpen(true)
     setRenewCategory(mem.category)
@@ -351,7 +312,6 @@ export default function StudentProfilePage() {
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(280px, 1fr))', gap: '1rem' }}>
         <div className="card">
           <h3 style={{ color: 'var(--accent)', marginBottom: '1rem' }}>Details</h3>
-          {student.photo_url && <img src={student.photo_url} alt="" className="photo-preview" style={{ marginBottom: '1rem', display: 'block' }} />}
           <table style={{ width: '100%', borderCollapse: 'collapse' }}>
             <tbody>
               {[
@@ -771,7 +731,7 @@ export default function StudentProfilePage() {
           <h3 style={{ color: 'var(--accent)', marginBottom: '0.75rem' }}>Attendance History</h3>
           <table className="data-table">
             <thead>
-              <tr><th>Date</th><th>Type</th><th>Desk</th><th>Check-in</th><th>Hours</th><th>Status</th><th></th></tr>
+              <tr><th>Date</th><th>Type</th><th>Desk</th><th>Check-in</th><th>Hours</th><th>Status</th></tr>
             </thead>
             <tbody>
               {bookings.map(b => (
@@ -782,11 +742,6 @@ export default function StudentProfilePage() {
                   <td className="mono">{new Date(b.start_time).toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit' })}</td>
                   <td className="mono">{b.hours ?? '—'}</td>
                   <td><span className={`badge ${b.status === 'active' ? 'badge-active' : b.status === 'cancelled' ? 'badge-inactive' : 'badge-pending'} cap`}>{b.status}</span></td>
-                  <td>
-                    <button type="button" className="btn btn-ghost" style={{ padding: '0.3rem 0.65rem', fontSize: '0.78rem' }} onClick={() => openEditBooking(b)}>
-                      Edit
-                    </button>
-                  </td>
                 </tr>
               ))}
             </tbody>
@@ -924,43 +879,6 @@ export default function StudentProfilePage() {
                 onClick={() => handleRenewSubmit(activeMem.id)}
               >
                 {renewLoading ? 'Renewing…' : 'Confirm Renewal'}
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {editingBooking && (
-        <div className="modal-overlay" onClick={() => setEditingBooking(null)}>
-          <div className="modal" style={{ maxWidth: 420 }} onClick={(e) => e.stopPropagation()}>
-            <h2>Edit Attendance</h2>
-            <p style={{ color: 'var(--text-muted)', marginBottom: '1rem' }}>{student.name} · {editingBooking.booking_type}</p>
-
-            <div className="form-group">
-              <label>Check-in Time</label>
-              <input type="datetime-local" value={editStartTime} onChange={(e) => setEditStartTime(e.target.value)} />
-            </div>
-
-            <div className="form-group">
-              <label>Hours</label>
-              <input type="number" min={0} step={0.5} value={editHours} onChange={(e) => setEditHours(e.target.value)} />
-            </div>
-
-            <div className="form-group">
-              <label>Status</label>
-              <select value={editStatus} onChange={(e) => setEditStatus(e.target.value)}>
-                <option value="active">Active</option>
-                <option value="completed">Completed</option>
-                <option value="cancelled">Cancelled</option>
-              </select>
-            </div>
-
-            {editError && <p className="error-msg">{editError}</p>}
-
-            <div className="modal-actions">
-              <button type="button" className="btn btn-ghost" onClick={() => setEditingBooking(null)}>Cancel</button>
-              <button type="button" className="btn btn-primary" disabled={editLoading} onClick={handleUpdateAttendance}>
-                {editLoading ? 'Saving…' : 'Save Changes'}
               </button>
             </div>
           </div>

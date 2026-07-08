@@ -68,6 +68,65 @@ function EndedAlerts({ alerts, onDismiss }) {
   )
 }
 
+// ── Edit start time / hours for a booking already in progress ─────────────
+function toLocalDateTimeInput(isoString) {
+  const d = new Date(isoString)
+  const pad = (n) => String(n).padStart(2, '0')
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`
+}
+
+function EditStartTimeModal({ booking, onClose, onDone }) {
+  const [startTime, setStartTime] = useState(toLocalDateTimeInput(booking.start_time))
+  const [hours, setHours] = useState(booking.hours ?? '')
+  const [loading, setLoading] = useState(false)
+  const [error, setError] = useState('')
+
+  const handleSave = async () => {
+    setLoading(true)
+    setError('')
+    try {
+      await api('update_attendance', {
+        bookingId: booking.id,
+        startTime: new Date(startTime).toISOString(),
+        hours,
+      })
+      onDone()
+    } catch (err) {
+      setError(err.message)
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  return (
+    <div className="modal-overlay" onClick={onClose}>
+      <div className="modal" style={{ maxWidth: 400 }} onClick={(e) => e.stopPropagation()}>
+        <h2>Edit Check-in</h2>
+        <p style={{ color: 'var(--text-muted)', marginBottom: '1rem' }}>{booking.students?.name}</p>
+
+        <div className="form-group">
+          <label>Start Time</label>
+          <input type="datetime-local" value={startTime} onChange={(e) => setStartTime(e.target.value)} />
+        </div>
+
+        <div className="form-group">
+          <label>Hours</label>
+          <input type="number" min={0} step={0.5} value={hours} onChange={(e) => setHours(e.target.value)} />
+        </div>
+
+        {error && <p className="error-msg">{error}</p>}
+
+        <div className="modal-actions">
+          <button type="button" className="btn btn-ghost" onClick={onClose}>Cancel</button>
+          <button type="button" className="btn btn-primary" disabled={loading} onClick={handleSave}>
+            {loading ? 'Saving…' : 'Save Changes'}
+          </button>
+        </div>
+      </div>
+    </div>
+  )
+}
+
 // ── Checkout overtime modal ────────────────────────────────────────────────
 function CheckoutModal({ booking, onConfirm, onCancel, loading }) {
   const [payMode, setPayMode] = useState(booking.payment_mode || 'cash')
@@ -379,6 +438,7 @@ export default function BookingsPage() {
   const [endedAlerts, setEndedAlerts] = useState([])
   const [checkoutBooking, setCheckoutBooking] = useState(null)
   const [foodOrderBooking, setFoodOrderBooking] = useState(null)
+  const [editBooking, setEditBooking] = useState(null)
   const notifiedIds = useRef(new Set())
 
   const load = useCallback(async () => {
@@ -597,6 +657,11 @@ export default function BookingsPage() {
                           )
                         )}
 
+                        {/* Edit start time / hours */}
+                        <button type="button" className="btn btn-ghost" style={{ padding: '0.25rem 0.55rem', fontSize: '0.78rem' }}
+                          onClick={() => setEditBooking(b)}
+                        >✎ Edit</button>
+
                         {/* Add food bill before/at checkout */}
                         <button type="button" style={{
                           padding: '0.25rem 0.55rem', fontSize: '0.78rem', fontWeight: 600,
@@ -639,6 +704,14 @@ export default function BookingsPage() {
           loading={actionLoading === checkoutBooking.id + ':checkout'}
           onConfirm={confirmCheckout}
           onCancel={() => setCheckoutBooking(null)}
+        />
+      )}
+
+      {editBooking && (
+        <EditStartTimeModal
+          booking={editBooking}
+          onClose={() => setEditBooking(null)}
+          onDone={() => { setEditBooking(null); load() }}
         />
       )}
 

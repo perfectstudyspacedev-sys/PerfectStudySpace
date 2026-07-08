@@ -431,8 +431,9 @@ Deno.serve(async (req) => {
     // ─── STUDENT LOOKUP ───
     if (action === "lookup_student") {
       const { phone } = payload;
-      const { data } = await db.from("students").select("id, name, phone, course, aadhaar_photo_url, photo_url, status")
+      const { data, error: lookupErr } = await db.from("students").select("id, name, phone, course, status")
         .eq("phone", phone).maybeSingle();
+      if (lookupErr) return err(lookupErr.message);
       if (!data) return json({ student: null });
       const { data: membership } = await db.from("memberships").select("*")
         .eq("student_id", data.id).eq("is_active", true)
@@ -1830,6 +1831,9 @@ Deno.serve(async (req) => {
       const { data: mem } = await db.from("memberships").select("*").eq("id", membershipId).single();
       if (!mem) return err("Membership not found");
       if (!requireBranch(staff, mem.branch_id)) return err("Branch access denied", 403);
+      if (Number(mem.fee_due ?? 0) > 0) {
+        return err(`This membership still has ₹${Number(mem.fee_due)} pending — clear it before renewing.`);
+      }
 
       const newCategory = category ?? mem.category;
       const newHoursPerDay = Number(hoursPerDay ?? mem.hours_per_day);
