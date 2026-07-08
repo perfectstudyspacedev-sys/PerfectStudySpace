@@ -900,8 +900,9 @@ Deno.serve(async (req) => {
       const { data: locker } = await db.from("lockers").select("*").eq("student_id", studentId).eq("is_active", true).maybeSingle();
       const { data: overtimeSessions } = await db.from("overtime_sessions").select("*").eq("student_id", studentId).order("session_date", { ascending: false }).limit(50);
       const { data: holds } = await db.from("membership_holds").select("*").eq("student_id", studentId).order("paused_at", { ascending: false }).limit(50);
+      const { data: discounts } = await db.from("membership_discounts").select("*, staff(display_name, username)").eq("student_id", studentId).order("created_at", { ascending: false }).limit(50);
 
-      return json({ student, memberships, bookings, transactions, locker, overtimeSessions: overtimeSessions ?? [], holds: holds ?? [] });
+      return json({ student, memberships, bookings, transactions, locker, overtimeSessions: overtimeSessions ?? [], holds: holds ?? [], discounts: discounts ?? [] });
     }
 
     if (action === "get_top_students") {
@@ -960,6 +961,41 @@ Deno.serve(async (req) => {
       }
       await refreshStudentStatus(db, mem.student_id);
       return json({ ok: true });
+    }
+
+    // Owner-only: reward a loyal/high-hours student by knocking a % or fixed ₹ amount
+    // off their currently pending membership fee. No money changes hands — this only
+    // reduces fee_due — so it's tracked in its own audited table, not `transactions`.
+    if (action === "apply_loyalty_discount") {
+      if (!isOwner(staff)) return err("Owner only", 403);
+      const { membershipId, discountType, discountValue, remarks } = payload;
+      if (!["percent", "fixed"].includes(discountType)) return err("Invalid discount type");
+      const value = Number(discountValue);
+      if (!(value > 0)) return err("Discount value must be greater than 0");
+
+      const { data: mem } = await db.from("memberships").select("*").eq("id", membershipId).single();
+      if (!mem) return err("Membership not found");
+      if (!requireBranch(staff, mem.branch_id)) return err("Branch access denied", 403);
+
+      const feeDue = Number(mem.fee_due);
+      if (feeDue <= 0) return err("No pending fee to discount");
+
+      const rawAmount = discountType === "percent" ? feeDue * (value / 100) : value;
+      const discountAmount = Math.min(rawAmount, feeDue);
+      const newDue = feeDue - discountAmount;
+
+      await db.from("memberships").update({ fee_due: newDue }).eq("id", membershipId);
+      await db.from("membership_discounts").insert({
+        membership_id: membershipId, student_id: mem.student_id, branch_id: mem.branch_id,
+        discount_type: discountType, discount_value: value, discount_amount: discountAmount,
+        remarks: remarks || null, applied_by_staff_id: staff.id,
+      });
+
+      if (newDue === 0) {
+        await db.from("alerts").update({ status: "resolved" }).eq("student_id", mem.student_id).eq("alert_type", "payment_due").eq("status", "pending");
+      }
+      await refreshStudentStatus(db, mem.student_id);
+      return json({ ok: true, discountAmount, newFeeDue: newDue });
     }
 
     if (action === "record_locker_payment") {

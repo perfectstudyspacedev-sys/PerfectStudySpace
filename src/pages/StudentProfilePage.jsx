@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback } from 'react'
 import { useParams, Link } from 'react-router-dom'
 import { api } from '../lib/api'
+import { useAuth } from '../context/AuthContext'
 import { formatCurrency, paymentModeLabel, getMultiMonthDiscount, todayISO } from '../lib/utils'
 
 const PAYMENT_OPTIONS = [
@@ -20,6 +21,7 @@ const DEFAULT_PERM_PACKAGES = [
 
 export default function StudentProfilePage() {
   const { id } = useParams()
+  const { isOwner } = useAuth()
   const [data, setData] = useState(null)
   const [loading, setLoading] = useState(true)
   const [payAmount, setPayAmount] = useState('')
@@ -44,6 +46,12 @@ export default function StudentProfilePage() {
   const [renewAdvance, setRenewAdvance] = useState('')
   const [renewLoading, setRenewLoading] = useState(false)
   const [renewError, setRenewError] = useState('')
+  const [discountType, setDiscountType] = useState('percent')
+  const [discountValue, setDiscountValue] = useState('')
+  const [discountRemarks, setDiscountRemarks] = useState('')
+  const [discountLoading, setDiscountLoading] = useState(false)
+  const [discountError, setDiscountError] = useState('')
+  const [discountSuccess, setDiscountSuccess] = useState('')
 
   const refresh = useCallback(() => {
     setLoading(true)
@@ -144,6 +152,25 @@ export default function StudentProfilePage() {
     refresh()
   }
 
+  const handleApplyDiscount = async (membershipId) => {
+    setDiscountLoading(true)
+    setDiscountError('')
+    setDiscountSuccess('')
+    try {
+      const res = await api('apply_loyalty_discount', {
+        membershipId, discountType, discountValue: Number(discountValue), remarks: discountRemarks,
+      })
+      setDiscountSuccess(`Discount of ${formatCurrency(res.discountAmount)} applied — new fee due ${formatCurrency(res.newFeeDue)}`)
+      setDiscountValue('')
+      setDiscountRemarks('')
+      refresh()
+    } catch (err) {
+      setDiscountError(err.message)
+    } finally {
+      setDiscountLoading(false)
+    }
+  }
+
   const handleHold = async (membershipId) => {
     setHoldLoading(true)
     setHoldError('')
@@ -205,10 +232,16 @@ export default function StudentProfilePage() {
   if (loading) return <p>Loading profile…</p>
   if (!data?.student) return <p>Student not found.</p>
 
-  const { student, memberships, bookings, transactions, locker, overtimeSessions, holds } = data
+  const { student, memberships, bookings, transactions, locker, overtimeSessions, holds, discounts } = data
   const activeMem = memberships?.find(m => m.is_active)
   const isPaused = activeMem?.is_paused || activeMem?.status === 'paused'
   const isExpired = !!activeMem && activeMem.end_date < todayISO()
+
+  const feeDueNum = Number(activeMem?.fee_due ?? 0)
+  const discountValueNum = Number(discountValue) || 0
+  const previewDiscountAmount = discountValueNum > 0
+    ? Math.min(discountType === 'percent' ? feeDueNum * (discountValueNum / 100) : discountValueNum, feeDueNum)
+    : 0
 
   // Renewal pricing — plan (category/hours) is editable at renewal time
   const renewPackages = renewCategory === 'permanent' ? permPackages : tempPackages
@@ -365,6 +398,70 @@ export default function StudentProfilePage() {
               </div>
             </div>
             <button type="button" className="btn btn-primary" onClick={() => handlePayment(activeMem.id)}>Record</button>
+          </div>
+        )}
+
+        {/* Loyalty Discount — owner only, applied against the pending membership fee */}
+        {isOwner && activeMem?.fee_due > 0 && (
+          <div className="card">
+            <h3 style={{ color: 'var(--accent)', marginBottom: '0.5rem' }}>🏷️ Discount</h3>
+            <p style={{ color: 'var(--text-muted)', fontSize: '0.8rem', marginBottom: '0.75rem' }}>
+              {student.total_visits} visits · {student.total_hours_studied} hrs studied — reward loyalty with a discount on the pending fee.
+            </p>
+            <div className="form-group">
+              <div style={{ display: 'flex', gap: '0.5rem' }}>
+                <button
+                  type="button" onClick={() => setDiscountType('percent')}
+                  style={{
+                    flex: 1, padding: '0.55rem',
+                    border: `1px solid ${discountType === 'percent' ? 'var(--accent)' : '#333'}`,
+                    borderRadius: 4,
+                    background: discountType === 'percent' ? 'var(--accent)' : '#141414',
+                    color: discountType === 'percent' ? '#000' : 'var(--text-muted)',
+                    cursor: 'pointer', fontWeight: 700, fontSize: '0.85rem',
+                  }}
+                >% Off</button>
+                <button
+                  type="button" onClick={() => setDiscountType('fixed')}
+                  style={{
+                    flex: 1, padding: '0.55rem',
+                    border: `1px solid ${discountType === 'fixed' ? 'var(--accent)' : '#333'}`,
+                    borderRadius: 4,
+                    background: discountType === 'fixed' ? 'var(--accent)' : '#141414',
+                    color: discountType === 'fixed' ? '#000' : 'var(--text-muted)',
+                    cursor: 'pointer', fontWeight: 700, fontSize: '0.85rem',
+                  }}
+                >₹ Fixed</button>
+              </div>
+            </div>
+            <div className="form-group">
+              <input
+                type="number" min={0} value={discountValue}
+                onChange={(e) => setDiscountValue(e.target.value)}
+                placeholder={discountType === 'percent' ? 'e.g. 10 (%)' : 'e.g. 100 (₹)'}
+              />
+            </div>
+            <div className="form-group">
+              <input
+                type="text" value={discountRemarks}
+                onChange={(e) => setDiscountRemarks(e.target.value)}
+                placeholder="Remarks (optional)"
+              />
+            </div>
+            {previewDiscountAmount > 0 && (
+              <p className="mono" style={{ color: '#4ade80', fontSize: '0.82rem', marginBottom: '0.5rem' }}>
+                Discount: {formatCurrency(previewDiscountAmount)} → New Fee Due: {formatCurrency(feeDueNum - previewDiscountAmount)}
+              </p>
+            )}
+            {discountError && <p className="error-msg">{discountError}</p>}
+            {discountSuccess && <p style={{ color: '#4ade80', fontSize: '0.82rem', marginBottom: '0.5rem' }}>{discountSuccess}</p>}
+            <button
+              type="button" className="btn btn-primary" style={{ width: '100%' }}
+              onClick={() => handleApplyDiscount(activeMem.id)}
+              disabled={discountLoading || !discountValueNum}
+            >
+              {discountLoading ? 'Applying…' : 'Apply Discount'}
+            </button>
           </div>
         )}
 
@@ -535,6 +632,29 @@ export default function StudentProfilePage() {
           </div>
         )
       })()}
+
+      {(discounts ?? []).length > 0 && (
+        <div className="card" style={{ marginTop: '1rem' }}>
+          <h3 style={{ color: 'var(--accent)', marginBottom: '0.75rem' }}>🏷️ Discount History</h3>
+          <table className="data-table">
+            <thead>
+              <tr><th>Date</th><th>Type</th><th>Value</th><th>Amount</th><th>Applied By</th><th>Remarks</th></tr>
+            </thead>
+            <tbody>
+              {discounts.map(d => (
+                <tr key={d.id}>
+                  <td className="mono">{new Date(d.created_at).toLocaleDateString('en-IN')}</td>
+                  <td className="cap">{d.discount_type}</td>
+                  <td className="mono">{d.discount_type === 'percent' ? `${d.discount_value}%` : formatCurrency(d.discount_value)}</td>
+                  <td className="mono" style={{ color: '#4ade80' }}>{formatCurrency(d.discount_amount)}</td>
+                  <td>{d.staff?.display_name || d.staff?.username || '—'}</td>
+                  <td style={{ color: 'var(--text-muted)', fontSize: '0.82rem' }}>{d.remarks || '—'}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
 
       {(overtimeSessions ?? []).length > 0 && (
         <div className="card" style={{ marginTop: '1rem' }}>

@@ -6,7 +6,7 @@ const WARN_BEFORE_MS = 5 * 60_000  // warn 5 min before end
 
 function fireBrowserNotification(title, body) {
   if (!('Notification' in window)) return
-  const send = () => new Notification(title, { body, icon: '/favicon.ico' })
+  const send = () => new Notification(title, { body, icon: '/pss-logo.png' })
   if (Notification.permission === 'granted') {
     send()
   } else if (Notification.permission !== 'denied') {
