@@ -1,7 +1,7 @@
 import { useState, useEffect, useCallback } from 'react'
 import { useAuth } from '../context/AuthContext'
 import { api } from '../lib/api'
-import { todayISO } from '../lib/utils'
+import { todayISO, formatDate } from '../lib/utils'
 
 function TaskTable({ tasks, allBranches, onToggle, currentStaffId }) {
   if (tasks.length === 0) return <p style={{ color: 'var(--text-muted)' }}>No tasks found.</p>
@@ -85,7 +85,7 @@ function IncompleteTaskTable({ tasks, allBranches, onComplete, currentStaffId })
             <td style={{ fontSize: '0.85rem' }}>{t.assignedTo?.display_name || t.assignedTo?.username}</td>
             <td style={{ fontSize: '0.85rem' }}>{t.assignedBy?.display_name || t.assignedBy?.username}</td>
             <td style={{ fontSize: '0.8rem', textTransform: 'capitalize' }}>{t.repeatInterval === 'none' ? '—' : t.repeatInterval}</td>
-            <td className="mono" style={{ fontSize: '0.82rem', color: '#ff8888', fontWeight: 700 }}>{t.missedDate}</td>
+            <td className="mono" style={{ fontSize: '0.82rem', color: '#ff8888', fontWeight: 700 }}>{formatDate(t.missedDate)}</td>
             <td>
               {t.assignedToStaffId === currentStaffId ? (
                 <button

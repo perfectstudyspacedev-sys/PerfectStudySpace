@@ -2,7 +2,7 @@ import { useState, useEffect, useCallback, useRef } from 'react'
 import { Link } from 'react-router-dom'
 import { useAuth } from '../context/AuthContext'
 import { api } from '../lib/api'
-import { formatCurrency, todayISO } from '../lib/utils'
+import { formatCurrency, formatDate, todayISO } from '../lib/utils'
 
 function getTimeStatus(endIso, totalPauseMs = 0) {
   const ms = new Date(endIso).getTime() + totalPauseMs - Date.now()
@@ -71,6 +71,7 @@ function EndedAlerts({ alerts, onDismiss }) {
 // ── Checkout overtime modal ────────────────────────────────────────────────
 function CheckoutModal({ booking, onConfirm, onCancel, loading }) {
   const [payMode, setPayMode] = useState(booking.payment_mode || 'cash')
+  const [settleFoodNow, setSettleFoodNow] = useState(false)
 
   const totalPauseMs = (booking.total_pause_minutes ?? 0) * 60_000
   const endMs = new Date(booking.end_time).getTime() + totalPauseMs
@@ -146,12 +147,17 @@ function CheckoutModal({ booking, onConfirm, onCancel, loading }) {
             <>
               {paidFoodTotal > 0 && <p className="mono" style={{ color: '#4ade80' }}>Food bill (paid separately): {formatCurrency(paidFoodTotal)}</p>}
               {unpaidFoodTotal > 0 && (
-                <p className="mono" style={{ color: '#ff8888', fontWeight: 700 }}>Food bill (to collect): {formatCurrency(unpaidFoodTotal)}</p>
+                <>
+                  <p className="mono" style={{ color: '#ff8888', fontWeight: 700 }}>Food bill (pending): {formatCurrency(unpaidFoodTotal)}</p>
+                  <p style={{ fontSize: '0.78rem', color: 'var(--text-muted)', marginTop: '0.2rem' }}>
+                    Can carry forward up to 3 days from the order date — or collect it now below.
+                  </p>
+                </>
               )}
               {isExpiredUnrenewed && (
                 <>
                   <p style={{ color: '#ff4444', fontWeight: 700, marginTop: paidFoodTotal || unpaidFoodTotal ? '0.5rem' : 0 }}>
-                    ⚠ Membership expired {membership.end_date} — not renewed
+                    ⚠ Membership expired {formatDate(membership.end_date)} — not renewed
                   </p>
                   <p className="mono" style={{ color: '#ff4444', fontWeight: 700 }}>
                     Membership pending: {formatCurrency(membershipDue)}
@@ -164,16 +170,18 @@ function CheckoutModal({ booking, onConfirm, onCancel, loading }) {
               {!paidFoodTotal && !unpaidFoodTotal && !isExpiredUnrenewed && (
                 <p style={{ color: 'var(--text-muted)', fontSize: '0.85rem' }}>Nothing pending — membership in good standing.</p>
               )}
-              {memberDueNow > 0 && (
-                <p className="mono" style={{ color: 'var(--accent)', fontSize: '1.05rem', fontWeight: 700, marginTop: '0.5rem' }}>
-                  Remaining to be paid: {formatCurrency(memberDueNow)}
-                </p>
-              )}
             </>
           )}
         </div>
 
-        {(isWalkin ? remainingDue > 0 : memberDueNow > 0) && (
+        {!isWalkin && memberDueNow > 0 && (
+          <label style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', fontSize: '0.85rem', marginBottom: '1rem', cursor: 'pointer' }}>
+            <input type="checkbox" checked={settleFoodNow} onChange={(e) => setSettleFoodNow(e.target.checked)} />
+            Collect the pending food bill now instead of carrying it forward
+          </label>
+        )}
+
+        {(isWalkin ? remainingDue > 0 : memberDueNow > 0 && settleFoodNow) && (
           <div className="form-group">
             <label>Payment Mode</label>
             <div style={{ display: 'flex', gap: '0.5rem' }}>
@@ -189,13 +197,13 @@ function CheckoutModal({ booking, onConfirm, onCancel, loading }) {
         <div className="modal-actions">
           <button type="button" className="btn btn-ghost" onClick={onCancel}>Cancel</button>
           <button type="button" className="btn btn-primary" disabled={loading}
-            onClick={() => onConfirm({ overtimeMinutes, overtimeCharge, overtimePaymentMode: payMode })}
+            onClick={() => onConfirm({ overtimeMinutes, overtimeCharge, overtimePaymentMode: payMode, settleFoodNow })}
           >
             {loading ? 'Checking out…'
               : isWalkin && remainingDue > 0 ? `Collect ₹${remainingDue.toLocaleString('en-IN')} & Check Out`
-              : !isWalkin && memberDueNow > 0 ? `Collect ₹${memberDueNow.toLocaleString('en-IN')} & Check Out`
+              : !isWalkin && memberDueNow > 0 && settleFoodNow ? `Collect ₹${memberDueNow.toLocaleString('en-IN')} & Check Out`
               : !isWalkin && !canClose ? 'Check Out Anyway'
-              : 'Both Fine — Check Out'}
+              : 'Check Out'}
           </button>
         </div>
       </div>
@@ -205,15 +213,27 @@ function CheckoutModal({ booking, onConfirm, onCancel, loading }) {
 
 // ── Food order modal — attach a food bill to a student at any point during their stay ──
 function FoodOrderModal({ branchId, booking, onClose, onDone }) {
+  const isMember = booking.booking_type !== 'walkin'
   const [items, setItems] = useState([])
   const [search, setSearch] = useState('')
   const [orders, setOrders] = useState([])
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState('')
+  const [foodPass, setFoodPass] = useState(null)
+  const [payChoice, setPayChoice] = useState('later')
+  const [payMode, setPayMode] = useState('cash')
 
   useEffect(() => {
     api('list_food_items', { branchId }).then(d => setItems((d.items ?? []).filter(i => i.is_active)))
   }, [branchId])
+
+  useEffect(() => {
+    if (!isMember) return
+    api('get_food_pass', { studentId: booking.student_id }).then(d => {
+      setFoodPass(d.pass)
+      if (d.pass) setPayChoice('pass')
+    }).catch(() => setFoodPass(null))
+  }, [isMember, booking.student_id])
 
   const filtered = search.trim() ? items.filter(i => i.name.toLowerCase().includes(search.toLowerCase())) : items
 
@@ -241,6 +261,8 @@ function FoodOrderModal({ branchId, booking, onClose, onDone }) {
         branchId, studentId: booking.student_id, studentName: booking.students?.name ?? null,
         studentPhone: booking.students?.phone ?? null, bookingId: booking.id,
         items: orders.map(o => ({ foodItemId: o.foodItemId, quantity: o.quantity })),
+        paymentMode: isMember && payChoice === 'now' ? payMode : undefined,
+        useFoodPass: isMember && payChoice === 'pass',
       })
       onDone()
     } catch (err) {
@@ -291,9 +313,51 @@ function FoodOrderModal({ branchId, booking, onClose, onDone }) {
             </div>
           </div>
         )}
-        <p style={{ fontSize: '0.78rem', color: 'var(--text-muted)', marginBottom: '0.75rem' }}>
-          Payment for this isn't collected now — it's added to the bill and settled (cash/UPI) at final checkout.
-        </p>
+        {isMember ? (
+          <>
+            <div className="form-group">
+              <label>Payment</label>
+              <div style={{ display: 'flex', gap: '0.4rem', flexWrap: 'wrap' }}>
+                {foodPass && (
+                  <button type="button" onClick={() => setPayChoice('pass')}
+                    style={{ flex: '1 0 auto', padding: '0.5rem 0.7rem', fontSize: '0.82rem', fontWeight: 600, cursor: 'pointer', borderRadius: 4, border: `1px solid ${payChoice === 'pass' ? 'var(--accent)' : '#333'}`, background: payChoice === 'pass' ? 'rgba(255,215,0,0.08)' : '#141414', color: payChoice === 'pass' ? 'var(--accent)' : 'var(--text-muted)' }}
+                  >🎫 Food Pass ({formatCurrency(Number(foodPass.balance))})</button>
+                )}
+                <button type="button" onClick={() => setPayChoice('now')}
+                  style={{ flex: '1 0 auto', padding: '0.5rem 0.7rem', fontSize: '0.82rem', fontWeight: 600, cursor: 'pointer', borderRadius: 4, border: `1px solid ${payChoice === 'now' ? 'var(--accent)' : '#333'}`, background: payChoice === 'now' ? 'rgba(255,215,0,0.08)' : '#141414', color: payChoice === 'now' ? 'var(--accent)' : 'var(--text-muted)' }}
+                >Pay Now</button>
+                <button type="button" onClick={() => setPayChoice('later')}
+                  style={{ flex: '1 0 auto', padding: '0.5rem 0.7rem', fontSize: '0.82rem', fontWeight: 600, cursor: 'pointer', borderRadius: 4, border: `1px solid ${payChoice === 'later' ? 'var(--accent)' : '#333'}`, background: payChoice === 'later' ? 'rgba(255,215,0,0.08)' : '#141414', color: payChoice === 'later' ? 'var(--accent)' : 'var(--text-muted)' }}
+                >Pay Later</button>
+              </div>
+            </div>
+            {payChoice === 'now' && (
+              <div className="form-group">
+                <div style={{ display: 'flex', gap: '0.5rem' }}>
+                  {[{ value: 'cash', label: '💵 Cash' }, { value: 'upi', label: '📱 UPI' }].map(({ value, label }) => (
+                    <button key={value} type="button" onClick={() => setPayMode(value)}
+                      style={{ flex: 1, padding: '0.5rem', border: `1px solid ${payMode === value ? 'var(--accent)' : '#333'}`, borderRadius: 4, background: payMode === value ? 'rgba(255,215,0,0.08)' : '#141414', color: payMode === value ? 'var(--accent)' : 'var(--text-muted)', cursor: 'pointer', fontWeight: 600 }}
+                    >{label}</button>
+                  ))}
+                </div>
+              </div>
+            )}
+            {payChoice === 'later' && (
+              <p style={{ fontSize: '0.78rem', color: 'var(--text-muted)', marginBottom: '0.75rem' }}>
+                Carried on the student's tab — must be settled within 3 days or checkout will be blocked.
+              </p>
+            )}
+            {payChoice === 'pass' && Number(foodPass?.balance) - total < 0 && (
+              <p style={{ fontSize: '0.78rem', color: '#ffaa44', marginBottom: '0.75rem' }}>
+                This will take the Food Pass balance negative — the student will need to top it up.
+              </p>
+            )}
+          </>
+        ) : (
+          <p style={{ fontSize: '0.78rem', color: 'var(--text-muted)', marginBottom: '0.75rem' }}>
+            Payment for this isn't collected now — it's added to the bill and settled (cash/UPI) at final checkout.
+          </p>
+        )}
         {error && <p className="error-msg">{error}</p>}
         <div className="modal-actions">
           <button type="button" className="btn btn-ghost" onClick={onClose}>Cancel</button>
@@ -365,7 +429,7 @@ export default function BookingsPage() {
     setCheckoutBooking(b)
   }
 
-  const confirmCheckout = async ({ overtimeMinutes, overtimePaymentMode }) => {
+  const confirmCheckout = async ({ overtimeMinutes, overtimePaymentMode, settleFoodNow }) => {
     if (!checkoutBooking) return
     const b = checkoutBooking
     setActionLoading(b.id + ':checkout')
@@ -374,11 +438,13 @@ export default function BookingsPage() {
         bookingId: b.id,
         overtimeMinutes,
         overtimePaymentMode,
+        settleFoodNow,
       })
       setCheckoutBooking(null)
       load()
-    } catch { /* ignore */ }
-    finally { setActionLoading(null) }
+    } catch (err) {
+      window.alert(err.message)
+    } finally { setActionLoading(null) }
   }
 
   const walkinCount = bookings.filter(b => b.booking_type === 'walkin').length

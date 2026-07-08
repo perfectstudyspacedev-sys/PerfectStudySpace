@@ -33,6 +33,26 @@ export function formatDateLabel(iso) {
   })
 }
 
+// Renders any date/date-time value (plain "YYYY-MM-DD" or a full ISO timestamp) as
+// "DD-MM-YY" — the compact format used everywhere a date is shown in this app.
+export function formatDate(value) {
+  if (!value) return '—'
+  const d = value.length <= 10 ? new Date(value + 'T12:00:00') : new Date(value)
+  if (Number.isNaN(d.getTime())) return '—'
+  const pad = (n) => String(n).padStart(2, '0')
+  return `${pad(d.getDate())}-${pad(d.getMonth() + 1)}-${String(d.getFullYear()).slice(-2)}`
+}
+
+// Same as formatDate but keeps the time-of-day alongside it, for timestamps where the
+// time matters (activity logs, transactions, messages) — "DD-MM-YY, h:mm am/pm".
+export function formatDateTime(value) {
+  if (!value) return '—'
+  const d = new Date(value)
+  if (Number.isNaN(d.getTime())) return '—'
+  const time = d.toLocaleTimeString('en-IN', { hour: 'numeric', minute: '2-digit', hour12: true })
+  return `${formatDate(value)}, ${time}`
+}
+
 export function nowTimeStr() {
   const d = new Date()
   return `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`

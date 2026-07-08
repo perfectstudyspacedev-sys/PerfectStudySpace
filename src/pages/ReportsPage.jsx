@@ -1,7 +1,7 @@
 import { useState, useEffect, useCallback } from 'react'
 import { useAuth } from '../context/AuthContext'
 import { api } from '../lib/api'
-import { formatCurrency, todayISO, exportToCSV, paymentModeLabel } from '../lib/utils'
+import { formatCurrency, todayISO, exportToCSV, paymentModeLabel, formatDate } from '../lib/utils'
 
 export default function ReportsPage() {
   const { branchId, isOwner } = useAuth()
@@ -133,7 +133,7 @@ export default function ReportsPage() {
 
           {canSeeCollections && (
             <div className="card" style={{ marginBottom: '1rem' }}>
-              <h3 style={{ color: 'var(--accent)', marginBottom: '0.75rem' }}>End-of-Day Summary — {date}</h3>
+              <h3 style={{ color: 'var(--accent)', marginBottom: '0.75rem' }}>End-of-Day Summary — {formatDate(date)}</h3>
               <table className="data-table">
                 <thead><tr><th>Time</th><th>Category</th><th>Amount</th><th>Mode</th></tr></thead>
                 <tbody>
@@ -154,7 +154,7 @@ export default function ReportsPage() {
 
       <div className="card" style={{ marginBottom: '1rem' }}>
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.75rem', flexWrap: 'wrap', gap: '0.5rem' }}>
-          <h3 style={{ color: 'var(--accent)' }}>Tasks Completed — {date}</h3>
+          <h3 style={{ color: 'var(--accent)' }}>Tasks Completed — {formatDate(date)}</h3>
           {isOwner && (
             <label style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', fontSize: '0.85rem', color: 'var(--text-muted)' }}>
               <input type="checkbox" checked={taskAllBranches} onChange={(e) => setTaskAllBranches(e.target.checked)} />
@@ -229,7 +229,7 @@ export default function ReportsPage() {
                     </td>
                     <td>{r.name}</td>
                     <td className="mono">{r.phone}</td>
-                    <td className="mono">{r.dueDate ?? '—'}</td>
+                    <td className="mono">{r.dueDate ? formatDate(r.dueDate) : '—'}</td>
                     <td className="mono">{r.amount > 0 ? formatCurrency(r.amount) : '—'}</td>
                   </tr>
                 ))}

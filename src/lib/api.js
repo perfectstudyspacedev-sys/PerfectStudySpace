@@ -79,12 +79,3 @@ export function setStoredBranchId(branchId) {
   if (branchId) sessionStorage.setItem('pss_branch_id', branchId)
   else sessionStorage.removeItem('pss_branch_id')
 }
-
-export async function uploadPhoto(file, folder) {
-  const ext = file.name.split('.').pop() || 'jpg'
-  const { path, token } = await api('get_upload_url', { folder, ext })
-  const { error } = await supabase.storage.from('student-photos').uploadToSignedUrl(path, token, file)
-  if (error) throw new Error(error.message)
-  const { data } = supabase.storage.from('student-photos').getPublicUrl(path)
-  return data.publicUrl
-}

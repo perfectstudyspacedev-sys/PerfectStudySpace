@@ -2,17 +2,17 @@ import { useState, useEffect, useCallback, useMemo } from 'react'
 import { Link } from 'react-router-dom'
 import { useAuth } from '../context/AuthContext'
 import { api } from '../lib/api'
-import { exportToCSV } from '../lib/utils'
+import { exportToCSV, formatDate } from '../lib/utils'
 
 const COLUMNS = [
   { key: 'sNo', label: 'S.No' },
   { key: 'name', label: 'Name' },
   { key: 'cabin', label: 'Cabin' },
-  { key: 'dueDate', label: 'Due Date' },
+  { key: 'dueDate', label: 'Due Date', isDate: true },
   { key: 'month', label: 'Month' },
   { key: 'hours', label: 'Hours' },
   { key: 'locker', label: 'Locker' },
-  { key: 'lockerDue', label: 'Locker Due' },
+  { key: 'lockerDue', label: 'Locker Due', isDate: true },
   { key: 'course', label: 'Course' },
   { key: 'contact', label: 'Contact' },
 ]
@@ -28,6 +28,12 @@ export default function StudentsPage() {
   const [statusFilter, setStatusFilter] = useState('')
   const [courseFilter, setCourseFilter] = useState('')
   const [tab, setTab] = useState('list')
+  const [cashbackTarget, setCashbackTarget] = useState(null)
+  const [cashbackType, setCashbackType] = useState('percent')
+  const [cashbackValue, setCashbackValue] = useState('')
+  const [cashbackNotes, setCashbackNotes] = useState('')
+  const [cashbackLoading, setCashbackLoading] = useState(false)
+  const [cashbackError, setCashbackError] = useState('')
 
   const load = useCallback(async () => {
     if (!branchId) return
@@ -89,6 +95,31 @@ export default function StudentsPage() {
     if (tab !== 'loyalty' || !branchId) return
     api('get_top_students', { branchId, sortBy: topSortBy, period: topPeriod }).then(d => setTopStudents(d.students ?? []))
   }, [tab, branchId, topPeriod, topSortBy])
+
+  const openCashback = (student) => {
+    setCashbackTarget(student)
+    setCashbackType('percent')
+    setCashbackValue('')
+    setCashbackNotes('')
+    setCashbackError('')
+  }
+
+  const handleGrantCashback = async () => {
+    setCashbackLoading(true)
+    setCashbackError('')
+    try {
+      await api('grant_cashback', {
+        studentId: cashbackTarget.id, branchId, cashbackType, cashbackValue: Number(cashbackValue),
+        monthLabel: topPeriod === 'month' ? new Date().toLocaleString('en-US', { month: 'long', year: 'numeric' }) : undefined,
+        notes: cashbackNotes,
+      })
+      setCashbackTarget(null)
+    } catch (err) {
+      setCashbackError(err.message)
+    } finally {
+      setCashbackLoading(false)
+    }
+  }
 
   return (
     <>
@@ -156,7 +187,7 @@ export default function StudentsPage() {
                         <td key={col.key}>
                           {col.key === 'name' ? (
                             <Link to={`/students/${row.id}`} style={{ color: 'var(--accent)' }}>{row[col.key]}</Link>
-                          ) : row[col.key]}
+                          ) : col.isDate && row[col.key] && row[col.key] !== '-' ? formatDate(row[col.key]) : row[col.key]}
                         </td>
                       ))}
                       <td>
@@ -193,7 +224,7 @@ export default function StudentsPage() {
           </div>
           <table className="data-table">
             <thead>
-              <tr><th>Rank</th><th>Name</th><th>Phone</th><th>Visits</th><th>Hours</th><th>Course</th></tr>
+              <tr><th>Rank</th><th>Name</th><th>Phone</th><th>Visits</th><th>Hours</th><th>Course</th><th></th></tr>
             </thead>
             <tbody>
               {topStudents.map((s, i) => (
@@ -204,10 +235,67 @@ export default function StudentsPage() {
                   <td className="mono">{s.total_visits}</td>
                   <td className="mono">{s.total_hours_studied}</td>
                   <td>{s.course ?? '-'}</td>
+                  <td>
+                    <button type="button" className="btn btn-ghost" style={{ padding: '0.3rem 0.65rem', fontSize: '0.78rem' }} onClick={() => openCashback(s)}>
+                      🎁 Cashback
+                    </button>
+                  </td>
                 </tr>
               ))}
             </tbody>
           </table>
+        </div>
+      )}
+
+      {cashbackTarget && (
+        <div className="modal-overlay" onClick={() => setCashbackTarget(null)}>
+          <div className="modal" style={{ maxWidth: 400 }} onClick={(e) => e.stopPropagation()}>
+            <h2>🎁 Grant Cashback</h2>
+            <p style={{ color: 'var(--text-muted)', marginBottom: '1rem' }}>{cashbackTarget.name}</p>
+            <p style={{ fontSize: '0.8rem', color: 'var(--text-muted)', marginBottom: '1rem' }}>
+              Applied as a discount on their next renewal — or paid out in cash if they close their membership instead of renewing.
+            </p>
+            <div className="form-group">
+              <div style={{ display: 'flex', gap: '0.5rem' }}>
+                <button
+                  type="button" onClick={() => setCashbackType('percent')}
+                  style={{
+                    flex: 1, padding: '0.55rem',
+                    border: `1px solid ${cashbackType === 'percent' ? 'var(--accent)' : '#333'}`,
+                    borderRadius: 4, background: cashbackType === 'percent' ? 'var(--accent)' : '#141414',
+                    color: cashbackType === 'percent' ? '#000' : 'var(--text-muted)',
+                    cursor: 'pointer', fontWeight: 700, fontSize: '0.85rem',
+                  }}
+                >% Off</button>
+                <button
+                  type="button" onClick={() => setCashbackType('fixed')}
+                  style={{
+                    flex: 1, padding: '0.55rem',
+                    border: `1px solid ${cashbackType === 'fixed' ? 'var(--accent)' : '#333'}`,
+                    borderRadius: 4, background: cashbackType === 'fixed' ? 'var(--accent)' : '#141414',
+                    color: cashbackType === 'fixed' ? '#000' : 'var(--text-muted)',
+                    cursor: 'pointer', fontWeight: 700, fontSize: '0.85rem',
+                  }}
+                >₹ Fixed</button>
+              </div>
+            </div>
+            <div className="form-group">
+              <input
+                type="number" min={0} value={cashbackValue} onChange={(e) => setCashbackValue(e.target.value)}
+                placeholder={cashbackType === 'percent' ? 'e.g. 10 (%)' : 'e.g. 200 (₹)'}
+              />
+            </div>
+            <div className="form-group">
+              <input type="text" value={cashbackNotes} onChange={(e) => setCashbackNotes(e.target.value)} placeholder="Notes (optional)" />
+            </div>
+            {cashbackError && <p className="error-msg">{cashbackError}</p>}
+            <div className="modal-actions">
+              <button type="button" className="btn btn-ghost" onClick={() => setCashbackTarget(null)}>Cancel</button>
+              <button type="button" className="btn btn-primary" disabled={cashbackLoading || !cashbackValue} onClick={handleGrantCashback}>
+                {cashbackLoading ? 'Granting…' : 'Grant Cashback'}
+              </button>
+            </div>
+          </div>
         </div>
       )}
     </>

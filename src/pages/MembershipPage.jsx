@@ -1,8 +1,8 @@
 import { useState, useEffect, useCallback } from 'react'
 import { useNavigate, Link } from 'react-router-dom'
 import { useAuth } from '../context/AuthContext'
-import { api, uploadPhoto } from '../lib/api'
-import { formatCurrency, getMultiMonthDiscount, todayISO } from '../lib/utils'
+import { api } from '../lib/api'
+import { formatCurrency, formatDate, getMultiMonthDiscount, todayISO } from '../lib/utils'
 
 // Fallback packages — used only until live rates are fetched from fee_config (Branch Settings)
 const DEFAULT_TEMP_PACKAGES = [
@@ -15,9 +15,10 @@ const DEFAULT_PERM_PACKAGES = [
 ]
 const REFERRAL_OPTIONS = [
   { value: 'google_search', label: 'Google Search' },
-  { value: 'instagram', label: 'Instagram' },
+  { value: 'instagram', label: 'Social Media' },
   { value: 'word_of_mouth', label: 'Word of Mouth' },
   { value: 'flex', label: 'Flex (Banner/Hoarding)' },
+  { value: 'ai_platform', label: 'Claude/ChatGPT/AI Platforms' },
 ]
 
 // ── Active Members tab ─────────────────────────────────────────────────────
@@ -37,6 +38,7 @@ function ActiveMembersTab({ branchId, tempPackages, permPackages }) {
   const [closeModal, setCloseModal] = useState(null)
   const [closeSummary, setCloseSummary] = useState(null)
   const [closeLoading, setCloseLoading] = useState(false)
+  const [cashbackNotice, setCashbackNotice] = useState(null)
 
   const load = useCallback(async () => {
     if (!branchId) return
@@ -101,8 +103,11 @@ function ActiveMembersTab({ branchId, tempPackages, permPackages }) {
     if (!closeModal) return
     setCloseLoading(true)
     try {
-      await api('close_membership', { membershipId: closeModal.membershipId })
+      const res = await api('close_membership', { membershipId: closeModal.membershipId })
       setCloseModal(null)
+      if (res.cashbackPayout) {
+        setCashbackNotice({ type: 'payout', amount: res.cashbackPayout })
+      }
       load()
     } catch (err) {
       window.alert(err.message)
@@ -115,7 +120,7 @@ function ActiveMembersTab({ branchId, tempPackages, permPackages }) {
     if (!renewModal) return
     setActionLoading(renewModal.membershipId + ':renew')
     try {
-      await api('renew_membership', {
+      const res = await api('renew_membership', {
         membershipId: renewModal.membershipId,
         category: renewCategory,
         hoursPerDay: renewHoursPerDay,
@@ -124,6 +129,9 @@ function ActiveMembersTab({ branchId, tempPackages, permPackages }) {
         advanceAmount: renewPayType === 'partial' ? (Number(renewAdvance) || null) : renewPayType === 'pending' ? 0 : null,
       })
       setRenewModal(null)
+      if (res.cashbackApplied) {
+        setCashbackNotice({ type: 'applied', amount: res.cashbackApplied })
+      }
       load()
     } catch { /* ignore */ }
     finally { setActionLoading(null) }
@@ -244,7 +252,7 @@ function ActiveMembersTab({ branchId, tempPackages, permPackages }) {
                     {m.cabin_no && <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>Cabin {m.cabin_no}</div>}
                   </td>
                   <td className="mono" style={{ fontSize: '0.85rem', color: isExpired ? '#ff8888' : undefined }}>
-                    {m.end_date}
+                    {formatDate(m.end_date)}
                     {isExpired && (
                       <div style={{ color: '#ff6b6b', fontSize: '0.7rem', fontWeight: 700 }}>EXPIRED</div>
                     )}
@@ -458,6 +466,27 @@ function ActiveMembersTab({ branchId, tempPackages, permPackages }) {
           </div>
         </div>
       )}
+
+      {cashbackNotice && (
+        <div className="modal-overlay" onClick={() => setCashbackNotice(null)}>
+          <div className="modal" style={{ maxWidth: 400 }} onClick={(e) => e.stopPropagation()}>
+            <h2>🎁 Cashback {cashbackNotice.type === 'payout' ? 'Payout' : 'Applied'}</h2>
+            <div className="card" style={{ margin: '1rem 0', background: 'rgba(255,215,0,0.05)' }}>
+              <p className="mono" style={{ color: 'var(--accent)', fontSize: '1.3rem', fontWeight: 700 }}>
+                {formatCurrency(cashbackNotice.amount)}
+              </p>
+              <p style={{ fontSize: '0.85rem', color: 'var(--text-muted)', marginTop: '0.5rem' }}>
+                {cashbackNotice.type === 'payout'
+                  ? 'This cashback was never redeemed at renewal — please pay it out to the student in cash.'
+                  : 'A pending cashback was applied as a discount on this renewal.'}
+              </p>
+            </div>
+            <div className="modal-actions">
+              <button type="button" className="btn btn-primary" onClick={() => setCashbackNotice(null)}>Got it</button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   )
 }
@@ -479,10 +508,6 @@ function NewMembershipForm({ branchId, onCreated, tempPackages, permPackages }) 
   const [withLocker, setWithLocker] = useState(false)
   const [lockerNo, setLockerNo] = useState('')
   const [lockerStatus, setLockerStatus] = useState(null)
-  const [aadhaarFile, setAadhaarFile] = useState(null)
-  const [photoFile, setPhotoFile] = useState(null)
-  const [aadhaarPreview, setAadhaarPreview] = useState(null)
-  const [photoPreview, setPhotoPreview] = useState(null)
   const [error, setError] = useState('')
   const [loading, setLoading] = useState(false)
   const [receipt, setReceipt] = useState(null)
@@ -558,40 +583,21 @@ function NewMembershipForm({ branchId, onCreated, tempPackages, permPackages }) 
   const amountPaid = paymentType === 'full' ? grandTotal : paymentType === 'partial' ? advanceNum : 0
   const amountRemaining = Math.max(grandTotal - amountPaid, 0)
 
-  const handleFile = (file, setPreview, setFile) => {
-    if (!file) return
-    setFile(file)
-    setPreview(URL.createObjectURL(file))
-  }
-
   const handleSubmit = async (e) => {
     e.preventDefault()
     if (!/^\d{10}$/.test(phone)) return setError('Phone must be 10 digits')
     if (name.trim().split(/\s+/).length < 2) return setError('Please enter the full name (first and last name)')
     if (!/^\d{10}$/.test(emergencyContact)) return setError('Emergency contact must be a 10 digit phone number')
     if (!referralSource) return setError('Please select how the student heard about us')
-    if (!aadhaarFile) return setError('Aadhaar photo is required')
     if (paymentType === 'partial' && (advanceNum <= 0 || advanceNum >= grandTotal)) {
       return setError('Partial payment must be more than ₹0 and less than the total — use Full Paid or Full Pending otherwise')
     }
     setLoading(true)
     setError('')
     try {
-      let aadhaarPhotoUrl = null
-      let photoUrl = null
-      try {
-        aadhaarPhotoUrl = await uploadPhoto(aadhaarFile, 'aadhaar')
-      } catch {
-        setError('Failed to upload Aadhaar photo — please try again')
-        setLoading(false)
-        return
-      }
-      if (photoFile) {
-        try { photoUrl = await uploadPhoto(photoFile, 'photos') } catch { /* skip */ }
-      }
       const result = await api('create_membership', {
         branchId, name, phone, category, hoursPerDay, monthsPaid,
-        paymentMode, aadhaarPhotoUrl, photoUrl, course,
+        paymentMode, course,
         emergencyContact, referralSource,
         withLocker, lockerNo: withLocker ? lockerNo : null,
         advanceAmount: paymentType === 'full' ? null : paymentType === 'partial' ? advanceNum : 0,
@@ -681,32 +687,6 @@ function NewMembershipForm({ branchId, onCreated, tempPackages, permPackages }) 
         <div className="form-group">
           <label>Course (NEET PG, UPSC, CA, etc.)</label>
           <input value={course} onChange={(e) => setCourse(e.target.value)} placeholder="What are they preparing for?" />
-        </div>
-        <div className="form-group">
-          <label>Aadhaar Photo *</label>
-          <div style={{ display: 'flex', gap: '0.5rem' }}>
-            <label className="btn btn-ghost" style={{ flex: 1, textAlign: 'center', cursor: 'pointer' }}>
-              📷 Take Photo
-              <input
-                type="file" accept="image/*" capture="environment" style={{ display: 'none' }}
-                onChange={(e) => handleFile(e.target.files[0], setAadhaarPreview, setAadhaarFile)}
-              />
-            </label>
-            <label className="btn btn-ghost" style={{ flex: 1, textAlign: 'center', cursor: 'pointer' }}>
-              🖼 Choose from Gallery
-              <input
-                type="file" accept="image/*" style={{ display: 'none' }}
-                onChange={(e) => handleFile(e.target.files[0], setAadhaarPreview, setAadhaarFile)}
-              />
-            </label>
-          </div>
-          {!aadhaarFile && <p style={{ fontSize: '0.75rem', color: 'var(--text-muted)', marginTop: '0.3rem' }}>Required</p>}
-          {aadhaarPreview && <img src={aadhaarPreview} alt="Aadhaar" className="photo-preview" style={{ marginTop: '0.5rem' }} />}
-        </div>
-        <div className="form-group">
-          <label>Member Photo</label>
-          <input type="file" accept="image/*" capture="user" onChange={(e) => handleFile(e.target.files[0], setPhotoPreview, setPhotoFile)} />
-          {photoPreview && <img src={photoPreview} alt="Member" className="photo-preview" style={{ marginTop: '0.5rem' }} />}
         </div>
         <div className="form-group">
           <label>Category</label>
@@ -850,6 +830,124 @@ function NewMembershipForm({ branchId, onCreated, tempPackages, permPackages }) 
   )
 }
 
+// ── Waitlist tab ────────────────────────────────────────────────────────────
+function WaitlistTab({ branchId }) {
+  const [data, setData] = useState(null)
+  const [loading, setLoading] = useState(true)
+  const [name, setName] = useState('')
+  const [phone, setPhone] = useState('')
+  const [hoursPerDay, setHoursPerDay] = useState('')
+  const [notes, setNotes] = useState('')
+  const [error, setError] = useState('')
+  const [saving, setSaving] = useState(false)
+
+  const load = useCallback(() => {
+    if (!branchId) return
+    setLoading(true)
+    api('get_permanent_waitlist', { branchId }).then(setData).catch(() => setData(null)).finally(() => setLoading(false))
+  }, [branchId])
+
+  useEffect(() => { load() }, [load])
+
+  const handleAdd = async (e) => {
+    e.preventDefault()
+    if (!/^\d{10}$/.test(phone)) return setError('Phone must be 10 digits')
+    if (!name.trim()) return setError('Name is required')
+    setSaving(true)
+    setError('')
+    try {
+      await api('join_permanent_waitlist', { branchId, name: name.trim(), phone, hoursPerDay: hoursPerDay ? Number(hoursPerDay) : null, notes })
+      setName(''); setPhone(''); setHoursPerDay(''); setNotes('')
+      load()
+    } catch (err) {
+      setError(err.message)
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  const handleRemove = async (id, status) => {
+    if (!window.confirm(status === 'fulfilled' ? 'Mark this student as seated and remove from the waitlist?' : 'Remove this entry from the waitlist?')) return
+    await api('remove_from_waitlist', { waitlistId: id, status })
+    load()
+  }
+
+  if (loading) return <p>Loading…</p>
+  if (!data) return <p>Could not load waitlist.</p>
+
+  if (!data.isFull) {
+    return (
+      <div className="card">
+        <h3 style={{ color: 'var(--accent)', marginBottom: '0.5rem' }}>Waitlist</h3>
+        <p style={{ color: 'var(--text-muted)', fontSize: '0.88rem' }}>
+          The waitlist activates only once every permanent seat at this branch is occupied.
+          There {data.freeDesks === 1 ? 'is' : 'are'} currently <strong style={{ color: 'var(--accent)' }}>{data.freeDesks}</strong> free desk{data.freeDesks === 1 ? '' : 's'} — register new permanent members directly from the "New Registration" tab.
+        </p>
+      </div>
+    )
+  }
+
+  return (
+    <div style={{ display: 'grid', gridTemplateColumns: 'minmax(280px, 380px) 1fr', gap: '1rem', alignItems: 'start' }}>
+      <div className="card">
+        <h3 style={{ color: 'var(--accent)', marginBottom: '0.5rem' }}>Add to Waitlist</h3>
+        <p style={{ color: 'var(--text-muted)', fontSize: '0.82rem', marginBottom: '1rem' }}>
+          All permanent seats are occupied — new sign-ups queue here, first come first served.
+        </p>
+        <form onSubmit={handleAdd}>
+          <div className="form-group">
+            <label>Full Name *</label>
+            <input value={name} onChange={(e) => setName(e.target.value)} required />
+          </div>
+          <div className="form-group">
+            <label>Phone Number *</label>
+            <input value={phone} onChange={(e) => setPhone(e.target.value.replace(/\D/g, '').slice(0, 10))} required />
+          </div>
+          <div className="form-group">
+            <label>Hours per Day (preference)</label>
+            <input type="number" min={1} max={24} value={hoursPerDay} onChange={(e) => setHoursPerDay(e.target.value)} />
+          </div>
+          <div className="form-group">
+            <label>Notes</label>
+            <textarea value={notes} onChange={(e) => setNotes(e.target.value)} rows={2} placeholder="Optional" />
+          </div>
+          {error && <p className="error-msg">{error}</p>}
+          <button type="submit" className="btn btn-primary" disabled={saving}>{saving ? 'Adding…' : 'Add to Waitlist'}</button>
+        </form>
+      </div>
+
+      <div className="card">
+        <h3 style={{ color: 'var(--accent)', marginBottom: '0.75rem' }}>Waiting ({data.waitlist.length})</h3>
+        {data.waitlist.length === 0 ? (
+          <p style={{ color: 'var(--text-muted)' }}>No one on the waitlist yet.</p>
+        ) : (
+          <table className="data-table">
+            <thead>
+              <tr><th>Position</th><th>Name</th><th>Phone</th><th>Hours/Day</th><th>Waiting Since</th><th>Notes</th><th></th></tr>
+            </thead>
+            <tbody>
+              {data.waitlist.map((w, i) => (
+                <tr key={w.id}>
+                  <td className="mono" style={{ fontWeight: 700, color: i === 0 ? 'var(--accent)' : undefined }}>#{i + 1}</td>
+                  <td>{w.name}</td>
+                  <td className="mono">{w.phone}</td>
+                  <td className="mono">{w.hours_per_day ?? '—'}</td>
+                  <td className="mono">{formatDate(w.created_at)}</td>
+                  <td style={{ color: 'var(--text-muted)', fontSize: '0.82rem' }}>{w.notes || '—'}</td>
+                  <td style={{ display: 'flex', gap: '0.4rem' }}>
+                    <button type="button" className="btn btn-primary" style={{ padding: '0.3rem 0.6rem', fontSize: '0.78rem' }} onClick={() => handleRemove(w.id, 'fulfilled')}>Seated</button>
+                    <button type="button" className="btn btn-ghost" style={{ padding: '0.3rem 0.6rem', fontSize: '0.78rem' }} onClick={() => handleRemove(w.id, 'cancelled')}>Remove</button>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        )}
+      </div>
+    </div>
+  )
+}
+
 // ── Page ───────────────────────────────────────────────────────────────────
 export default function MembershipPage() {
   const { branchId } = useAuth()
@@ -881,6 +979,7 @@ export default function MembershipPage() {
       <div className="tabs">
         <button type="button" className={tab === 'active' ? 'active' : ''} onClick={() => setTab('active')}>Active Members</button>
         <button type="button" className={tab === 'new' ? 'active' : ''} onClick={() => setTab('new')}>New Registration</button>
+        <button type="button" className={tab === 'waitlist' ? 'active' : ''} onClick={() => setTab('waitlist')} style={{ marginLeft: 'auto' }}>Waitlist</button>
       </div>
 
       {tab === 'active' && <ActiveMembersTab branchId={branchId} tempPackages={tempPackages} permPackages={permPackages} />}
@@ -890,6 +989,7 @@ export default function MembershipPage() {
           tempPackages={tempPackages} permPackages={permPackages}
         />
       )}
+      {tab === 'waitlist' && <WaitlistTab branchId={branchId} />}
     </>
   )
 }

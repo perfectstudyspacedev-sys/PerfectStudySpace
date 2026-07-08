@@ -2,12 +2,12 @@ import { useState, useEffect, useMemo, useCallback, useRef } from 'react'
 import { createPortal } from 'react-dom'
 import { useAuth } from '../context/AuthContext'
 import { api } from '../lib/api'
-import { exportToCSV } from '../lib/utils'
+import { exportToCSV, formatDate, formatDateTime } from '../lib/utils'
 
-const STATUSES = ['new', 'contacted', 'converted', 'dropped']
-const STATUS_LABEL = { new: 'New', contacted: 'Contacted', converted: 'Converted', dropped: 'Dropped' }
-const STATUS_BADGE = { new: 'badge-new', contacted: 'badge-pending', converted: 'badge-active', dropped: 'badge-inactive' }
-const STATUS_RANK = { dropped: -1, new: 0, contacted: 1, converted: 2 }
+const STATUSES = ['new', 'contacted', 'trial_session', 'converted', 'dropped']
+const STATUS_LABEL = { new: 'New', contacted: 'Contacted', trial_session: 'Trial Session', converted: 'Converted', dropped: 'Dropped' }
+const STATUS_BADGE = { new: 'badge-new', contacted: 'badge-pending', trial_session: 'badge-trial', converted: 'badge-active', dropped: 'badge-inactive' }
+const STATUS_RANK = { dropped: -1, new: 0, contacted: 1, trial_session: 2, converted: 3 }
 const SOURCE_LABEL = {
   walk_in: 'Walk-in', phone_call: 'Phone Call', referral: 'Referral',
   instagram: 'Instagram', google_search: 'Google Search', website_form: 'Website Form',
@@ -34,10 +34,10 @@ function findDuplicateGroups(list) {
   return [...map.values()].filter(g => g.length > 1).sort((a, b) => b.length - a.length)
 }
 function fmtDT(d) {
-  return new Date(d).toLocaleString('en-IN', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' })
+  return formatDateTime(d)
 }
 function fmtDate(d) {
-  return new Date(d).toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' })
+  return formatDate(d)
 }
 
 export default function EnquiriesPage() {
@@ -208,7 +208,7 @@ export default function EnquiriesPage() {
     return {
       total: enquiries.length,
       today: enquiries.filter(e => new Date(e.created_at).toDateString() === todayStr).length,
-      pending: enquiries.filter(e => !e.status || e.status === 'new' || e.status === 'contacted').length,
+      pending: enquiries.filter(e => !e.status || e.status === 'new' || e.status === 'contacted' || e.status === 'trial_session').length,
       converted: enquiries.filter(e => e.status === 'converted').length,
     }
   }, [enquiries])

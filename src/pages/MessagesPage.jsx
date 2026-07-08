@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback, useRef } from 'react'
 import { useAuth } from '../context/AuthContext'
 import { api } from '../lib/api'
+import { formatDate } from '../lib/utils'
 
 function formatMsgTime(iso) {
   return new Date(iso).toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit' })
@@ -13,7 +14,7 @@ function formatDayLabel(iso) {
   if (isSameDay(d, today)) return 'Today'
   const yesterday = new Date(today); yesterday.setDate(yesterday.getDate() - 1)
   if (isSameDay(d, yesterday)) return 'Yesterday'
-  return d.toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' })
+  return formatDate(iso)
 }
 
 export default function MessagesPage() {
@@ -177,7 +178,7 @@ export default function MessagesPage() {
             <div key={a.id} className="activity-item" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
               <div>
                 <strong>{a.students?.name}</strong> — {a.alert_type.replace('_', ' ')}
-                {a.due_date && <span className="mono"> · Due {a.due_date}</span>}
+                {a.due_date && <span className="mono"> · Due {formatDate(a.due_date)}</span>}
                 {a.message && <p style={{ fontSize: '0.85rem', marginTop: '0.25rem' }}>{a.message}</p>}
               </div>
               <button type="button" className="btn btn-ghost" onClick={() => resolveAlert(a.id)}>Resolve</button>

@@ -1,7 +1,7 @@
 import { useState, useEffect, useCallback } from 'react'
 import { Link } from 'react-router-dom'
 import { api } from '../lib/api'
-import { formatCurrency, todayISO } from '../lib/utils'
+import { formatCurrency, formatDate, todayISO } from '../lib/utils'
 
 function groupByBranch(rows) {
   const groups = new Map()
@@ -148,7 +148,7 @@ export default function CombinedHallPage() {
             <>
               <div className="card" style={{ marginBottom: '1rem' }}>
                 <h3 style={{ color: 'var(--accent)', marginBottom: '0.75rem' }}>
-                  Payments Due On/Before {pending.date} — {pending.duePayments.length} student{pending.duePayments.length === 1 ? '' : 's'}
+                  Payments Due On/Before {formatDate(pending.date)} — {pending.duePayments.length} student{pending.duePayments.length === 1 ? '' : 's'}
                 </h3>
                 {pending.duePayments.length === 0 ? (
                   <p style={{ color: 'var(--text-muted)' }}>No pending payments.</p>
@@ -173,7 +173,7 @@ export default function CombinedHallPage() {
                                 <td style={{ fontSize: '0.82rem' }}>{m.students?.course ?? '—'}</td>
                                 <td style={{ fontSize: '0.82rem' }} className="cap">{m.category} · {m.hours_per_day}h/day</td>
                                 <td style={{ fontSize: '0.82rem' }}>{m.cabin_no ?? '—'}</td>
-                                <td className="mono">{m.due_date}</td>
+                                <td className="mono">{formatDate(m.due_date)}</td>
                                 <td className="mono" style={{ color: '#ff8888', fontWeight: 700 }}>{formatCurrency(m.fee_due)}</td>
                               </tr>
                             ))}
@@ -187,7 +187,7 @@ export default function CombinedHallPage() {
 
               <div className="card">
                 <h3 style={{ color: 'var(--accent)', marginBottom: '0.75rem' }}>
-                  Memberships Expiring On {pending.date} — {pending.expiredMemberships.length} student{pending.expiredMemberships.length === 1 ? '' : 's'}
+                  Memberships Expiring On {formatDate(pending.date)} — {pending.expiredMemberships.length} student{pending.expiredMemberships.length === 1 ? '' : 's'}
                 </h3>
                 {pending.expiredMemberships.length === 0 ? (
                   <p style={{ color: 'var(--text-muted)' }}>None.</p>
@@ -212,7 +212,7 @@ export default function CombinedHallPage() {
                                 <td style={{ fontSize: '0.82rem' }}>{m.students?.course ?? '—'}</td>
                                 <td style={{ fontSize: '0.82rem' }} className="cap">{m.category} · {m.hours_per_day}h/day</td>
                                 <td style={{ fontSize: '0.82rem' }}>{m.cabin_no ?? '—'}</td>
-                                <td className="mono">{m.end_date}</td>
+                                <td className="mono">{formatDate(m.end_date)}</td>
                               </tr>
                             ))}
                           </tbody>

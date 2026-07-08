@@ -2,7 +2,7 @@ import { useState, useEffect, useCallback } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { useAuth } from '../context/AuthContext'
 import { api } from '../lib/api'
-import { nowTimeStr, localTimeStrToISO, formatCurrency } from '../lib/utils'
+import { nowTimeStr, localTimeStrToISO, formatCurrency, formatDate, formatDateTime } from '../lib/utils'
 
 function autoShift() {
   const h = new Date().getHours()
@@ -238,9 +238,16 @@ function CheckInModal({ branchId, onClose, onDone }) {
       if (result.expiredMembership) {
         window.alert(`${student.name}'s membership has expired. They've been checked in for today — please prompt them to renew.`)
       }
+      if (result.crossBranchVisit) {
+        window.alert(`${student.name} is registered at a different branch — their home branch has been notified of today's visit.`)
+      }
       onDone()
     } catch (err) {
-      setError(err.message)
+      if (err.message.includes('grace period is over')) {
+        window.alert(err.message)
+      } else {
+        setError(err.message)
+      }
       setLoading(false)
     }
   }
@@ -251,11 +258,11 @@ function CheckInModal({ branchId, onClose, onDone }) {
         <h2>Attendance</h2>
         <form onSubmit={handleSubmit}>
           <div className="form-group" style={{ position: 'relative' }}>
-            <label>Member Name</label>
+            <label>Member Name or Phone</label>
             <input
               value={name}
               onChange={(e) => setName(e.target.value)}
-              placeholder="Start typing the student's name"
+              placeholder="Start typing the student's name or phone"
               autoComplete="off"
               autoFocus
             />
@@ -476,7 +483,7 @@ export default function DashboardPage() {
               {data?.actionable?.expiredToday?.map(m => (
                 <div key={m.id} className="activity-item" style={{ borderColor: '#ff6b6b' }}>
                   <strong>{m.students?.name}</strong>
-                  <span className="mono" style={{ color: 'var(--text-muted)' }}> · expired {m.end_date}</span>
+                  <span className="mono" style={{ color: 'var(--text-muted)' }}> · expired {formatDate(m.end_date)}</span>
                 </div>
               ))}
             </div>
@@ -488,7 +495,7 @@ export default function DashboardPage() {
             {(data?.recentActivity ?? []).map(a => (
               <div key={a.id} className="activity-item">
                 <strong>{a.studentName}</strong> — {a.type}
-                <div className="time">{new Date(a.time).toLocaleString('en-IN')}</div>
+                <div className="time">{formatDateTime(a.time)}</div>
               </div>
             ))}
           </div>

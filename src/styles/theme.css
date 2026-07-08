@@ -9,6 +9,7 @@
   --blocked: #2a2a2a;
   --border: rgba(255, 215, 0, 0.25);
   --font-display: 'Archivo Black', sans-serif;
+  --font-brand: 'Poppins', sans-serif;
   --font-mono: 'JetBrains Mono', monospace;
 }
 
@@ -142,8 +143,8 @@ h1, h2, h3 {
 }
 
 .topbar-brand-logo {
-  height: 34px;
-  width: 34px;
+  height: 48px;
+  width: 48px;
   border-radius: 50%;
   object-fit: cover;
   flex-shrink: 0;
@@ -158,8 +159,8 @@ h1, h2, h3 {
   .topbar-brand { display: none; }
   .topbar-brand-logo-mobile {
     display: block;
-    height: 26px;
-    width: 26px;
+    height: 36px;
+    width: 36px;
     border-radius: 50%;
     object-fit: cover;
     flex-shrink: 0;
@@ -180,10 +181,13 @@ h1, h2, h3 {
 .subnav::-webkit-scrollbar { display: none; }
 
 .nav-brand {
-  font-family: var(--font-display);
+  font-family: var(--font-brand);
+  font-weight: 800;
   color: var(--accent);
-  font-size: 1.1rem;
+  font-size: 1.35rem;
+  letter-spacing: 0.01em;
   white-space: nowrap;
+  text-shadow: 0 0 18px rgba(255, 215, 0, 0.25);
 }
 
 .nav-links {
@@ -387,15 +391,20 @@ input[type="week"]::-webkit-calendar-picker-indicator {
 }
 
 .login-brand-logo {
-  height: 128px;
-  width: 128px;
+  height: 152px;
+  width: 152px;
   border-radius: 50%;
   object-fit: cover;
   margin-bottom: 0.25rem;
 }
 
 .login-brand h1 {
+  font-family: var(--font-brand);
+  font-weight: 900;
   color: var(--accent);
+  font-size: 2rem;
+  letter-spacing: 0.01em;
+  text-shadow: 0 0 24px rgba(255, 215, 0, 0.3);
   margin: 0;
 }
 
@@ -996,6 +1005,7 @@ input[type="week"]::-webkit-calendar-picker-indicator {
 .badge-active { background: rgba(74, 222, 128, 0.15); color: #4ade80; }
 .badge-pending { background: rgba(255, 215, 0, 0.15); color: var(--accent); }
 .badge-inactive { background: rgba(255, 100, 100, 0.15); color: #ff8888; }
+.badge-trial { background: rgba(94, 234, 212, 0.15); color: #5eead4; }
 
 .photo-preview {
   width: 120px;

@@ -2,7 +2,7 @@ import { useState, useEffect, useCallback } from 'react'
 import { useParams, Link } from 'react-router-dom'
 import { api } from '../lib/api'
 import { useAuth } from '../context/AuthContext'
-import { formatCurrency, paymentModeLabel, getMultiMonthDiscount, todayISO } from '../lib/utils'
+import { formatCurrency, formatDate, paymentModeLabel, getMultiMonthDiscount, todayISO } from '../lib/utils'
 
 const PAYMENT_OPTIONS = [
   { value: 'cash', label: '💵 Cash' },
@@ -52,6 +52,18 @@ export default function StudentProfilePage() {
   const [discountLoading, setDiscountLoading] = useState(false)
   const [discountError, setDiscountError] = useState('')
   const [discountSuccess, setDiscountSuccess] = useState('')
+  const [cashbackNotice, setCashbackNotice] = useState(null)
+  const [foodPass, setFoodPass] = useState(null)
+  const [foodPassTopup, setFoodPassTopup] = useState('')
+  const [foodPassPayMode, setFoodPassPayMode] = useState('cash')
+  const [foodPassLoading, setFoodPassLoading] = useState(false)
+  const [foodPassError, setFoodPassError] = useState('')
+  const [editingBooking, setEditingBooking] = useState(null)
+  const [editStartTime, setEditStartTime] = useState('')
+  const [editHours, setEditHours] = useState('')
+  const [editStatus, setEditStatus] = useState('active')
+  const [editLoading, setEditLoading] = useState(false)
+  const [editError, setEditError] = useState('')
 
   const refresh = useCallback(() => {
     setLoading(true)
@@ -83,6 +95,30 @@ export default function StudentProfilePage() {
     if (!branchId) return
     api('get_locker_status', { branchId }).then(setLockerStatus).catch(() => setLockerStatus(null))
   }, [data?.student?.branch_id])
+
+  const loadFoodPass = useCallback(() => {
+    api('get_food_pass', { studentId: id }).then(d => setFoodPass(d.pass)).catch(() => setFoodPass(null))
+  }, [id])
+
+  useEffect(() => { loadFoodPass() }, [loadFoodPass])
+
+  const handleFoodPassTopup = async () => {
+    if (!foodPassTopup) return
+    setFoodPassLoading(true)
+    setFoodPassError('')
+    try {
+      await api('topup_food_pass', {
+        studentId: id, branchId: data.student.branch_id,
+        amount: Number(foodPassTopup), paymentMode: foodPassPayMode,
+      })
+      setFoodPassTopup('')
+      loadFoodPass()
+    } catch (err) {
+      setFoodPassError(err.message)
+    } finally {
+      setFoodPassLoading(false)
+    }
+  }
 
   useEffect(() => {
     if (lockerStatus?.availableNumbers?.length && !lockerNo) {
@@ -197,6 +233,39 @@ export default function StudentProfilePage() {
     }
   }
 
+  const toLocalDateTimeInput = (isoString) => {
+    const d = new Date(isoString)
+    const pad = (n) => String(n).padStart(2, '0')
+    return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`
+  }
+
+  const openEditBooking = (booking) => {
+    setEditingBooking(booking)
+    setEditStartTime(toLocalDateTimeInput(booking.start_time))
+    setEditHours(booking.hours ?? '')
+    setEditStatus(booking.status)
+    setEditError('')
+  }
+
+  const handleUpdateAttendance = async () => {
+    setEditLoading(true)
+    setEditError('')
+    try {
+      await api('update_attendance', {
+        bookingId: editingBooking.id,
+        startTime: new Date(editStartTime).toISOString(),
+        hours: editHours,
+        status: editStatus,
+      })
+      setEditingBooking(null)
+      refresh()
+    } catch (err) {
+      setEditError(err.message)
+    } finally {
+      setEditLoading(false)
+    }
+  }
+
   const openRenew = (mem) => {
     setRenewOpen(true)
     setRenewCategory(mem.category)
@@ -212,7 +281,7 @@ export default function StudentProfilePage() {
     setRenewLoading(true)
     setRenewError('')
     try {
-      await api('renew_membership', {
+      const res = await api('renew_membership', {
         membershipId,
         category: renewCategory,
         hoursPerDay: renewHoursPerDay,
@@ -221,6 +290,9 @@ export default function StudentProfilePage() {
         advanceAmount: renewPayType === 'partial' ? (Number(renewAdvance) || null) : renewPayType === 'pending' ? 0 : null,
       })
       setRenewOpen(false)
+      if (res.cashbackApplied) {
+        setCashbackNotice(res.cashbackApplied)
+      }
       refresh()
     } catch (err) {
       setRenewError(err.message)
@@ -292,11 +364,11 @@ export default function StudentProfilePage() {
                   </span>
                 )],
                 activeMem && ['Cabin', activeMem.cabin_no ?? 'Floating'],
-                activeMem && ['Started', activeMem.start_date],
-                activeMem && ['Expires', activeMem.end_date],
-                activeMem && ['Due Date', activeMem.due_date],
+                activeMem && ['Started', formatDate(activeMem.start_date)],
+                activeMem && ['Expires', formatDate(activeMem.end_date)],
+                activeMem && ['Due Date', formatDate(activeMem.due_date)],
                 activeMem?.fee_due > 0 && ['Fee Due', <span key="fee" style={{ color: '#ff6b6b', fontWeight: 700 }}>{formatCurrency(activeMem.fee_due)}</span>],
-                locker && ['Locker', `${locker.locker_no} · Due ${locker.locker_due_date}`],
+                locker && ['Locker', `${locker.locker_no} · Due ${formatDate(locker.locker_due_date)}`],
               ].filter(Boolean).map(([label, value]) => (
                 <tr key={label} style={{ borderBottom: '1px solid #1e1e1e' }}>
                   <td style={{ padding: '0.5rem 0.75rem 0.5rem 0', color: 'var(--text-muted)', fontSize: '0.82rem', fontWeight: 500, whiteSpace: 'nowrap', width: '40%' }}>
@@ -318,7 +390,7 @@ export default function StudentProfilePage() {
             {isExpired && (
               <>
                 <p style={{ color: '#ff8888', fontWeight: 700, fontSize: '0.85rem', marginBottom: '0.75rem' }}>
-                  ⚠ Membership expired {activeMem.end_date} — renew to continue.
+                  ⚠ Membership expired {formatDate(activeMem.end_date)} — renew to continue.
                 </p>
                 <button
                   type="button"
@@ -465,13 +537,51 @@ export default function StudentProfilePage() {
           </div>
         )}
 
+        {/* Food Pass */}
+        <div className="card">
+          <h3 style={{ color: 'var(--accent)', marginBottom: '0.75rem' }}>🎫 Food Pass</h3>
+          <p className="mono" style={{ fontSize: '1.1rem', fontWeight: 700, color: foodPass && Number(foodPass.balance) < 0 ? '#ff8888' : '#4ade80', marginBottom: '0.5rem' }}>
+            Balance: {formatCurrency(Number(foodPass?.balance ?? 0))}
+          </p>
+          {foodPass && Number(foodPass.balance) < 0 && (
+            <p style={{ fontSize: '0.78rem', color: '#ffaa44', marginBottom: '0.75rem' }}>
+              Balance is negative — please top up to settle.
+            </p>
+          )}
+          <div className="form-group">
+            <label>Top Up Amount (₹)</label>
+            <input type="number" min={0} value={foodPassTopup} onChange={(e) => setFoodPassTopup(e.target.value)} />
+          </div>
+          <div className="form-group">
+            <label>Mode</label>
+            <div style={{ display: 'flex', gap: '0.5rem' }}>
+              {PAYMENT_OPTIONS.map(({ value, label }) => (
+                <button
+                  key={value} type="button" onClick={() => setFoodPassPayMode(value)}
+                  style={{
+                    flex: 1, padding: '0.5rem',
+                    border: `1px solid ${foodPassPayMode === value ? 'var(--accent)' : '#333'}`,
+                    borderRadius: 4, background: foodPassPayMode === value ? 'rgba(255,215,0,0.08)' : '#141414',
+                    color: foodPassPayMode === value ? 'var(--accent)' : 'var(--text-muted)',
+                    cursor: 'pointer', fontWeight: 600, fontSize: '0.85rem',
+                  }}
+                >{label}</button>
+              ))}
+            </div>
+          </div>
+          {foodPassError && <p className="error-msg">{foodPassError}</p>}
+          <button type="button" className="btn btn-primary" style={{ width: '100%' }} disabled={foodPassLoading || !foodPassTopup} onClick={handleFoodPassTopup}>
+            {foodPassLoading ? 'Topping up…' : 'Top Up'}
+          </button>
+        </div>
+
         {/* Locker */}
         <div className="card">
           <h3 style={{ color: 'var(--accent)', marginBottom: '0.75rem' }}>Locker</h3>
           {locker ? (
             <>
               <p style={{ fontSize: '0.88rem', marginBottom: '0.5rem' }}>
-                Locker <strong>{locker.locker_no}</strong> · Due {locker.locker_due_date}
+                Locker <strong>{locker.locker_no}</strong> · Due {formatDate(locker.locker_due_date)}
               </p>
               {Number(locker.fee_due) > 0 ? (
                 <div style={{ marginBottom: '0.75rem' }}>
@@ -608,11 +718,11 @@ export default function StudentProfilePage() {
                       : null
                     return (
                       <tr key={h.id}>
-                        <td className="mono">{new Date(h.paused_at).toLocaleDateString('en-IN')}</td>
+                        <td className="mono">{formatDate(h.paused_at)}</td>
                         <td className="mono">
                           {stillOnHold ? (
                             <span style={{ color: '#ffaa44', fontWeight: 700 }}>Still on hold</span>
-                          ) : new Date(h.resumed_at).toLocaleDateString('en-IN')}
+                          ) : formatDate(h.resumed_at)}
                         </td>
                         <td>
                           {stillOnHold ? (
@@ -643,12 +753,40 @@ export default function StudentProfilePage() {
             <tbody>
               {discounts.map(d => (
                 <tr key={d.id}>
-                  <td className="mono">{new Date(d.created_at).toLocaleDateString('en-IN')}</td>
+                  <td className="mono">{formatDate(d.created_at)}</td>
                   <td className="cap">{d.discount_type}</td>
                   <td className="mono">{d.discount_type === 'percent' ? `${d.discount_value}%` : formatCurrency(d.discount_value)}</td>
                   <td className="mono" style={{ color: '#4ade80' }}>{formatCurrency(d.discount_amount)}</td>
                   <td>{d.staff?.display_name || d.staff?.username || '—'}</td>
                   <td style={{ color: 'var(--text-muted)', fontSize: '0.82rem' }}>{d.remarks || '—'}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+
+      {(bookings ?? []).length > 0 && (
+        <div className="card" style={{ marginTop: '1rem' }}>
+          <h3 style={{ color: 'var(--accent)', marginBottom: '0.75rem' }}>Attendance History</h3>
+          <table className="data-table">
+            <thead>
+              <tr><th>Date</th><th>Type</th><th>Desk</th><th>Check-in</th><th>Hours</th><th>Status</th><th></th></tr>
+            </thead>
+            <tbody>
+              {bookings.map(b => (
+                <tr key={b.id}>
+                  <td className="mono">{formatDate(b.start_time)}</td>
+                  <td className="cap">{b.booking_type}</td>
+                  <td>{b.desks?.label ?? '—'}</td>
+                  <td className="mono">{new Date(b.start_time).toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit' })}</td>
+                  <td className="mono">{b.hours ?? '—'}</td>
+                  <td><span className={`badge ${b.status === 'active' ? 'badge-active' : b.status === 'cancelled' ? 'badge-inactive' : 'badge-pending'} cap`}>{b.status}</span></td>
+                  <td>
+                    <button type="button" className="btn btn-ghost" style={{ padding: '0.3rem 0.65rem', fontSize: '0.78rem' }} onClick={() => openEditBooking(b)}>
+                      Edit
+                    </button>
+                  </td>
                 </tr>
               ))}
             </tbody>
@@ -672,7 +810,7 @@ export default function StudentProfilePage() {
                 const m = s.overtime_minutes % 60
                 return (
                   <tr key={s.id}>
-                    <td className="mono">{s.session_date}</td>
+                    <td className="mono">{formatDate(s.session_date)}</td>
                     <td style={{ color: '#ff8888', fontWeight: 600 }}>
                       {h > 0 ? `${h}h ${m}m` : `${m}m`}
                     </td>
@@ -693,7 +831,7 @@ export default function StudentProfilePage() {
           <tbody>
             {(transactions ?? []).map(t => (
               <tr key={t.id}>
-                <td className="mono">{new Date(t.created_at).toLocaleDateString('en-IN')}</td>
+                <td className="mono">{formatDate(t.created_at)}</td>
                 <td className="cap">{t.category}</td>
                 <td className="mono">{formatCurrency(t.amount)}</td>
                 <td>{paymentModeLabel(t.payment_mode)}</td>
@@ -787,6 +925,62 @@ export default function StudentProfilePage() {
               >
                 {renewLoading ? 'Renewing…' : 'Confirm Renewal'}
               </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {editingBooking && (
+        <div className="modal-overlay" onClick={() => setEditingBooking(null)}>
+          <div className="modal" style={{ maxWidth: 420 }} onClick={(e) => e.stopPropagation()}>
+            <h2>Edit Attendance</h2>
+            <p style={{ color: 'var(--text-muted)', marginBottom: '1rem' }}>{student.name} · {editingBooking.booking_type}</p>
+
+            <div className="form-group">
+              <label>Check-in Time</label>
+              <input type="datetime-local" value={editStartTime} onChange={(e) => setEditStartTime(e.target.value)} />
+            </div>
+
+            <div className="form-group">
+              <label>Hours</label>
+              <input type="number" min={0} step={0.5} value={editHours} onChange={(e) => setEditHours(e.target.value)} />
+            </div>
+
+            <div className="form-group">
+              <label>Status</label>
+              <select value={editStatus} onChange={(e) => setEditStatus(e.target.value)}>
+                <option value="active">Active</option>
+                <option value="completed">Completed</option>
+                <option value="cancelled">Cancelled</option>
+              </select>
+            </div>
+
+            {editError && <p className="error-msg">{editError}</p>}
+
+            <div className="modal-actions">
+              <button type="button" className="btn btn-ghost" onClick={() => setEditingBooking(null)}>Cancel</button>
+              <button type="button" className="btn btn-primary" disabled={editLoading} onClick={handleUpdateAttendance}>
+                {editLoading ? 'Saving…' : 'Save Changes'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {cashbackNotice && (
+        <div className="modal-overlay" onClick={() => setCashbackNotice(null)}>
+          <div className="modal" style={{ maxWidth: 400 }} onClick={(e) => e.stopPropagation()}>
+            <h2>🎁 Cashback Applied</h2>
+            <div className="card" style={{ margin: '1rem 0', background: 'rgba(255,215,0,0.05)' }}>
+              <p className="mono" style={{ color: 'var(--accent)', fontSize: '1.3rem', fontWeight: 700 }}>
+                {formatCurrency(cashbackNotice)}
+              </p>
+              <p style={{ fontSize: '0.85rem', color: 'var(--text-muted)', marginTop: '0.5rem' }}>
+                A pending cashback was applied as a discount on this renewal.
+              </p>
+            </div>
+            <div className="modal-actions">
+              <button type="button" className="btn btn-primary" onClick={() => setCashbackNotice(null)}>Got it</button>
             </div>
           </div>
         </div>

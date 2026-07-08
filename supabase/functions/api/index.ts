@@ -443,9 +443,11 @@ Deno.serve(async (req) => {
     if (action === "search_students_by_name") {
       const { branchId, query } = payload;
       if (!requireBranch(staff, branchId)) return err("Branch access denied", 403);
-      if (!query || query.trim().length < 2) return json({ students: [] });
+      const q = (query ?? "").trim();
+      if (q.length < 2) return json({ students: [] });
+      // Recognize a student by full name or phone number in the same search box.
       const { data } = await db.from("students").select("id, name, phone")
-        .eq("branch_id", branchId).ilike("name", `%${query.trim()}%`).order("name").limit(8);
+        .eq("branch_id", branchId).or(`name.ilike.%${q}%,phone.ilike.%${q}%`).order("name").limit(8);
       return json({ students: data ?? [] });
     }
 
@@ -495,36 +497,20 @@ Deno.serve(async (req) => {
       return json({ booking: { ...booking, deskLabel: desk?.label ?? null, amount, studentName: name } });
     }
 
-    // ─── STORAGE ───
-    // Staff-only signed upload URL — the frontend no longer writes to storage with the
-    // anon key directly (that required an anon INSERT/UPDATE policy on the bucket, which
-    // let anyone on the internet upload or overwrite Aadhaar/photo files unauthenticated).
-    if (action === "get_upload_url") {
-      const { folder } = payload;
-      const allowedFolders = ["aadhaar", "photos"];
-      if (!allowedFolders.includes(folder)) return err("Invalid upload folder");
-      const ext = String(payload.ext ?? "jpg").replace(/[^a-zA-Z0-9]/g, "").slice(0, 8) || "jpg";
-      const path = `${folder}/${crypto.randomUUID()}.${ext}`;
-      const { data, error } = await db.storage.from("student-photos").createSignedUploadUrl(path);
-      if (error) return err(error.message);
-      return json({ path: data.path, token: data.token });
-    }
-
     // ─── MEMBERSHIP ───
     if (action === "create_membership") {
       const {
         branchId, name, phone, category, hoursPerDay, timings, monthsPaid,
-        paymentMode, aadhaarPhotoUrl, photoUrl, course, lockerNo, withLocker,
+        paymentMode, course, lockerNo, withLocker,
         advanceAmount, emergencyContact, referralSource,
       } = payload;
       if (!requireBranch(staff, branchId)) return err("Branch access denied", 403);
-      if (!aadhaarPhotoUrl) return err("Aadhaar photo is required");
       if (!emergencyContact) return err("Emergency contact is required");
-      const validReferrals = ["google_search", "instagram", "word_of_mouth", "flex"];
+      const validReferrals = ["google_search", "instagram", "word_of_mouth", "flex", "ai_platform"];
       if (!validReferrals.includes(referralSource)) return err("Please select how the student heard about us");
 
       const studentId = await upsertStudent(db, name, phone, branchId, {
-        aadhaar_photo_url: aadhaarPhotoUrl, photo_url: photoUrl, course, status: "active",
+        course, status: "active",
         emergency_contact: emergencyContact, referral_source: referralSource,
       });
 
@@ -545,7 +531,7 @@ Deno.serve(async (req) => {
       if (category === "permanent") {
         const { data: freeDesk } = await db.from("desks").select("*")
           .eq("branch_id", branchId).eq("status", "free").order("sort_order").limit(1).maybeSingle();
-        if (!freeDesk) return err("No cabin available for permanent membership");
+        if (!freeDesk) return err("No cabin available for permanent membership — add them to the Waitlist tab instead");
         deskId = freeDesk.id;
         cabinNo = freeDesk.label;
         await db.from("desks").update({
@@ -594,6 +580,47 @@ Deno.serve(async (req) => {
 
       await refreshStudentStatus(db, studentId);
       return json({ membership: mem, totalPaid, cabinNo });
+    }
+
+    // ─── PERMANENT MEMBERSHIP WAITLIST ───
+    // "Full" means zero free desks at the branch — any free desk can become a permanent
+    // cabin, so this is the same condition create_membership itself checks.
+    if (action === "get_permanent_waitlist") {
+      const { branchId } = payload;
+      if (!requireBranch(staff, branchId)) return err("Branch access denied", 403);
+      const { count: freeDesks } = await db.from("desks").select("*", { count: "exact", head: true })
+        .eq("branch_id", branchId).eq("status", "free");
+      const { data: waitlist } = await db.from("permanent_waitlist").select("*")
+        .eq("branch_id", branchId).eq("status", "waiting").order("created_at", { ascending: true });
+      return json({ isFull: (freeDesks ?? 0) === 0, freeDesks: freeDesks ?? 0, waitlist: waitlist ?? [] });
+    }
+
+    if (action === "join_permanent_waitlist") {
+      const { branchId, name, phone, hoursPerDay, notes } = payload;
+      if (!requireBranch(staff, branchId)) return err("Branch access denied", 403);
+      if (!name || !phone) return err("Name and phone are required");
+      const { count: freeDesks } = await db.from("desks").select("*", { count: "exact", head: true })
+        .eq("branch_id", branchId).eq("status", "free");
+      if ((freeDesks ?? 0) > 0) return err("Permanent seats are still available — register directly instead of waitlisting");
+
+      const { error } = await db.from("permanent_waitlist").insert({
+        branch_id: branchId, name, phone, hours_per_day: hoursPerDay || null, notes: notes || null,
+        created_by_staff_id: staff.id,
+      });
+      if (error) return err(error.message);
+      return json({ ok: true });
+    }
+
+    if (action === "remove_from_waitlist") {
+      const { waitlistId, status } = payload;
+      const { data: entry } = await db.from("permanent_waitlist").select("branch_id").eq("id", waitlistId).single();
+      if (!entry) return err("Waitlist entry not found");
+      if (!requireBranch(staff, entry.branch_id)) return err("Branch access denied", 403);
+      await db.from("permanent_waitlist").update({
+        status: status === "fulfilled" ? "fulfilled" : "cancelled",
+        fulfilled_at: status === "fulfilled" ? new Date().toISOString() : null,
+      }).eq("id", waitlistId);
+      return json({ ok: true });
     }
 
     // ─── LOCKERS (add / remove after registration) ───
@@ -681,8 +708,12 @@ Deno.serve(async (req) => {
       const isExpiredMembership = membership.end_date < today;
       if (isExpiredMembership) {
         const daysSinceExpiry = Math.floor((new Date(today + "T12:00:00").getTime() - new Date(membership.end_date + "T12:00:00").getTime()) / 86_400_000);
-        const GRACE_DAYS = 7;
+        const GRACE_DAYS = 10;
         if (daysSinceExpiry > GRACE_DAYS) {
+          const dueAmount = Number(membership.fee_due);
+          if (dueAmount > 0) {
+            return err(`Dues not cleared (₹${dueAmount} pending) even ${daysSinceExpiry} days after membership expiration — the ${GRACE_DAYS}-day grace period is over. Please clear dues and renew before checking in.`);
+          }
           return err(`Membership expired ${daysSinceExpiry} days ago — the ${GRACE_DAYS}-day grace period is over. Please renew before checking in.`);
         }
       }
@@ -696,8 +727,10 @@ Deno.serve(async (req) => {
         .maybeSingle();
       if (alreadyIn) return err("Student is already checked in today");
 
-      // Permanent members use their pre-assigned cabin; temporary/others have no fixed desk
-      const deskId = membership.category === "permanent" ? membership.desk_id : (passedDeskId ?? null);
+      // A member visiting a branch other than their registered home branch can't use their
+      // home cabin (it physically doesn't exist here) — treat them as floating for the day.
+      const isCrossBranchVisit = student.branch_id != null && student.branch_id !== branchId;
+      const deskId = membership.category === "permanent" && !isCrossBranchVisit ? membership.desk_id : (passedDeskId ?? null);
 
       let desk = null;
       if (deskId) {
@@ -735,7 +768,45 @@ Deno.serve(async (req) => {
         updated_at: new Date().toISOString(),
       }).eq("id", studentId);
 
-      return json({ ok: true, bookingId: booking!.id, deskLabel: desk?.label ?? null, endTime, expiredMembership: isExpiredMembership });
+      // Intimate the student's home branch that they attended a different branch today.
+      if (isCrossBranchVisit) {
+        const { data: currentBranch } = await db.from("branches").select("name").eq("id", branchId).single();
+        await db.from("messages").insert({
+          branch_id: student.branch_id, sender_staff_id: staff.id, recipient_type: "staff",
+          content: `${student.name} (home branch) checked in at ${currentBranch?.name ?? "another branch"} today.`,
+        });
+      }
+
+      return json({ ok: true, bookingId: booking!.id, deskLabel: desk?.label ?? null, endTime, expiredMembership: isExpiredMembership, crossBranchVisit: isCrossBranchVisit });
+    }
+
+    // Edit a student's attendance record (check-in time / hours / status) — corrects
+    // mistakes like a wrong check-in time or hours punched in by staff. Available to
+    // both staff (their own branch) and owner (any branch).
+    if (action === "update_attendance") {
+      const { bookingId, startTime, hours, status } = payload;
+      const { data: booking } = await db.from("bookings").select("*").eq("id", bookingId).single();
+      if (!booking) return err("Attendance record not found");
+      if (!requireBranch(staff, booking.branch_id)) return err("Branch access denied", 403);
+
+      const newStartTime = startTime ? new Date(startTime).toISOString() : booking.start_time;
+      const newHours = hours !== undefined && hours !== null && hours !== "" ? Number(hours) : Number(booking.hours ?? 0);
+      const newEndTime = new Date(new Date(newStartTime).getTime() + newHours * 3_600_000).toISOString();
+      const newStatus = status || booking.status;
+
+      await db.from("bookings").update({
+        start_time: newStartTime, end_time: newEndTime, hours: newHours, status: newStatus,
+      }).eq("id", bookingId);
+
+      const hoursDelta = newHours - Number(booking.hours ?? 0);
+      if (hoursDelta !== 0) {
+        const { data: st } = await db.from("students").select("total_hours_studied").eq("id", booking.student_id).single();
+        await db.from("students").update({
+          total_hours_studied: Math.max(0, Number(st?.total_hours_studied ?? 0) + hoursDelta),
+        }).eq("id", booking.student_id);
+      }
+
+      return json({ ok: true });
     }
 
     // ─── PAUSE / RESUME MEMBERSHIP ───
@@ -782,10 +853,27 @@ Deno.serve(async (req) => {
 
     // ─── CHECKOUT ───
     if (action === "checkout_booking") {
-      const { bookingId, overtimeMinutes, overtimePaymentMode } = payload;
+      const { bookingId, overtimeMinutes, overtimePaymentMode, settleFoodNow } = payload;
       const { data: booking } = await db.from("bookings").select("*").eq("id", bookingId).single();
       if (!booking) return err("Booking not found");
       if (!requireBranch(staff, booking.branch_id)) return err("Branch access denied", 403);
+
+      const isMember = booking.booking_type !== "walkin";
+      const FOOD_CARRY_DAYS = 3;
+
+      // Membership students can carry an unpaid food bill for up to 3 days across
+      // sessions — check by student, not just this booking, since each day is a new booking.
+      const { data: memberUnpaidBills } = isMember
+        ? await db.from("food_bills").select("id, total, created_at").eq("student_id", booking.student_id).eq("paid", false)
+        : { data: null };
+      if (memberUnpaidBills?.length) {
+        const cutoff = Date.now() - FOOD_CARRY_DAYS * 86_400_000;
+        const overdue = memberUnpaidBills.filter(b => new Date(b.created_at).getTime() < cutoff);
+        if (overdue.length) {
+          const overdueTotal = overdue.reduce((s, b) => s + Number(b.total), 0);
+          return err(`Food bill of ₹${overdueTotal} is more than ${FOOD_CARRY_DAYS} days old — settle it before checking out.`);
+        }
+      }
 
       await db.from("bookings").update({ status: "completed", is_paused: false, paused_at: null, total_pause_minutes: 0 }).eq("id", bookingId);
 
@@ -798,10 +886,14 @@ Deno.serve(async (req) => {
         }
       }
 
-      // Settle any food bills that were recorded unpaid during the session, using
-      // whatever payment mode was chosen at checkout.
-      const { data: unpaidBills } = await db.from("food_bills").select("id, total")
-        .eq("booking_id", bookingId).eq("paid", false);
+      // Walk-ins always settle unpaid food at checkout (no carry-forward concept — the
+      // session ends here). Members only settle now if staff explicitly chose to collect it
+      // (settleFoodNow); otherwise it carries forward within the 3-day window checked above.
+      const unpaidBillsQuery = isMember
+        ? db.from("food_bills").select("id, total").eq("student_id", booking.student_id).eq("paid", false)
+        : db.from("food_bills").select("id, total").eq("booking_id", bookingId).eq("paid", false);
+      const shouldSettleNow = !isMember || settleFoodNow;
+      const { data: unpaidBills } = shouldSettleNow ? await unpaidBillsQuery : { data: null };
       if (unpaidBills?.length) {
         const settleMode = overtimePaymentMode ?? booking.payment_mode ?? "cash";
         for (const bill of unpaidBills) {
@@ -998,6 +1090,28 @@ Deno.serve(async (req) => {
       return json({ ok: true, discountAmount, newFeeDue: newDue });
     }
 
+    // Cashback for a top-hours student this month — staff or owner grants it after checking
+    // the leaderboard. Sits pending until consumed at the student's next renewal (discount)
+    // or, if they close out instead of renewing, paid out in cash at closure.
+    if (action === "grant_cashback") {
+      const { studentId, branchId, cashbackType, cashbackValue, monthLabel, notes } = payload;
+      if (!requireBranch(staff, branchId)) return err("Branch access denied", 403);
+      if (!["percent", "fixed"].includes(cashbackType)) return err("Invalid cashback type");
+      const value = Number(cashbackValue);
+      if (!(value > 0)) return err("Cashback value must be greater than 0");
+      if (cashbackType === "percent" && value > 100) return err("Percentage cashback cannot exceed 100");
+
+      const { data: existing } = await db.from("cashbacks").select("id")
+        .eq("student_id", studentId).eq("status", "pending").maybeSingle();
+      if (existing) return err("This student already has a pending cashback awaiting redemption");
+
+      await db.from("cashbacks").insert({
+        student_id: studentId, branch_id: branchId, month_label: monthLabel || new Date().toLocaleString("en-US", { month: "long", year: "numeric" }),
+        cashback_type: cashbackType, cashback_value: value, notes: notes || null, granted_by_staff_id: staff.id,
+      });
+      return json({ ok: true });
+    }
+
     if (action === "record_locker_payment") {
       const { lockerId, amount, paymentMode } = payload;
       const { data: locker } = await db.from("lockers").select("*").eq("id", lockerId).single();
@@ -1018,6 +1132,40 @@ Deno.serve(async (req) => {
       return json({ ok: true });
     }
 
+    // ─── FOOD PASS (prepaid wallet) ───
+    if (action === "get_food_pass") {
+      const { studentId } = payload;
+      const { data: student } = await db.from("students").select("branch_id").eq("id", studentId).single();
+      if (!student) return err("Student not found");
+      if (!requireBranch(staff, student.branch_id)) return err("Branch access denied", 403);
+      const { data: pass } = await db.from("food_passes").select("*").eq("student_id", studentId).maybeSingle();
+      return json({ pass: pass ?? null });
+    }
+
+    if (action === "topup_food_pass") {
+      const { studentId, branchId, amount, paymentMode } = payload;
+      if (!requireBranch(staff, branchId)) return err("Branch access denied", 403);
+      const amt = Number(amount);
+      if (!(amt > 0)) return err("Top-up amount must be greater than 0");
+
+      const { data: existing } = await db.from("food_passes").select("*").eq("student_id", studentId).maybeSingle();
+      let newBalance;
+      if (existing) {
+        newBalance = Number(existing.balance) + amt;
+        await db.from("food_passes").update({ balance: newBalance, updated_at: new Date().toISOString() }).eq("id", existing.id);
+      } else {
+        newBalance = amt;
+        await db.from("food_passes").insert({ student_id: studentId, branch_id: branchId, balance: newBalance });
+      }
+      // Real revenue collected now — record it (topups are the only Food Pass event that's actual new money).
+      await db.from("transactions").insert({
+        student_id: studentId, branch_id: branchId, category: "food",
+        amount: amt, payment_mode: paymentMode ?? "cash", notes: "Food Pass top-up",
+        created_by_staff_id: staff.id,
+      });
+      return json({ ok: true, balance: newBalance });
+    }
+
     // ─── FOOD ───
     if (action === "list_food_items") {
       const { branchId } = payload;
@@ -1031,7 +1179,7 @@ Deno.serve(async (req) => {
     }
 
     if (action === "create_food_bill") {
-      const { branchId, studentId, studentName, studentPhone, bookingId, items, paymentMode, discountType, discountValue, discountAmount } = payload;
+      const { branchId, studentId, studentName, studentPhone, bookingId, items, paymentMode, discountType, discountValue, discountAmount, useFoodPass } = payload;
       if (!requireBranch(staff, branchId)) return err("Branch access denied", 403);
 
       let subtotal = 0;
@@ -1048,15 +1196,29 @@ Deno.serve(async (req) => {
 
       const disc = Number(discountAmount) || 0;
       const total = Math.max(subtotal - disc, 0);
-      // No payment mode yet ⇒ bill is recorded but left unpaid, to be settled (cash/upi chosen)
-      // together with any overtime at final checkout instead of asking now.
-      const isPaid = paymentMode != null;
+
+      // Food Pass deducts immediately (balance can go negative — settled separately later).
+      // Money for it was already collected at top-up time, so no new transaction here.
+      let payFromPass = false;
+      if (useFoodPass && studentId) {
+        const { data: pass } = await db.from("food_passes").select("*").eq("student_id", studentId).maybeSingle();
+        if (pass) {
+          payFromPass = true;
+          await db.from("food_passes").update({
+            balance: Number(pass.balance) - total, updated_at: new Date().toISOString(),
+          }).eq("id", pass.id);
+        }
+      }
+
+      // Otherwise: no payment mode ⇒ bill is recorded unpaid, carried on the student's tab
+      // (membership students get up to 3 days before it must be settled at checkout).
+      const isPaid = payFromPass || paymentMode != null;
 
       const { data: bill, error } = await db.from("food_bills").insert({
         branch_id: branchId, student_id: studentId, booking_id: bookingId,
         student_name: studentName, student_phone: studentPhone,
         subtotal, discount_type: discountType, discount_value: discountValue ?? 0,
-        discount_amount: disc, total, payment_mode: isPaid ? paymentMode : null, paid: isPaid,
+        discount_amount: disc, total, payment_mode: payFromPass ? "other" : (isPaid ? paymentMode : null), paid: isPaid,
         created_by_staff_id: staff.id,
       }).select("id").single();
       if (error) return err(error.message);
@@ -1065,7 +1227,7 @@ Deno.serve(async (req) => {
         await db.from("food_bill_items").insert({ food_bill_id: bill!.id, ...li });
       }
 
-      if (isPaid) {
+      if (isPaid && !payFromPass) {
         await db.from("transactions").insert({
           student_id: studentId, branch_id: branchId, food_bill_id: bill!.id,
           category: "food", amount: total, payment_mode: paymentMode,
@@ -1073,7 +1235,7 @@ Deno.serve(async (req) => {
         });
       }
 
-      return json({ bill: { id: bill!.id, total, subtotal, discountAmount: disc, items: lineItems, paid: isPaid } });
+      return json({ bill: { id: bill!.id, total, subtotal, discountAmount: disc, items: lineItems, paid: isPaid, paidFromPass: payFromPass } });
     }
 
     if (action === "create_food_item") {
@@ -1235,9 +1397,13 @@ Deno.serve(async (req) => {
       const { branchId } = payload;
       let q = db.from("staff").select("id, username, display_name, role, branch_id").eq("is_active", true).order("display_name");
       if (isOwner(staff)) {
-        if (branchId) q = q.eq("branch_id", branchId);
+        // Include the owner themself (branch_id is null for owner accounts) so they can
+        // self-assign a task regardless of which branch they're currently viewing.
+        if (branchId) q = q.or(`branch_id.eq.${branchId},role.eq.owner`);
       } else {
-        q = q.eq("branch_id", staff.branch_id!);
+        // Staff can also assign tasks to the owner, so include owner accounts (branch_id is
+        // null for them) alongside this staff member's own branch.
+        q = q.or(`branch_id.eq.${staff.branch_id!},role.eq.owner`);
       }
       const { data } = await q;
       const results = data ?? [];
@@ -1257,8 +1423,10 @@ Deno.serve(async (req) => {
       const targetBranchId = branchId ?? staff.branch_id;
       if (!isOwner(staff)) {
         if (!targetBranchId || targetBranchId !== staff.branch_id) return err("Branch access denied", 403);
-        const { data: assignee } = await db.from("staff").select("branch_id").eq("id", assignedToStaffId).single();
-        if (!assignee || assignee.branch_id !== staff.branch_id) return err("Can only assign tasks to staff in your branch");
+        const { data: assignee } = await db.from("staff").select("branch_id, role").eq("id", assignedToStaffId).single();
+        if (!assignee || (assignee.role !== "owner" && assignee.branch_id !== staff.branch_id)) {
+          return err("Can only assign tasks to staff in your branch, or the owner");
+        }
       }
       const { data: task, error: tErr } = await db.from("tasks").insert({
         branch_id: targetBranchId, assigned_by_staff_id: staff.id, assigned_to_staff_id: assignedToStaffId,
@@ -1549,10 +1717,10 @@ Deno.serve(async (req) => {
         ? await db.from("food_bills").select("booking_id, total, paid").in("booking_id", bookingIds)
         : { data: [] };
       const foodTotals = new Map<string, number>();
-      const unpaidFoodTotals = new Map<string, number>();
+      const unpaidFoodTotalsByBooking = new Map<string, number>();
       for (const fb of foodBills ?? []) {
         foodTotals.set(fb.booking_id, (foodTotals.get(fb.booking_id) ?? 0) + Number(fb.total));
-        if (!fb.paid) unpaidFoodTotals.set(fb.booking_id, (unpaidFoodTotals.get(fb.booking_id) ?? 0) + Number(fb.total));
+        if (!fb.paid) unpaidFoodTotalsByBooking.set(fb.booking_id, (unpaidFoodTotalsByBooking.get(fb.booking_id) ?? 0) + Number(fb.total));
       }
 
       // A student can renew mid-session — pull each member's *current* active membership
@@ -1564,10 +1732,21 @@ Deno.serve(async (req) => {
         : { data: [] };
       const activeMemByStudent = new Map((activeMems ?? []).map((m: any) => [m.student_id, m]));
 
+      // Members can carry an unpaid food bill across days (different booking_id each day),
+      // so their unpaid total must be summed by student, not by today's booking alone.
+      const { data: memberUnpaidBills } = memberStudentIds.length
+        ? await db.from("food_bills").select("student_id, total").in("student_id", memberStudentIds).eq("paid", false)
+        : { data: [] };
+      const unpaidFoodTotalsByStudent = new Map<string, number>();
+      for (const fb of memberUnpaidBills ?? []) {
+        unpaidFoodTotalsByStudent.set(fb.student_id, (unpaidFoodTotalsByStudent.get(fb.student_id) ?? 0) + Number(fb.total));
+      }
+
       const bookings = (data ?? []).map(b => ({
         ...b,
         memberships: activeMemByStudent.get(b.student_id) ?? b.memberships,
-        foodTotal: foodTotals.get(b.id) ?? 0, unpaidFoodTotal: unpaidFoodTotals.get(b.id) ?? 0,
+        foodTotal: foodTotals.get(b.id) ?? 0,
+        unpaidFoodTotal: b.booking_type === "walkin" ? (unpaidFoodTotalsByBooking.get(b.id) ?? 0) : (unpaidFoodTotalsByStudent.get(b.student_id) ?? 0),
       }));
       return json({ bookings });
     }
@@ -1661,7 +1840,15 @@ Deno.serve(async (req) => {
 
       const discount = multiMonthDiscount(months);
       const gross = monthlyFee * months;
-      const totalFee = gross * (1 - discount / 100);
+      const totalBeforeCashback = gross * (1 - discount / 100);
+
+      const { data: pendingCashback } = await db.from("cashbacks").select("*")
+        .eq("student_id", mem.student_id).eq("status", "pending").maybeSingle();
+      const cashbackAmount = pendingCashback
+        ? Math.min(pendingCashback.cashback_type === "percent" ? totalBeforeCashback * (Number(pendingCashback.cashback_value) / 100) : Number(pendingCashback.cashback_value), totalBeforeCashback)
+        : 0;
+      const totalFee = totalBeforeCashback - cashbackAmount;
+
       const feePaid = advanceAmount != null ? Number(advanceAmount) : totalFee;
       const feeDue = Math.max(totalFee - feePaid, 0);
 
@@ -1713,8 +1900,16 @@ Deno.serve(async (req) => {
       // Deactivate old membership
       await db.from("memberships").update({ is_active: false }).eq("id", membershipId);
       await db.from("alerts").update({ status: "resolved" }).eq("student_id", mem.student_id).eq("alert_type", "expiry").eq("status", "pending");
+
+      if (pendingCashback && cashbackAmount > 0) {
+        await db.from("cashbacks").update({
+          status: "redeemed", redeemed_membership_id: newMem!.id,
+          redeemed_amount: cashbackAmount, redeemed_at: new Date().toISOString(),
+        }).eq("id", pendingCashback.id);
+      }
+
       await refreshStudentStatus(db, mem.student_id);
-      return json({ ok: true, membershipId: newMem!.id });
+      return json({ ok: true, membershipId: newMem!.id, cashbackApplied: cashbackAmount > 0 ? cashbackAmount : null });
     }
 
     // ─── CLOSE MEMBERSHIP ───
@@ -1762,8 +1957,22 @@ Deno.serve(async (req) => {
       }
 
       await db.from("alerts").update({ status: "resolved" }).eq("student_id", mem.student_id).eq("alert_type", "expiry").eq("status", "pending");
+
+      // A pending cashback that never got redeemed at renewal is paid out in cash instead,
+      // since there's no future renewal fee left to discount against.
+      const { data: pendingCashback } = await db.from("cashbacks").select("*")
+        .eq("student_id", mem.student_id).eq("status", "pending").maybeSingle();
+      let cashbackPayout = null;
+      if (pendingCashback) {
+        const base = Number(mem.monthly_fee) * Number(mem.months_paid);
+        cashbackPayout = pendingCashback.cashback_type === "percent" ? base * (Number(pendingCashback.cashback_value) / 100) : Number(pendingCashback.cashback_value);
+        await db.from("cashbacks").update({
+          status: "settled", redeemed_amount: cashbackPayout, redeemed_at: new Date().toISOString(),
+        }).eq("id", pendingCashback.id);
+      }
+
       await refreshStudentStatus(db, mem.student_id);
-      return json({ ok: true });
+      return json({ ok: true, cashbackPayout });
     }
 
     // ─── ENQUIRIES (leads pipeline) ───

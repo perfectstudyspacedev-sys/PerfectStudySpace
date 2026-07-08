@@ -1,7 +1,7 @@
 import { useState, useEffect, useCallback } from 'react'
 import { useAuth } from '../context/AuthContext'
 import { api } from '../lib/api'
-import { formatCurrency, todayISO, paymentModeLabel } from '../lib/utils'
+import { formatCurrency, todayISO, paymentModeLabel, formatDateTime } from '../lib/utils'
 
 export default function FoodMenuPage() {
   const { branchId, isOwner } = useAuth()
@@ -134,7 +134,7 @@ export default function FoodMenuPage() {
             <tbody>
               {bills.map(b => (
                 <tr key={b.id}>
-                  <td className="mono">{new Date(b.created_at).toLocaleString('en-IN')}</td>
+                  <td className="mono">{formatDateTime(b.created_at)}</td>
                   <td>{b.student_name ?? b.student_phone ?? '-'}</td>
                   <td>{b.food_bill_items?.map(i => `${i.name}×${i.quantity}`).join(', ')}</td>
                   <td className="mono">{formatCurrency(b.total)}</td>
