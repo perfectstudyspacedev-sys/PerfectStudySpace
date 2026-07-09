@@ -83,6 +83,14 @@ export function paymentModeLabel(mode) {
   return mode
 }
 
+// Opens a WhatsApp chat pre-filled with a message — same wa.me pattern used
+// throughout the app's WhatsApp buttons.
+export function openWhatsApp(phone, message) {
+  const clean = (phone || '').replace(/\D/g, '')
+  if (!clean) return
+  window.open(`https://wa.me/${clean}?text=${encodeURIComponent(message || '')}`, '_blank')
+}
+
 export function monthName(date = new Date()) {
   return date.toLocaleString('en-US', { month: 'long' }).toUpperCase()
 }

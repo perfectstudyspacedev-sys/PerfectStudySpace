@@ -2,7 +2,7 @@ import { useState, useEffect, useCallback } from 'react'
 import { useNavigate, Link } from 'react-router-dom'
 import { useAuth } from '../context/AuthContext'
 import { api } from '../lib/api'
-import { formatCurrency, formatDate, getMultiMonthDiscount, todayISO } from '../lib/utils'
+import { formatCurrency, formatDate, getMultiMonthDiscount, todayISO, openWhatsApp } from '../lib/utils'
 
 // Fallback packages — used only until live rates are fetched from fee_config (Branch Settings)
 const DEFAULT_TEMP_PACKAGES = [
@@ -589,6 +589,7 @@ function ActiveMembersTab({ branchId, tempPackages, permPackages }) {
 // ── New Membership form ────────────────────────────────────────────────────
 function NewMembershipForm({ branchId, onCreated, tempPackages, permPackages }) {
   const navigate = useNavigate()
+  const { isOwner } = useAuth()
   const [name, setName] = useState('')
   const [phone, setPhone] = useState('')
   const [emergencyContact, setEmergencyContact] = useState('')
@@ -606,6 +607,11 @@ function NewMembershipForm({ branchId, onCreated, tempPackages, permPackages }) 
   const [error, setError] = useState('')
   const [loading, setLoading] = useState(false)
   const [receipt, setReceipt] = useState(null)
+  const [waSent, setWaSent] = useState(false)
+  const [waTemplate, setWaTemplate] = useState(
+    'Hi {name}, welcome to Perfect Study Space! 🎉 Your membership is now active. '
+    + "We're excited to have you with us — if you have any questions, feel free to reach out anytime."
+  )
 
   useEffect(() => {
     if (!branchId) return
@@ -697,8 +703,9 @@ function NewMembershipForm({ branchId, onCreated, tempPackages, permPackages }) 
         withLocker, lockerNo: withLocker ? lockerNo : null,
         advanceAmount: paymentType === 'full' ? null : paymentType === 'partial' ? advanceNum : 0,
       })
-      setReceipt({ ...result, name, total: grandTotal, amountPaid, amountRemaining })
-      onCreated?.()
+      setReceipt({ ...result, name, phone, total: grandTotal, amountPaid, amountRemaining })
+      openWhatsApp(phone, waTemplate.replace(/\{name\}/gi, name))
+      setWaSent(true)
     } catch (err) {
       setError(err.message)
     } finally {
@@ -710,6 +717,7 @@ function NewMembershipForm({ branchId, onCreated, tempPackages, permPackages }) 
     return (
       <div className="card" style={{ maxWidth: 480 }}>
         <h1 style={{ color: 'var(--accent)' }}>Membership Created</h1>
+        <p style={{ color: '#4ade80', fontWeight: 600, margin: '0.35rem 0 0.75rem' }}>✓ Membership successfully created</p>
         <p><strong>{receipt.name}</strong></p>
         {receipt.cabinNo && <p>Cabin: {receipt.cabinNo}</p>}
         <p className="mono">Total: {formatCurrency(receipt.total)}</p>
@@ -721,8 +729,28 @@ function NewMembershipForm({ branchId, onCreated, tempPackages, permPackages }) 
             </p>
           </>
         )}
+
+        {receipt.phone && (
+          <div style={{ marginTop: '1.1rem', paddingTop: '1rem', borderTop: '1px solid var(--border)' }}>
+            <p style={{ color: waSent ? '#4ade80' : 'var(--text-muted)', fontSize: '0.82rem', marginBottom: '0.6rem' }}>
+              {waSent ? `💬 WhatsApp welcome message sent to ${receipt.phone}` : `A welcome message will be sent to ${receipt.phone}.`}
+            </p>
+            <button
+              type="button"
+              onClick={() => openWhatsApp(receipt.phone, waTemplate.replace(/\{name\}/gi, receipt.name))}
+              style={{
+                width: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '0.5rem',
+                padding: '0.65rem', borderRadius: 4, fontWeight: 700, cursor: 'pointer',
+                background: 'rgba(74,222,128,0.1)', border: '1px solid rgba(74,222,128,0.4)', color: '#4ade80',
+              }}
+            >
+              💬 Resend WhatsApp Message
+            </button>
+          </div>
+        )}
+
         <div style={{ display: 'flex', gap: '0.75rem', marginTop: '1rem' }}>
-          <button type="button" className="btn btn-primary" onClick={() => setReceipt(null)}>New Membership</button>
+          <button type="button" className="btn btn-primary" onClick={() => { setReceipt(null); setWaSent(false) }}>New Membership</button>
           <button type="button" className="btn btn-ghost" onClick={() => navigate('/students')}>View Students</button>
         </div>
       </div>
@@ -730,6 +758,7 @@ function NewMembershipForm({ branchId, onCreated, tempPackages, permPackages }) 
   }
 
   return (
+    <div style={{ display: 'grid', gridTemplateColumns: isOwner ? 'minmax(320px, 560px) 1fr' : '1fr', gap: '1rem', alignItems: 'start' }}>
     <div className="card" style={{ maxWidth: 560 }}>
       <form onSubmit={handleSubmit}>
         <div className="form-group" style={{ position: 'relative' }}>
@@ -921,6 +950,21 @@ function NewMembershipForm({ branchId, onCreated, tempPackages, permPackages }) 
           {loading ? 'Creating…' : 'Create Membership'}
         </button>
       </form>
+    </div>
+
+    {isOwner && (
+      <div className="card">
+        <h3 style={{ color: 'var(--accent)', marginBottom: '0.5rem' }}>💬 WhatsApp Welcome Message</h3>
+        <p style={{ color: 'var(--text-muted)', fontSize: '0.8rem', marginBottom: '0.75rem' }}>
+          Sent automatically to the phone number above as soon as the membership is created. Use <code>{'{name}'}</code> where
+          the student's name should go — it's filled in for each new membership. This is a reusable template, not tied to any
+          one registration.
+        </p>
+        <div className="form-group" style={{ marginBottom: 0 }}>
+          <textarea rows={6} value={waTemplate} onChange={(e) => setWaTemplate(e.target.value)} />
+        </div>
+      </div>
+    )}
     </div>
   )
 }
