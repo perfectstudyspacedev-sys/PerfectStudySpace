@@ -1195,6 +1195,59 @@ Deno.serve(async (req) => {
       return json({ ok: true });
     }
 
+    // All cashback grants for a branch, newest first — lets staff/owner see who still has
+    // a cashback pending (yet to avail) vs. already redeemed or settled at closure.
+    if (action === "list_cashbacks") {
+      const { branchId } = payload;
+      if (!requireBranch(staff, branchId)) return err("Branch access denied", 403);
+
+      const { data: cashbacks } = await db.from("cashbacks")
+        .select("*, students(name, phone)")
+        .eq("branch_id", branchId)
+        .order("created_at", { ascending: false });
+
+      // Percent-type cashbacks that are still pending have no fixed rupee value yet — the
+      // amount depends on the membership fee it's applied against at renewal/closure. Estimate
+      // it off each student's current active membership (monthly_fee * months_paid), the same
+      // base renew_membership/close_membership use, so staff can see roughly what it's worth.
+      const pendingStudentIds = [...new Set(
+        (cashbacks ?? []).filter((c) => c.status === "pending" && c.cashback_type === "percent").map((c) => c.student_id),
+      )];
+      const { data: activeMems } = pendingStudentIds.length
+        ? await db.from("memberships").select("student_id, monthly_fee, months_paid").in("student_id", pendingStudentIds).eq("is_active", true)
+        : { data: [] };
+      const memByStudent = new Map((activeMems ?? []).map((m: { student_id: string; monthly_fee: number; months_paid: number }) => [m.student_id, m]));
+
+      const rows = (cashbacks ?? []).map((c: Record<string, unknown>) => {
+        let estimatedAmount = null;
+        if (c.cashback_type === "fixed") {
+          estimatedAmount = Number(c.cashback_value);
+        } else if (c.status === "pending") {
+          const mem = memByStudent.get(c.student_id as string);
+          if (mem) estimatedAmount = Number(mem.monthly_fee) * Number(mem.months_paid) * (Number(c.cashback_value) / 100);
+        } else {
+          estimatedAmount = c.redeemed_amount != null ? Number(c.redeemed_amount) : null;
+        }
+        return {
+          id: c.id,
+          studentId: c.student_id,
+          studentName: (c.students as { name?: string } | null)?.name ?? "-",
+          studentPhone: (c.students as { phone?: string } | null)?.phone ?? "-",
+          monthLabel: c.month_label,
+          cashbackType: c.cashback_type,
+          cashbackValue: c.cashback_value,
+          estimatedAmount,
+          status: c.status,
+          redeemedAmount: c.redeemed_amount,
+          redeemedAt: c.redeemed_at,
+          notes: c.notes,
+          createdAt: c.created_at,
+        };
+      });
+
+      return json({ cashbacks: rows });
+    }
+
     if (action === "record_locker_payment") {
       const { lockerId, amount, paymentMode } = payload;
       const { data: locker } = await db.from("lockers").select("*").eq("id", lockerId).single();
@@ -1230,6 +1283,13 @@ Deno.serve(async (req) => {
       if (!requireBranch(staff, branchId)) return err("Branch access denied", 403);
       const amt = Number(amount);
       if (!(amt > 0)) return err("Top-up amount must be greater than 0");
+
+      // Same eligibility rule as cashback — a currently active membership, not just having
+      // held one at some point (so a walk-in, or a student whose membership has since ended,
+      // can't top up a Food Pass).
+      const { count: activeMembershipCount } = await db.from("memberships")
+        .select("*", { count: "exact", head: true }).eq("student_id", studentId).eq("is_active", true);
+      if (!activeMembershipCount) return err("Food Pass is only available to students with an active membership");
 
       const { data: existing } = await db.from("food_passes").select("*").eq("student_id", studentId).maybeSingle();
       let newBalance;
@@ -1757,6 +1817,34 @@ Deno.serve(async (req) => {
         username, password_hash: hash, role: role ?? "staff",
         display_name: displayName, branch_id: branchId,
       });
+      if (error) return err(error.message);
+      return json({ ok: true });
+    }
+
+    // Edit an existing staff account's credentials/branch, or toggle is_active.
+    // verify_staff_login already requires is_active = true, so deactivating here
+    // immediately blocks that account from signing in — and authStaff() re-checks
+    // is_active on every request, so an already-issued token stops working too.
+    if (action === "update_staff") {
+      if (!isOwner(staff)) return err("Owner only", 403);
+      const { staffId, username, newPassword, displayName, branchId, isActive } = payload;
+      if (!staffId) return err("Staff ID required");
+      const { data: target } = await db.from("staff").select("id, role").eq("id", staffId).single();
+      if (!target) return err("Staff not found");
+      if (target.role === "owner") return err("Owner accounts can't be edited here");
+      if (staffId === staff.id) return err("You can't edit your own account from here");
+
+      const updates: Record<string, unknown> = { updated_at: new Date().toISOString() };
+      if (username !== undefined && username !== "") updates.username = username;
+      if (displayName !== undefined) updates.display_name = displayName;
+      if (branchId !== undefined && branchId !== "") updates.branch_id = branchId;
+      if (isActive !== undefined) updates.is_active = isActive;
+      if (newPassword) {
+        const { data: hash } = await db.rpc("hash_staff_password", { plain_password: newPassword });
+        updates.password_hash = hash;
+      }
+
+      const { error } = await db.from("staff").update(updates).eq("id", staffId);
       if (error) return err(error.message);
       return json({ ok: true });
     }

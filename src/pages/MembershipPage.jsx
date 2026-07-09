@@ -2,7 +2,7 @@ import { useState, useEffect, useCallback } from 'react'
 import { useNavigate, Link } from 'react-router-dom'
 import { useAuth } from '../context/AuthContext'
 import { api } from '../lib/api'
-import { formatCurrency, formatDate, formatDateTime, getMultiMonthDiscount, todayISO, openWhatsApp } from '../lib/utils'
+import { formatCurrency, formatDate, getMultiMonthDiscount, todayISO, openWhatsApp } from '../lib/utils'
 
 // Fallback packages — used only until live rates are fetched from fee_config (Branch Settings)
 const DEFAULT_TEMP_PACKAGES = [
@@ -66,6 +66,17 @@ function ActiveMembersTab({ branchId, tempPackages, permPackages }) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [renewCategory, renewModal])
 
+  // DD/MM/YYYY, matching the study-report template's date format
+  const fmtDMY = (d) => `${String(d.getDate()).padStart(2, '0')}/${String(d.getMonth() + 1).padStart(2, '0')}/${d.getFullYear()}`
+  // HH:MM:SS — hours are NOT capped at 24 since totals can span many days
+  const fmtHMS = (ms) => {
+    const totalSeconds = Math.max(0, Math.floor(ms / 1000))
+    const h = Math.floor(totalSeconds / 3600)
+    const mi = Math.floor((totalSeconds % 3600) / 60)
+    const s = totalSeconds % 60
+    return `${String(h).padStart(2, '0')}:${String(mi).padStart(2, '0')}:${String(s).padStart(2, '0')}`
+  }
+
   const sendAttendanceWhatsApp = async (m) => {
     setWaLoadingId(m.membership_id)
     try {
@@ -75,17 +86,33 @@ function ActiveMembersTab({ branchId, tempPackages, permPackages }) {
         .filter(b => new Date(b.start_time) >= cutoff)
         .sort((a, b) => new Date(a.start_time) - new Date(b.start_time))
 
-      let details = 'No attendance in the last 15 days.'
-      if (recent.length) {
-        details = recent.map(b => {
-          const checkIn = formatDateTime(b.start_time)
-          const checkOut = b.status === 'completed' && b.end_time
-            ? new Date(b.end_time).toLocaleTimeString('en-IN', { hour: 'numeric', minute: '2-digit', hour12: true })
-            : 'Still checked in'
-          return `• ${checkIn} → ${checkOut}`
-        }).join('\n')
+      let message
+      if (!recent.length) {
+        message = `Hi *${m.student_name}*...\n\nNo study attendance was recorded in the last 15 days at Perfect Study Space.\n\n-Perfect Study Space`
+      } else {
+        // Sum duration studied per calendar day (a still-active session counts up to now)
+        const now = Date.now()
+        const byDay = new Map()
+        for (const b of recent) {
+          const start = new Date(b.start_time)
+          const end = (b.status === 'completed' && b.end_time) ? new Date(b.end_time) : new Date(now)
+          const durationMs = Math.max(0, end - start)
+          const dayKey = fmtDMY(start)
+          byDay.set(dayKey, (byDay.get(dayKey) || 0) + durationMs)
+        }
+        const days = [...byDay.entries()]
+        const totalMs = days.reduce((sum, [, ms]) => sum + ms, 0)
+        const avgHoursPerDay = (totalMs / 3_600_000) / days.length
+
+        const lines = days.map(([day, ms]) => `${day} - ${fmtHMS(ms)} Hrs`).join('\n')
+
+        message = `Hi *${m.student_name}*...\n\n`
+          + `Here is your study report from *${days[0][0]}* to *${days[days.length - 1][0]}*\n\n`
+          + `${lines}\n\n`
+          + `Total Hours = *${fmtHMS(totalMs)} Hrs*\n\n`
+          + `Average Hours/Day = *${avgHoursPerDay.toFixed(2)} Hrs*\n\n`
+          + `-Perfect Study Space`
       }
-      const message = `Hi ${m.student_name}, here is your attendance for the last 15 days at Perfect Study Space:\n\n${details}`
       openWhatsApp(m.student_phone, message)
     } catch {
       window.alert('Could not load attendance details — please try again.')

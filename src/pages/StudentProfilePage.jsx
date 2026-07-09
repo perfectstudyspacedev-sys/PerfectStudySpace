@@ -541,7 +541,9 @@ export default function StudentProfilePage() {
           </div>
         )}
 
-        {/* Food Pass */}
+        {/* Food Pass — only for students with a currently active membership (not walk-ins),
+            same rule as Cashback so the two features are consistent. */}
+        {activeMem && (
         <div className="card">
           <h3 style={{ color: 'var(--accent)', marginBottom: '0.75rem' }}>🎫 Food Pass</h3>
           <p className="mono" style={{ fontSize: '1.1rem', fontWeight: 700, color: foodPass && Number(foodPass.balance) < 0 ? '#ff8888' : '#4ade80', marginBottom: '0.5rem' }}>
@@ -578,6 +580,7 @@ export default function StudentProfilePage() {
             {foodPassLoading ? 'Topping up…' : 'Top Up'}
           </button>
         </div>
+        )}
 
         {/* Locker */}
         <div className="card">

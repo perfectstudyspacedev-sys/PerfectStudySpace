@@ -2,7 +2,7 @@ import { useState, useEffect, useCallback, useMemo } from 'react'
 import { Link } from 'react-router-dom'
 import { useAuth } from '../context/AuthContext'
 import { api } from '../lib/api'
-import { exportToCSV, formatDate } from '../lib/utils'
+import { exportToCSV, formatDate, formatCurrency } from '../lib/utils'
 
 const COLUMNS = [
   { key: 'sNo', label: 'S.No' },
@@ -96,6 +96,22 @@ export default function StudentsPage() {
     api('get_top_students', { branchId, sortBy: topSortBy, period: topPeriod }).then(d => setTopStudents(d.students ?? []))
   }, [tab, branchId, topPeriod, topSortBy])
 
+  const [cashbacks, setCashbacks] = useState([])
+  const [cashbacksLoading, setCashbacksLoading] = useState(false)
+  const [cashbackStatusFilter, setCashbackStatusFilter] = useState('')
+  useEffect(() => {
+    if (tab !== 'cashbacks' || !branchId) return
+    setCashbacksLoading(true)
+    api('list_cashbacks', { branchId })
+      .then(d => setCashbacks(d.cashbacks ?? []))
+      .finally(() => setCashbacksLoading(false))
+  }, [tab, branchId])
+
+  const filteredCashbacks = useMemo(() => {
+    if (!cashbackStatusFilter) return cashbacks
+    return cashbacks.filter(c => c.status === cashbackStatusFilter)
+  }, [cashbacks, cashbackStatusFilter])
+
   const openCashback = (student) => {
     setCashbackTarget(student)
     setCashbackType('percent')
@@ -135,6 +151,7 @@ export default function StudentsPage() {
       <div className="tabs">
         <button type="button" className={tab === 'list' ? 'active' : ''} onClick={() => setTab('list')}>Spreadsheet View</button>
         <button type="button" className={tab === 'loyalty' ? 'active' : ''} onClick={() => setTab('loyalty')}>Top Students</button>
+        <button type="button" className={tab === 'cashbacks' ? 'active' : ''} onClick={() => setTab('cashbacks')}>Cashback</button>
       </div>
 
       {tab === 'list' && (
@@ -250,6 +267,52 @@ export default function StudentsPage() {
               ))}
             </tbody>
           </table>
+        </div>
+      )}
+
+      {tab === 'cashbacks' && (
+        <div className="card">
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1rem', flexWrap: 'wrap', gap: '0.75rem' }}>
+            <h2 style={{ color: 'var(--accent)' }}>Cashback</h2>
+            <div className="period-toggle">
+              {[{ v: '', l: 'All' }, { v: 'pending', l: 'Yet to Avail' }, { v: 'redeemed', l: 'Redeemed' }, { v: 'settled', l: 'Settled' }].map(({ v, l }) => (
+                <button key={v} type="button" className={cashbackStatusFilter === v ? 'active' : ''} onClick={() => setCashbackStatusFilter(v)}>{l}</button>
+              ))}
+            </div>
+          </div>
+          {cashbacksLoading ? <p>Loading…</p> : (
+            <table className="data-table">
+              <thead>
+                <tr><th>Name</th><th>Phone</th><th>Month</th><th>Cashback</th><th>Status</th><th>Redeemed</th><th>Notes</th></tr>
+              </thead>
+              <tbody>
+                {filteredCashbacks.map(c => (
+                  <tr key={c.id}>
+                    <td><Link to={`/students/${c.studentId}`} style={{ color: 'var(--accent)' }}>{c.studentName}</Link></td>
+                    <td className="mono">{c.studentPhone}</td>
+                    <td>{c.monthLabel ?? '-'}</td>
+                    <td className="mono">
+                      {c.cashbackType === 'percent'
+                        ? `${c.cashbackValue}%${c.estimatedAmount != null ? ` (${c.status === 'pending' ? '~' : ''}${formatCurrency(c.estimatedAmount)})` : ''}`
+                        : formatCurrency(c.cashbackValue)}
+                    </td>
+                    <td>
+                      <span className={`badge ${c.status === 'pending' ? 'badge-pending' : 'badge-active'} cap`}>
+                        {c.status === 'pending' ? 'Yet to Avail' : c.status}
+                      </span>
+                    </td>
+                    <td>
+                      {c.redeemedAt ? `${formatCurrency(c.redeemedAmount)} · ${formatDate(c.redeemedAt)}` : '-'}
+                    </td>
+                    <td>{c.notes ?? '-'}</td>
+                  </tr>
+                ))}
+                {!filteredCashbacks.length && (
+                  <tr><td colSpan={7} style={{ textAlign: 'center', color: 'var(--text-muted)' }}>No cashback records found.</td></tr>
+                )}
+              </tbody>
+            </table>
+          )}
         </div>
       )}
 

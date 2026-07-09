@@ -12,12 +12,10 @@ function autoShift() {
   return 'night'
 }
 
-const WALKIN_HOUR_OPTIONS = [1, 2, 3, 4, 5, 6, 8, 12]
+const WALKIN_HOUR_OPTIONS = [3, 4, 5, 6, 7, 8, 9, 12]
+const WALKIN_FEES = { 3: 35, 4: 45, 5: 55, 6: 60, 7: 70, 8: 80, 9: 90, 12: 100 }
 function walkinFee(hours) {
-  if (hours <= 3) return 35
-  if (hours <= 6) return 60
-  if (hours <= 8) return 80
-  return 100
+  return WALKIN_FEES[hours] ?? 100
 }
 
 // Walk-in modal — name/phone autocomplete + hourly booking, no page navigation

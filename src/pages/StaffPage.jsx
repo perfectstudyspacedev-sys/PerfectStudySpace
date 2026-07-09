@@ -41,6 +41,14 @@ export default function StaffPage() {
   const [error, setError] = useState('')
   const [saving, setSaving] = useState(false)
 
+  const [editTarget, setEditTarget] = useState(null)
+  const [editUsername, setEditUsername] = useState('')
+  const [editDisplayName, setEditDisplayName] = useState('')
+  const [editBranchId, setEditBranchId] = useState('')
+  const [editPassword, setEditPassword] = useState('')
+  const [editError, setEditError] = useState('')
+  const [editSaving, setEditSaving] = useState(false)
+
   const load = useCallback(async () => {
     const [s, b] = await Promise.all([api('list_staff'), api('list_branches')])
     setStaffList(s.staff ?? [])
@@ -76,6 +84,44 @@ export default function StaffPage() {
       setError(err.message)
     } finally {
       setSaving(false)
+    }
+  }
+
+  const openEdit = (s) => {
+    setEditTarget(s)
+    setEditUsername(s.username)
+    setEditDisplayName(s.display_name || '')
+    setEditBranchId(s.branch_id || '')
+    setEditPassword('')
+    setEditError('')
+  }
+
+  const handleEditSave = async () => {
+    if (!editTarget) return
+    setEditSaving(true)
+    setEditError('')
+    try {
+      await api('update_staff', {
+        staffId: editTarget.id, username: editUsername, displayName: editDisplayName,
+        branchId: editBranchId, newPassword: editPassword || undefined,
+      })
+      setEditTarget(null)
+      load()
+    } catch (err) {
+      setEditError(err.message)
+    } finally {
+      setEditSaving(false)
+    }
+  }
+
+  const toggleActive = async (s) => {
+    const verb = s.is_active ? 'deactivate' : 'reactivate'
+    if (!window.confirm(`Are you sure you want to ${verb} ${s.display_name || s.username}?`)) return
+    try {
+      await api('update_staff', { staffId: s.id, isActive: !s.is_active })
+      load()
+    } catch (err) {
+      window.alert(err.message)
     }
   }
 
@@ -121,21 +167,42 @@ export default function StaffPage() {
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(240px, 1fr))', gap: '0.75rem' }}>
             {filteredStaff.map(s => (
               <div key={s.id} style={{
-                display: 'flex', justifyContent: 'space-between', alignItems: 'center',
+                display: 'flex', flexDirection: 'column', gap: '0.6rem',
                 padding: '0.75rem 0.9rem', borderRadius: 8,
                 background: '#141414', border: `1px solid ${s.is_active ? '#2c2c2c' : 'rgba(255,60,60,0.3)'}`,
                 opacity: s.is_active ? 1 : 0.6,
               }}>
-                <div>
-                  <strong style={{ fontSize: '0.9rem' }}>{s.display_name || s.username}</strong>
-                  <div style={{ display: 'flex', gap: '0.4rem', alignItems: 'center', marginTop: '0.2rem' }}>
-                    <span className="mono" style={{ fontSize: '0.72rem', color: 'var(--text-muted)', textTransform: 'uppercase' }}>{s.role}</span>
-                    {s.branches?.name && (
-                      <span style={{ fontSize: '0.72rem', color: 'var(--accent)' }}>· {s.branches.name}</span>
-                    )}
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                  <div>
+                    <strong style={{ fontSize: '0.9rem' }}>{s.display_name || s.username}</strong>
+                    <div style={{ display: 'flex', gap: '0.4rem', alignItems: 'center', marginTop: '0.2rem' }}>
+                      <span className="mono" style={{ fontSize: '0.72rem', color: 'var(--text-muted)', textTransform: 'uppercase' }}>{s.role}</span>
+                      {s.branches?.name && (
+                        <span style={{ fontSize: '0.72rem', color: 'var(--accent)' }}>· {s.branches.name}</span>
+                      )}
+                    </div>
                   </div>
+                  <span className={`badge badge-${s.is_active ? 'active' : 'inactive'}`}>{s.is_active ? 'Active' : 'Inactive'}</span>
                 </div>
-                <span className={`badge badge-${s.is_active ? 'active' : 'inactive'}`}>{s.is_active ? 'Active' : 'Inactive'}</span>
+                {s.role !== 'owner' && (
+                  <div style={{ display: 'flex', gap: '0.4rem' }}>
+                    <button type="button" className="btn btn-ghost" style={{ flex: 1, padding: '0.35rem', fontSize: '0.75rem' }} onClick={() => openEdit(s)}>
+                      Edit
+                    </button>
+                    <button
+                      type="button"
+                      style={{
+                        flex: 1, padding: '0.35rem', fontSize: '0.75rem', borderRadius: 4, cursor: 'pointer',
+                        background: s.is_active ? 'rgba(255,60,60,0.08)' : 'rgba(74,222,128,0.08)',
+                        border: `1px solid ${s.is_active ? 'rgba(255,60,60,0.35)' : 'rgba(74,222,128,0.35)'}`,
+                        color: s.is_active ? '#ff8888' : '#4ade80',
+                      }}
+                      onClick={() => toggleActive(s)}
+                    >
+                      {s.is_active ? 'Deactivate' : 'Reactivate'}
+                    </button>
+                  </div>
+                )}
               </div>
             ))}
           </div>
@@ -188,6 +255,40 @@ export default function StaffPage() {
           </div>
         )}
       </div>
+
+      {editTarget && (
+        <div className="modal-overlay" onClick={() => setEditTarget(null)}>
+          <div className="modal" style={{ maxWidth: 420 }} onClick={(e) => e.stopPropagation()}>
+            <h2>Edit Staff — {editTarget.display_name || editTarget.username}</h2>
+            <div className="form-group">
+              <label>Username</label>
+              <input value={editUsername} onChange={(e) => setEditUsername(e.target.value)} required />
+            </div>
+            <div className="form-group">
+              <label>Display Name</label>
+              <input value={editDisplayName} onChange={(e) => setEditDisplayName(e.target.value)} />
+            </div>
+            <div className="form-group">
+              <label>Assigned Branch</label>
+              <select value={editBranchId} onChange={(e) => setEditBranchId(e.target.value)}>
+                <option value="">Select branch</option>
+                {branches.map(b => <option key={b.id} value={b.id}>{b.name}</option>)}
+              </select>
+            </div>
+            <div className="form-group">
+              <label>New Password (leave blank to keep current)</label>
+              <input type="password" value={editPassword} onChange={(e) => setEditPassword(e.target.value)} placeholder="••••••••" />
+            </div>
+            {editError && <p className="error-msg">{editError}</p>}
+            <div className="modal-actions">
+              <button type="button" className="btn btn-ghost" onClick={() => setEditTarget(null)}>Cancel</button>
+              <button type="button" className="btn btn-primary" disabled={editSaving} onClick={handleEditSave}>
+                {editSaving ? 'Saving…' : 'Save Changes'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </>
   )
 }
