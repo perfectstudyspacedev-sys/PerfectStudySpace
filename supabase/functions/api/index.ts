@@ -893,7 +893,13 @@ Deno.serve(async (req) => {
         }
       }
 
-      await db.from("bookings").update({ status: "completed", is_paused: false, paused_at: null, total_pause_minutes: 0 }).eq("id", bookingId);
+      // end_time was only ever the *scheduled* end time set at check-in — record the real
+      // checkout time here so attendance history (and anything reading end_time) is accurate,
+      // especially when the student stayed into overtime.
+      await db.from("bookings").update({
+        status: "completed", end_time: new Date().toISOString(),
+        is_paused: false, paused_at: null, total_pause_minutes: 0,
+      }).eq("id", bookingId);
 
       if (booking.desk_id) {
         const { data: desk } = await db.from("desks").select("seat_type").eq("id", booking.desk_id).single();
@@ -1026,7 +1032,7 @@ Deno.serve(async (req) => {
       if (!requireBranch(staff, student.branch_id)) return err("Branch access denied", 403);
 
       const { data: memberships } = await db.from("memberships").select("*").eq("student_id", studentId).order("created_at", { ascending: false });
-      const { data: bookings } = await db.from("bookings").select("*, desks(label)").eq("student_id", studentId).order("created_at", { ascending: false }).limit(50);
+      const { data: bookings } = await db.from("bookings").select("*, desks!desk_id(label)").eq("student_id", studentId).order("created_at", { ascending: false }).limit(50);
       const { data: transactions } = await db.from("transactions").select("*").eq("student_id", studentId).order("created_at", { ascending: false }).limit(50);
       const { data: locker } = await db.from("lockers").select("*").eq("student_id", studentId).eq("is_active", true).maybeSingle();
       const { data: overtimeSessions } = await db.from("overtime_sessions").select("*").eq("student_id", studentId).order("session_date", { ascending: false }).limit(50);

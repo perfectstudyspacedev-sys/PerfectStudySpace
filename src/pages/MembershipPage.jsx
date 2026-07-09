@@ -2,7 +2,7 @@ import { useState, useEffect, useCallback } from 'react'
 import { useNavigate, Link } from 'react-router-dom'
 import { useAuth } from '../context/AuthContext'
 import { api } from '../lib/api'
-import { formatCurrency, formatDate, getMultiMonthDiscount, todayISO, openWhatsApp } from '../lib/utils'
+import { formatCurrency, formatDate, formatDateTime, getMultiMonthDiscount, todayISO, openWhatsApp } from '../lib/utils'
 
 // Fallback packages — used only until live rates are fetched from fee_config (Branch Settings)
 const DEFAULT_TEMP_PACKAGES = [
@@ -42,6 +42,7 @@ function ActiveMembersTab({ branchId, tempPackages, permPackages }) {
   const [closePayMode, setClosePayMode] = useState('cash')
   const [cashbackNotice, setCashbackNotice] = useState(null)
   const [settlementNotice, setSettlementNotice] = useState(null)
+  const [waLoadingId, setWaLoadingId] = useState(null)
 
   const load = useCallback(async () => {
     if (!branchId) return
@@ -64,6 +65,34 @@ function ActiveMembersTab({ branchId, tempPackages, permPackages }) {
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [renewCategory, renewModal])
+
+  const sendAttendanceWhatsApp = async (m) => {
+    setWaLoadingId(m.membership_id)
+    try {
+      const { bookings } = await api('get_student_profile', { studentId: m.student_id })
+      const cutoff = new Date(Date.now() - 15 * 86_400_000)
+      const recent = (bookings ?? [])
+        .filter(b => new Date(b.start_time) >= cutoff)
+        .sort((a, b) => new Date(a.start_time) - new Date(b.start_time))
+
+      let details = 'No attendance in the last 15 days.'
+      if (recent.length) {
+        details = recent.map(b => {
+          const checkIn = formatDateTime(b.start_time)
+          const checkOut = b.status === 'completed' && b.end_time
+            ? new Date(b.end_time).toLocaleTimeString('en-IN', { hour: 'numeric', minute: '2-digit', hour12: true })
+            : 'Still checked in'
+          return `• ${checkIn} → ${checkOut}`
+        }).join('\n')
+      }
+      const message = `Hi ${m.student_name}, here is your attendance for the last 15 days at Perfect Study Space:\n\n${details}`
+      openWhatsApp(m.student_phone, message)
+    } catch {
+      window.alert('Could not load attendance details — please try again.')
+    } finally {
+      setWaLoadingId(null)
+    }
+  }
 
   const handleHold = async (membershipId) => {
     setActionLoading(membershipId + ':hold')
@@ -347,6 +376,15 @@ function ActiveMembersTab({ branchId, tempPackages, permPackages }) {
                             >⏸ Hold</button>
                           )}
                         </>
+                      )}
+                      {m.student_phone && (
+                        <button
+                          type="button"
+                          title="Send attendance details via WhatsApp"
+                          style={{ padding: '0.3rem 0.6rem', fontSize: '0.8rem', background: 'rgba(74,222,128,0.08)', border: '1px solid rgba(74,222,128,0.4)', color: '#4ade80', borderRadius: 4, cursor: 'pointer', fontWeight: 600 }}
+                          disabled={waLoadingId === m.membership_id}
+                          onClick={() => sendAttendanceWhatsApp(m)}
+                        >{waLoadingId === m.membership_id ? '…' : '💬'}</button>
                       )}
                     </div>
                   </td>
