@@ -66,6 +66,7 @@ export default function ReportsPage() {
   }
 
   const actionableRows = buildActionableRows(actionable)
+  const totalPendingDue = actionableRows.reduce((sum, r) => sum + Number(r.amount || 0), 0)
 
   const exportDaily = () => {
     if (!report) return
@@ -127,6 +128,12 @@ export default function ReportsPage() {
               <div className="card stat-card">
                 <div className="value">{report.transactions?.length ?? 0}</div>
                 <div className="label">Transactions</div>
+              </div>
+            )}
+            {isOwner && (
+              <div className="card stat-card">
+                <div className="value" style={{ color: totalPendingDue > 0 ? '#ff8888' : undefined }}>{formatCurrency(totalPendingDue)}</div>
+                <div className="label">Pending Due</div>
               </div>
             )}
           </div>
@@ -205,7 +212,14 @@ export default function ReportsPage() {
 
       {actionable && (
         <div className="card">
-          <h3 style={{ color: 'var(--accent)', marginBottom: '0.75rem' }}>Actionable Items (Today)</h3>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', flexWrap: 'wrap', gap: '0.5rem', marginBottom: '0.75rem' }}>
+            <h3 style={{ color: 'var(--accent)' }}>Actionable Items (Today)</h3>
+            {totalPendingDue > 0 && (
+              <span className="mono" style={{ color: '#ff8888', fontWeight: 700, fontSize: '0.95rem' }}>
+                Total Pending Due: {formatCurrency(totalPendingDue)}
+              </span>
+            )}
+          </div>
           {actionableRows.length === 0 ? (
             <p style={{ color: 'var(--text-muted)' }}>All clear — no urgent follow-ups.</p>
           ) : (

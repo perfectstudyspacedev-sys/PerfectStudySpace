@@ -68,16 +68,16 @@ function EndedAlerts({ alerts, onDismiss }) {
   )
 }
 
-// ── Edit start time / hours for a booking already in progress ─────────────
-function toLocalDateTimeInput(isoString) {
+// ── Edit check-in time for a booking already in progress — time only, the date and
+// booked hours stay fixed to what was recorded at check-in ────────────────────────
+function toLocalTimeInput(isoString) {
   const d = new Date(isoString)
   const pad = (n) => String(n).padStart(2, '0')
-  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`
+  return `${pad(d.getHours())}:${pad(d.getMinutes())}`
 }
 
 function EditStartTimeModal({ booking, onClose, onDone }) {
-  const [startTime, setStartTime] = useState(toLocalDateTimeInput(booking.start_time))
-  const [hours, setHours] = useState(booking.hours ?? '')
+  const [time, setTime] = useState(toLocalTimeInput(booking.start_time))
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState('')
 
@@ -85,10 +85,12 @@ function EditStartTimeModal({ booking, onClose, onDone }) {
     setLoading(true)
     setError('')
     try {
+      const [h, m] = time.split(':').map(Number)
+      const newStart = new Date(booking.start_time)
+      newStart.setHours(h, m, 0, 0)
       await api('update_attendance', {
         bookingId: booking.id,
-        startTime: new Date(startTime).toISOString(),
-        hours,
+        startTime: newStart.toISOString(),
       })
       onDone()
     } catch (err) {
@@ -101,17 +103,12 @@ function EditStartTimeModal({ booking, onClose, onDone }) {
   return (
     <div className="modal-overlay" onClick={onClose}>
       <div className="modal" style={{ maxWidth: 400 }} onClick={(e) => e.stopPropagation()}>
-        <h2>Edit Check-in</h2>
+        <h2>Edit Check-in Time</h2>
         <p style={{ color: 'var(--text-muted)', marginBottom: '1rem' }}>{booking.students?.name}</p>
 
         <div className="form-group">
-          <label>Start Time</label>
-          <input type="datetime-local" value={startTime} onChange={(e) => setStartTime(e.target.value)} />
-        </div>
-
-        <div className="form-group">
-          <label>Hours</label>
-          <input type="number" min={0} step={0.5} value={hours} onChange={(e) => setHours(e.target.value)} />
+          <label>Check-in Time</label>
+          <input type="time" value={time} onChange={(e) => setTime(e.target.value)} />
         </div>
 
         {error && <p className="error-msg">{error}</p>}
@@ -157,7 +154,9 @@ function CheckoutModal({ booking, onConfirm, onCancel, loading }) {
   const membership = booking.memberships
   const membershipDue = membership ? Number(membership.fee_due ?? 0) : 0
   const isExpiredUnrenewed = !!membership && membership.end_date < todayISO()
-  const memberDueNow = unpaidFoodTotal // overtime for members is settled later, not at checkout
+  const hasFoodPass = !isWalkin && !!booking.hasFoodPass
+  // A Food Pass holder's food is auto-deducted at checkout — nothing to "collect" from them.
+  const memberDueNow = hasFoodPass ? 0 : unpaidFoodTotal
   const canClose = !isExpiredUnrenewed || membershipDue <= 0
 
   return (
@@ -205,7 +204,12 @@ function CheckoutModal({ booking, onConfirm, onCancel, loading }) {
           ) : (
             <>
               {paidFoodTotal > 0 && <p className="mono" style={{ color: '#4ade80' }}>Food bill (paid separately): {formatCurrency(paidFoodTotal)}</p>}
-              {unpaidFoodTotal > 0 && (
+              {unpaidFoodTotal > 0 && hasFoodPass && (
+                <p className="mono" style={{ color: '#4ade80', fontWeight: 700 }}>
+                  🎫 {formatCurrency(unpaidFoodTotal)} will be settled from Food Pass
+                </p>
+              )}
+              {unpaidFoodTotal > 0 && !hasFoodPass && (
                 <>
                   <p className="mono" style={{ color: '#ff8888', fontWeight: 700 }}>Food bill (pending): {formatCurrency(unpaidFoodTotal)}</p>
                   <p style={{ fontSize: '0.78rem', color: 'var(--text-muted)', marginTop: '0.2rem' }}>
@@ -281,6 +285,9 @@ function FoodOrderModal({ branchId, booking, onClose, onDone }) {
   const [foodPass, setFoodPass] = useState(null)
   const [payChoice, setPayChoice] = useState('later')
   const [payMode, setPayMode] = useState('cash')
+  const [negativeBalance, setNegativeBalance] = useState(null)
+  const [collectMode, setCollectMode] = useState('cash')
+  const [collecting, setCollecting] = useState(false)
 
   useEffect(() => {
     api('list_food_items', { branchId }).then(d => setItems((d.items ?? []).filter(i => i.is_active)))
@@ -316,19 +323,72 @@ function FoodOrderModal({ branchId, booking, onClose, onDone }) {
     setSaving(true)
     setError('')
     try {
-      await api('create_food_bill', {
+      const res = await api('create_food_bill', {
         branchId, studentId: booking.student_id, studentName: booking.students?.name ?? null,
         studentPhone: booking.students?.phone ?? null, bookingId: booking.id,
         items: orders.map(o => ({ foodItemId: o.foodItemId, quantity: o.quantity })),
-        paymentMode: isMember && payChoice === 'now' ? payMode : undefined,
-        useFoodPass: isMember && payChoice === 'pass',
+        paymentMode: isMember && !foodPass && payChoice === 'now' ? payMode : undefined,
       })
-      onDone()
+      if (res.foodPassBalance != null && res.foodPassBalance < 0) {
+        setNegativeBalance(-res.foodPassBalance)
+      } else {
+        onDone()
+      }
     } catch (err) {
       setError(err.message)
     } finally {
       setSaving(false)
     }
+  }
+
+  const handleCollectShortfall = async () => {
+    setCollecting(true)
+    try {
+      await api('topup_food_pass', {
+        studentId: booking.student_id, branchId, amount: negativeBalance, paymentMode: collectMode,
+      })
+      onDone()
+    } catch (err) {
+      setError(err.message)
+    } finally {
+      setCollecting(false)
+    }
+  }
+
+  if (negativeBalance != null) {
+    return (
+      <div className="modal-overlay" onClick={onDone}>
+        <div className="modal" style={{ maxWidth: 400 }} onClick={(e) => e.stopPropagation()}>
+          <h2>🎫 Food Pass Balance Negative</h2>
+          <p style={{ color: 'var(--text-muted)', marginBottom: '1rem' }}>{booking.students?.name}</p>
+          <div className="card" style={{ marginBottom: '1rem', background: 'rgba(255,60,60,0.06)' }}>
+            <p className="mono" style={{ color: '#ff8888', fontSize: '1.2rem', fontWeight: 700 }}>
+              -{formatCurrency(negativeBalance)}
+            </p>
+            <p style={{ fontSize: '0.85rem', color: 'var(--text-muted)', marginTop: '0.5rem' }}>
+              The order was placed, but the Food Pass balance is now negative. Collect this amount from the student now, or skip and settle it later.
+            </p>
+          </div>
+          <div className="form-group">
+            <label>Mode</label>
+            <div style={{ display: 'flex', gap: '0.5rem' }}>
+              {[{ value: 'cash', label: '💵 Cash' }, { value: 'upi', label: '📱 UPI' }].map(({ value, label }) => (
+                <button key={value} type="button" onClick={() => setCollectMode(value)}
+                  style={{ flex: 1, padding: '0.5rem', border: `1px solid ${collectMode === value ? 'var(--accent)' : '#333'}`, borderRadius: 4, background: collectMode === value ? 'rgba(255,215,0,0.08)' : '#141414', color: collectMode === value ? 'var(--accent)' : 'var(--text-muted)', cursor: 'pointer', fontWeight: 600 }}
+                >{label}</button>
+              ))}
+            </div>
+          </div>
+          {error && <p className="error-msg">{error}</p>}
+          <div className="modal-actions">
+            <button type="button" className="btn btn-ghost" onClick={onDone}>Skip for Now</button>
+            <button type="button" className="btn btn-primary" disabled={collecting} onClick={handleCollectShortfall}>
+              {collecting ? 'Collecting…' : `Collect ${formatCurrency(negativeBalance)}`}
+            </button>
+          </div>
+        </div>
+      </div>
+    )
   }
 
   return (
@@ -373,45 +433,51 @@ function FoodOrderModal({ branchId, booking, onClose, onDone }) {
           </div>
         )}
         {isMember ? (
-          <>
+          foodPass ? (
             <div className="form-group">
-              <label>Payment</label>
-              <div style={{ display: 'flex', gap: '0.4rem', flexWrap: 'wrap' }}>
-                {foodPass && (
-                  <button type="button" onClick={() => setPayChoice('pass')}
-                    style={{ flex: '1 0 auto', padding: '0.5rem 0.7rem', fontSize: '0.82rem', fontWeight: 600, cursor: 'pointer', borderRadius: 4, border: `1px solid ${payChoice === 'pass' ? 'var(--accent)' : '#333'}`, background: payChoice === 'pass' ? 'rgba(255,215,0,0.08)' : '#141414', color: payChoice === 'pass' ? 'var(--accent)' : 'var(--text-muted)' }}
-                  >🎫 Food Pass ({formatCurrency(Number(foodPass.balance))})</button>
+              <div style={{ padding: '0.65rem 0.8rem', background: 'rgba(255,215,0,0.06)', border: '1px solid rgba(255,215,0,0.25)', borderRadius: 6 }}>
+                <p style={{ fontSize: '0.85rem', fontWeight: 700, color: 'var(--accent)' }}>🎫 Paying via Food Pass</p>
+                <p style={{ fontSize: '0.78rem', color: 'var(--text-muted)', marginTop: '0.2rem' }}>
+                  Current balance: {formatCurrency(Number(foodPass.balance))}
+                </p>
+                {Number(foodPass.balance) - total < 0 && (
+                  <p style={{ fontSize: '0.78rem', color: '#ffaa44', marginTop: '0.3rem' }}>
+                    This will take the balance negative — you'll be asked to collect the shortfall after saving.
+                  </p>
                 )}
-                <button type="button" onClick={() => setPayChoice('now')}
-                  style={{ flex: '1 0 auto', padding: '0.5rem 0.7rem', fontSize: '0.82rem', fontWeight: 600, cursor: 'pointer', borderRadius: 4, border: `1px solid ${payChoice === 'now' ? 'var(--accent)' : '#333'}`, background: payChoice === 'now' ? 'rgba(255,215,0,0.08)' : '#141414', color: payChoice === 'now' ? 'var(--accent)' : 'var(--text-muted)' }}
-                >Pay Now</button>
-                <button type="button" onClick={() => setPayChoice('later')}
-                  style={{ flex: '1 0 auto', padding: '0.5rem 0.7rem', fontSize: '0.82rem', fontWeight: 600, cursor: 'pointer', borderRadius: 4, border: `1px solid ${payChoice === 'later' ? 'var(--accent)' : '#333'}`, background: payChoice === 'later' ? 'rgba(255,215,0,0.08)' : '#141414', color: payChoice === 'later' ? 'var(--accent)' : 'var(--text-muted)' }}
-                >Pay Later</button>
               </div>
             </div>
-            {payChoice === 'now' && (
+          ) : (
+            <>
               <div className="form-group">
-                <div style={{ display: 'flex', gap: '0.5rem' }}>
-                  {[{ value: 'cash', label: '💵 Cash' }, { value: 'upi', label: '📱 UPI' }].map(({ value, label }) => (
-                    <button key={value} type="button" onClick={() => setPayMode(value)}
-                      style={{ flex: 1, padding: '0.5rem', border: `1px solid ${payMode === value ? 'var(--accent)' : '#333'}`, borderRadius: 4, background: payMode === value ? 'rgba(255,215,0,0.08)' : '#141414', color: payMode === value ? 'var(--accent)' : 'var(--text-muted)', cursor: 'pointer', fontWeight: 600 }}
-                    >{label}</button>
-                  ))}
+                <label>Payment</label>
+                <div style={{ display: 'flex', gap: '0.4rem', flexWrap: 'wrap' }}>
+                  <button type="button" onClick={() => setPayChoice('now')}
+                    style={{ flex: '1 0 auto', padding: '0.5rem 0.7rem', fontSize: '0.82rem', fontWeight: 600, cursor: 'pointer', borderRadius: 4, border: `1px solid ${payChoice === 'now' ? 'var(--accent)' : '#333'}`, background: payChoice === 'now' ? 'rgba(255,215,0,0.08)' : '#141414', color: payChoice === 'now' ? 'var(--accent)' : 'var(--text-muted)' }}
+                  >Pay Now</button>
+                  <button type="button" onClick={() => setPayChoice('later')}
+                    style={{ flex: '1 0 auto', padding: '0.5rem 0.7rem', fontSize: '0.82rem', fontWeight: 600, cursor: 'pointer', borderRadius: 4, border: `1px solid ${payChoice === 'later' ? 'var(--accent)' : '#333'}`, background: payChoice === 'later' ? 'rgba(255,215,0,0.08)' : '#141414', color: payChoice === 'later' ? 'var(--accent)' : 'var(--text-muted)' }}
+                  >Pay Later</button>
                 </div>
               </div>
-            )}
-            {payChoice === 'later' && (
-              <p style={{ fontSize: '0.78rem', color: 'var(--text-muted)', marginBottom: '0.75rem' }}>
-                Carried on the student's tab — must be settled within 3 days or checkout will be blocked.
-              </p>
-            )}
-            {payChoice === 'pass' && Number(foodPass?.balance) - total < 0 && (
-              <p style={{ fontSize: '0.78rem', color: '#ffaa44', marginBottom: '0.75rem' }}>
-                This will take the Food Pass balance negative — the student will need to top it up.
-              </p>
-            )}
-          </>
+              {payChoice === 'now' && (
+                <div className="form-group">
+                  <div style={{ display: 'flex', gap: '0.5rem' }}>
+                    {[{ value: 'cash', label: '💵 Cash' }, { value: 'upi', label: '📱 UPI' }].map(({ value, label }) => (
+                      <button key={value} type="button" onClick={() => setPayMode(value)}
+                        style={{ flex: 1, padding: '0.5rem', border: `1px solid ${payMode === value ? 'var(--accent)' : '#333'}`, borderRadius: 4, background: payMode === value ? 'rgba(255,215,0,0.08)' : '#141414', color: payMode === value ? 'var(--accent)' : 'var(--text-muted)', cursor: 'pointer', fontWeight: 600 }}
+                      >{label}</button>
+                    ))}
+                  </div>
+                </div>
+              )}
+              {payChoice === 'later' && (
+                <p style={{ fontSize: '0.78rem', color: 'var(--text-muted)', marginBottom: '0.75rem' }}>
+                  Carried on the student's tab — must be settled within 3 days or checkout will be blocked.
+                </p>
+              )}
+            </>
+          )
         ) : (
           <p style={{ fontSize: '0.78rem', color: 'var(--text-muted)', marginBottom: '0.75rem' }}>
             Payment for this isn't collected now — it's added to the bill and settled (cash/UPI) at final checkout.
@@ -439,6 +505,7 @@ export default function BookingsPage() {
   const [checkoutBooking, setCheckoutBooking] = useState(null)
   const [foodOrderBooking, setFoodOrderBooking] = useState(null)
   const [editBooking, setEditBooking] = useState(null)
+  const [typeFilter, setTypeFilter] = useState('all')
   const notifiedIds = useRef(new Set())
 
   const load = useCallback(async () => {
@@ -510,6 +577,9 @@ export default function BookingsPage() {
   const walkinCount = bookings.filter(b => b.booking_type === 'walkin').length
   const memberCount = bookings.filter(b => b.booking_type !== 'walkin').length
   const pausedCount = bookings.filter(b => b.is_paused).length
+  const filteredBookings = typeFilter === 'walkin' ? bookings.filter(b => b.booking_type === 'walkin')
+    : typeFilter === 'member' ? bookings.filter(b => b.booking_type !== 'walkin')
+    : bookings
 
   return (
     <>
@@ -522,17 +592,32 @@ export default function BookingsPage() {
       {/* Ended-session alerts — persistent until dismissed */}
       <EndedAlerts alerts={endedAlerts} onDismiss={dismissAlert} />
 
-      {/* Summary chips */}
+      {/* Summary chips — click to filter the list below */}
       <div style={{ display: 'flex', gap: '0.6rem', flexWrap: 'wrap', marginBottom: '1rem' }}>
-        <span style={{ padding: '4px 14px', borderRadius: 20, fontSize: '0.8rem', fontWeight: 600, background: 'rgba(255,215,0,0.08)', color: 'var(--accent)', border: '1px solid rgba(255,215,0,0.2)' }}>
-          {walkinCount} Walk-in
-        </span>
-        <span style={{ padding: '4px 14px', borderRadius: 20, fontSize: '0.8rem', fontWeight: 600, background: 'rgba(74,222,128,0.08)', color: '#4ade80', border: '1px solid rgba(74,222,128,0.2)' }}>
-          {memberCount} Member
-        </span>
-        <span style={{ padding: '4px 14px', borderRadius: 20, fontSize: '0.8rem', fontWeight: 600, background: 'rgba(255,255,255,0.04)', color: 'var(--text-muted)', border: '1px solid #333' }}>
+        <button type="button" onClick={() => setTypeFilter('all')} style={{
+          padding: '4px 14px', borderRadius: 20, fontSize: '0.8rem', fontWeight: 600, cursor: 'pointer',
+          background: typeFilter === 'all' ? 'rgba(255,255,255,0.1)' : 'rgba(255,255,255,0.04)',
+          color: typeFilter === 'all' ? 'var(--text)' : 'var(--text-muted)',
+          border: `1px solid ${typeFilter === 'all' ? '#666' : '#333'}`,
+        }}>
           {bookings.length} Total
-        </span>
+        </button>
+        <button type="button" onClick={() => setTypeFilter('walkin')} style={{
+          padding: '4px 14px', borderRadius: 20, fontSize: '0.8rem', fontWeight: 600, cursor: 'pointer',
+          background: typeFilter === 'walkin' ? 'rgba(255,215,0,0.18)' : 'rgba(255,215,0,0.08)',
+          color: 'var(--accent)',
+          border: `1px solid ${typeFilter === 'walkin' ? 'var(--accent)' : 'rgba(255,215,0,0.2)'}`,
+        }}>
+          {walkinCount} Walk-in
+        </button>
+        <button type="button" onClick={() => setTypeFilter('member')} style={{
+          padding: '4px 14px', borderRadius: 20, fontSize: '0.8rem', fontWeight: 600, cursor: 'pointer',
+          background: typeFilter === 'member' ? 'rgba(74,222,128,0.18)' : 'rgba(74,222,128,0.08)',
+          color: '#4ade80',
+          border: `1px solid ${typeFilter === 'member' ? '#4ade80' : 'rgba(74,222,128,0.2)'}`,
+        }}>
+          {memberCount} Member
+        </button>
         {pausedCount > 0 && (
           <span style={{ padding: '4px 14px', borderRadius: 20, fontSize: '0.8rem', fontWeight: 600, background: 'rgba(255,150,0,0.08)', color: '#ffaa44', border: '1px solid rgba(255,150,0,0.2)' }}>
             {pausedCount} On Break
@@ -546,6 +631,10 @@ export default function BookingsPage() {
           <Link to="/" className="btn btn-primary" style={{ marginTop: '0.75rem', display: 'inline-block' }}>
             + New Walk-in (from Dashboard)
           </Link>
+        </div>
+      ) : filteredBookings.length === 0 ? (
+        <div className="card">
+          <p style={{ color: 'var(--text-muted)' }}>No {typeFilter === 'walkin' ? 'walk-in' : 'member'} students currently present.</p>
         </div>
       ) : (
         <div className="card" style={{ padding: 0, overflow: 'hidden' }}>
@@ -561,7 +650,7 @@ export default function BookingsPage() {
               </tr>
             </thead>
             <tbody>
-              {bookings.map(b => {
+              {filteredBookings.map(b => {
                 const isPaused  = !!b.is_paused
                 const isWalkin  = b.booking_type === 'walkin'
                 const totalPauseMs = (b.total_pause_minutes ?? 0) * 60_000

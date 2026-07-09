@@ -47,7 +47,6 @@ export default function BranchSettingsPage() {
   }
 
   const handleRemoveDesk = async (deskId) => {
-    if (!confirm('Remove this desk?')) return
     try {
       await api('remove_desk', { deskId })
       load()

@@ -148,7 +148,7 @@ export default function CombinedHallPage() {
             <>
               <div className="card" style={{ marginBottom: '1rem' }}>
                 <h3 style={{ color: 'var(--accent)', marginBottom: '0.75rem' }}>
-                  Payments Due On/Before {formatDate(pending.date)} — {pending.duePayments.length} student{pending.duePayments.length === 1 ? '' : 's'}
+                  Payments Pending (All Outstanding) — {pending.duePayments.length} student{pending.duePayments.length === 1 ? '' : 's'}
                 </h3>
                 {pending.duePayments.length === 0 ? (
                   <p style={{ color: 'var(--text-muted)' }}>No pending payments.</p>

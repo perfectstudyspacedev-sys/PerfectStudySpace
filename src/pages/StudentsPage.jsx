@@ -236,9 +236,15 @@ export default function StudentsPage() {
                   <td className="mono">{s.total_hours_studied}</td>
                   <td>{s.course ?? '-'}</td>
                   <td>
-                    <button type="button" className="btn btn-ghost" style={{ padding: '0.3rem 0.65rem', fontSize: '0.78rem' }} onClick={() => openCashback(s)}>
-                      🎁 Cashback
-                    </button>
+                    {s.is_member ? (
+                      <button type="button" className="btn btn-ghost" style={{ padding: '0.3rem 0.65rem', fontSize: '0.78rem' }} onClick={() => openCashback(s)}>
+                        🎁 Cashback
+                      </button>
+                    ) : (
+                      <span style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }} title="Only membership students are eligible for cashback">
+                        — Not a member
+                      </span>
+                    )}
                   </td>
                 </tr>
               ))}

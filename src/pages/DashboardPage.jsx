@@ -195,6 +195,22 @@ function CheckInModal({ branchId, onClose, onDone }) {
   const [startTime, setStartTime] = useState(nowTimeStr)
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState('')
+  const [successNotices, setSuccessNotices] = useState(null)
+
+  const lookupPhone = useCallback(async (p) => {
+    if (p.length !== 10) return
+    try {
+      const { student } = await api('lookup_student', { phone: p })
+      if (student?.name) {
+        setName(student.name)
+        setSelectedStudent(student)
+      }
+    } catch { /* ignore */ }
+  }, [])
+
+  useEffect(() => {
+    if (phone.length === 10) lookupPhone(phone)
+  }, [phone, lookupPhone])
 
   useEffect(() => {
     if (selectedStudent && name === selectedStudent.name) return
@@ -235,34 +251,65 @@ function CheckInModal({ branchId, onClose, onDone }) {
         deskId: null, // desk auto-resolved by API for permanent; null for temporary
         startTime: localTimeStrToISO(startTime),
       })
+      const notices = []
       if (result.expiredMembership) {
-        window.alert(`${student.name}'s membership has expired. They've been checked in for today — please prompt them to renew.`)
+        notices.push(`${student.name}'s membership has expired. They've been checked in for today — please prompt them to renew.`)
       }
       if (result.crossBranchVisit) {
-        window.alert(`${student.name} is registered at a different branch — their home branch has been notified of today's visit.`)
+        notices.push(`${student.name} is registered at a different branch — their home branch has been notified of today's visit.`)
       }
-      onDone()
-    } catch (err) {
-      if (err.message.includes('grace period is over')) {
-        window.alert(err.message)
+      if (notices.length) {
+        setSuccessNotices(notices)
+        setLoading(false)
       } else {
-        setError(err.message)
+        onDone()
       }
+    } catch (err) {
+      setError(err.message)
       setLoading(false)
     }
+  }
+
+  if (successNotices) {
+    return (
+      <div className="modal-overlay" onClick={onDone}>
+        <div className="modal" style={{ maxWidth: 400 }} onClick={(e) => e.stopPropagation()}>
+          <h2>Attendance Marked</h2>
+          {successNotices.map((msg, i) => (
+            <div key={i} style={{
+              background: 'rgba(255,150,0,0.08)', border: '1px solid rgba(255,150,0,0.4)',
+              borderRadius: 6, padding: '0.75rem 1rem', marginBottom: '0.75rem',
+            }}>
+              <p style={{ color: '#ffaa44', fontSize: '0.88rem', fontWeight: 600 }}>⚠ {msg}</p>
+            </div>
+          ))}
+          <div className="modal-actions">
+            <button type="button" className="btn btn-primary" onClick={onDone}>Continue</button>
+          </div>
+        </div>
+      </div>
+    )
   }
 
   return (
     <div className="modal-overlay" onClick={onClose}>
       <div className="modal" style={{ maxWidth: 400 }} onClick={(e) => e.stopPropagation()}>
         <h2>Attendance</h2>
+        {error && (
+          <div style={{
+            background: 'rgba(255,60,60,0.08)', border: '1px solid rgba(255,60,60,0.4)',
+            borderRadius: 6, padding: '0.75rem 1rem', marginBottom: '1rem',
+          }}>
+            <p style={{ color: '#ff6b6b', fontSize: '0.88rem', fontWeight: 600 }}>⚠ {error}</p>
+          </div>
+        )}
         <form onSubmit={handleSubmit}>
           <div className="form-group" style={{ position: 'relative' }}>
-            <label>Member Name or Phone</label>
+            <label>Member Name</label>
             <input
               value={name}
               onChange={(e) => setName(e.target.value)}
-              placeholder="Start typing the student's name or phone"
+              placeholder="Start typing the student's name"
               autoComplete="off"
               autoFocus
             />
@@ -295,14 +342,13 @@ function CheckInModal({ branchId, onClose, onDone }) {
             <input
               value={phone}
               onChange={(e) => { setPhone(e.target.value.replace(/\D/g, '').slice(0, 10)); setSelectedStudent(null) }}
-              placeholder="Auto-filled once a name is selected"
+              placeholder="10-digit mobile"
             />
           </div>
           <div className="form-group">
             <label>Start Time</label>
             <input type="time" value={startTime} onChange={(e) => setStartTime(e.target.value)} />
           </div>
-          {error && <p className="error-msg">{error}</p>}
           <div className="modal-actions">
             <button type="button" className="btn btn-ghost" onClick={onClose}>Cancel</button>
             <button type="submit" className="btn btn-primary" disabled={loading}>

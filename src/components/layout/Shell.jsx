@@ -1,7 +1,8 @@
 import { useState, useEffect, useRef } from 'react'
-import { NavLink, Outlet, useNavigate } from 'react-router-dom'
+import { NavLink, Outlet, useNavigate, useLocation } from 'react-router-dom'
 import { useAuth } from '../../context/AuthContext'
 import { useSessionAlerts } from '../../hooks/useSessionAlerts'
+import { useMessageAlerts } from '../../hooks/useMessageAlerts'
 
 function BackgroundSketches() {
   return (
@@ -19,6 +20,12 @@ function BackgroundSketches() {
   )
 }
 
+const TOAST_META = {
+  end: { icon: '🔔', title: 'Session Ended', color: '#ff8888', bg: '#1a0000', border: '#ff4444', shadow: 'rgba(255,60,60,0.35)' },
+  warn: { icon: '⏰', title: 'Time Almost Up', color: 'var(--accent)', bg: '#1a1200', border: '#ffb800', shadow: 'rgba(255,184,0,0.35)' },
+  message: { icon: '💬', title: 'New Message', color: '#ffaa44', bg: '#1a1000', border: '#ff9500', shadow: 'rgba(255,149,0,0.35)' },
+}
+
 function SessionToasts({ toasts, dismiss, dismissAll }) {
   if (toasts.length === 0) return null
   return (
@@ -27,40 +34,40 @@ function SessionToasts({ toasts, dismiss, dismissAll }) {
       zIndex: 300, display: 'flex', flexDirection: 'column', gap: '0.5rem',
       alignItems: 'center', pointerEvents: 'none', width: '100%', maxWidth: 480,
     }}>
-      {toasts.map(t => (
-        <div key={t.id} style={{
-          pointerEvents: 'all',
-          background: t.level === 'end' ? '#1a0000' : '#1a1200',
-          border: `1px solid ${t.level === 'end' ? '#ff4444' : '#ffb800'}`,
-          borderRadius: 8,
-          padding: '0.75rem 1rem',
-          display: 'flex', alignItems: 'center', gap: '0.75rem',
-          boxShadow: `0 4px 24px ${t.level === 'end' ? 'rgba(255,60,60,0.35)' : 'rgba(255,184,0,0.35)'}`,
-          animation: 'slideInToast 0.25s ease',
-          width: '100%',
-        }}>
-          <span style={{ fontSize: '1.2rem' }}>{t.level === 'end' ? '🔔' : '⏰'}</span>
-          <div style={{ flex: 1 }}>
-            <p style={{
-              fontWeight: 700, fontSize: '0.9rem',
-              color: t.level === 'end' ? '#ff8888' : 'var(--accent)',
-            }}>
-              {t.level === 'end' ? 'Session Ended' : 'Time Almost Up'}
-            </p>
-            <p style={{ fontSize: '0.82rem', color: 'var(--text-muted)', marginTop: '0.1rem' }}>
-              {t.message}
-            </p>
+      {toasts.map(t => {
+        const meta = TOAST_META[t.level] ?? TOAST_META.warn
+        return (
+          <div key={t.id} style={{
+            pointerEvents: 'all',
+            background: meta.bg,
+            border: `1px solid ${meta.border}`,
+            borderRadius: 8,
+            padding: '0.75rem 1rem',
+            display: 'flex', alignItems: 'center', gap: '0.75rem',
+            boxShadow: `0 4px 24px ${meta.shadow}`,
+            animation: 'slideInToast 0.25s ease',
+            width: '100%',
+          }}>
+            <span style={{ fontSize: '1.2rem' }}>{meta.icon}</span>
+            <div style={{ flex: 1 }}>
+              <p style={{ fontWeight: 700, fontSize: '0.9rem', color: meta.color }}>
+                {meta.title}
+              </p>
+              <p style={{ fontSize: '0.82rem', color: 'var(--text-muted)', marginTop: '0.1rem' }}>
+                {t.message}
+              </p>
+            </div>
+            <button
+              type="button"
+              onClick={() => dismiss(t.id)}
+              style={{
+                background: 'none', border: 'none', color: 'var(--text-muted)',
+                cursor: 'pointer', fontSize: '1rem', padding: '0.2rem 0.4rem', lineHeight: 1,
+              }}
+            >✕</button>
           </div>
-          <button
-            type="button"
-            onClick={() => dismiss(t.id)}
-            style={{
-              background: 'none', border: 'none', color: 'var(--text-muted)',
-              cursor: 'pointer', fontSize: '1rem', padding: '0.2rem 0.4rem', lineHeight: 1,
-            }}
-          >✕</button>
-        </div>
-      ))}
+        )
+      })}
       {toasts.length > 1 && (
         <button
           type="button"
@@ -84,6 +91,7 @@ function NotificationBell({ toasts, dismiss, dismissAll }) {
   const wrapRef = useRef(null)
   const warnCount = toasts.filter(t => t.level === 'warn').length
   const endCount = toasts.filter(t => t.level === 'end').length
+  const messageCount = toasts.filter(t => t.level === 'message').length
 
   useEffect(() => {
     if (!open) return
@@ -103,7 +111,7 @@ function NotificationBell({ toasts, dismiss, dismissAll }) {
         aria-label="Notifications"
       >
         🔔
-        {(warnCount > 0 || endCount > 0) && (
+        {(warnCount > 0 || endCount > 0 || messageCount > 0) && (
           <span style={{ position: 'absolute', top: -6, right: -10, display: 'flex', gap: 2 }}>
             {warnCount > 0 && (
               <span style={{
@@ -116,6 +124,12 @@ function NotificationBell({ toasts, dismiss, dismissAll }) {
                 background: '#ff4444', color: '#fff', borderRadius: '50%', width: 16, height: 16,
                 fontSize: '0.62rem', fontWeight: 700, display: 'flex', alignItems: 'center', justifyContent: 'center',
               }}>{endCount}</span>
+            )}
+            {messageCount > 0 && (
+              <span style={{
+                background: '#ff9500', color: '#1a1000', borderRadius: '50%', width: 16, height: 16,
+                fontSize: '0.62rem', fontWeight: 700, display: 'flex', alignItems: 'center', justifyContent: 'center',
+              }}>{messageCount}</span>
             )}
           </span>
         )}
@@ -139,21 +153,24 @@ function NotificationBell({ toasts, dismiss, dismissAll }) {
           {toasts.length === 0 ? (
             <p style={{ color: 'var(--text-muted)', fontSize: '0.82rem', padding: '0.5rem' }}>No notifications</p>
           ) : (
-            toasts.map(t => (
-              <div key={t.id} style={{
-                display: 'flex', alignItems: 'center', gap: '0.5rem', padding: '0.5rem',
-                borderBottom: '1px solid #222',
-              }}>
-                <span>{t.level === 'end' ? '🔴' : '🟡'}</span>
-                <div style={{ flex: 1 }}>
-                  <p style={{ fontSize: '0.82rem', fontWeight: 600, color: t.level === 'end' ? '#ff8888' : 'var(--accent)' }}>
-                    {t.level === 'end' ? 'Session Ended' : 'Time Almost Up'}
-                  </p>
-                  <p style={{ fontSize: '0.78rem', color: 'var(--text-muted)' }}>{t.message}</p>
+            toasts.map(t => {
+              const meta = TOAST_META[t.level] ?? TOAST_META.warn
+              return (
+                <div key={t.id} style={{
+                  display: 'flex', alignItems: 'center', gap: '0.5rem', padding: '0.5rem',
+                  borderBottom: '1px solid #222',
+                }}>
+                  <span>{meta.icon}</span>
+                  <div style={{ flex: 1 }}>
+                    <p style={{ fontSize: '0.82rem', fontWeight: 600, color: meta.color }}>
+                      {meta.title}
+                    </p>
+                    <p style={{ fontSize: '0.78rem', color: 'var(--text-muted)' }}>{t.message}</p>
+                  </div>
+                  <button type="button" onClick={() => dismiss(t.id)} style={{ background: 'none', border: 'none', color: 'var(--text-muted)', cursor: 'pointer' }}>✕</button>
                 </div>
-                <button type="button" onClick={() => dismiss(t.id)} style={{ background: 'none', border: 'none', color: 'var(--text-muted)', cursor: 'pointer' }}>✕</button>
-              </div>
-            ))
+              )
+            })
           )}
         </div>
       )}
@@ -164,7 +181,13 @@ function NotificationBell({ toasts, dismiss, dismissAll }) {
 export default function Shell() {
   const { staff, logout, isOwner, branchId, selectBranch, branches, activeBranch } = useAuth()
   const navigate = useNavigate()
-  const { toasts, dismiss, dismissAll } = useSessionAlerts(branchId)
+  const location = useLocation()
+  const onCombinedHall = location.pathname.startsWith('/combined-hall')
+  const session = useSessionAlerts(branchId)
+  const messages = useMessageAlerts(branchId, staff?.id)
+  const toasts = [...session.toasts, ...messages.toasts]
+  const dismiss = (id) => { session.dismiss(id); messages.dismiss(id) }
+  const dismissAll = () => { session.dismissAll(); messages.dismissAll() }
 
   const handleLogout = () => {
     logout()
@@ -181,10 +204,14 @@ export default function Shell() {
           {isOwner && branches.length > 1 && (
             <div className="branch-switcher">
               <select
-                value={branchId || ''}
+                value={onCombinedHall ? '__combined_hall__' : (branchId || '')}
                 onChange={(e) => {
-                  if (e.target.value === '__combined_hall__') navigate('/combined-hall')
-                  else selectBranch(e.target.value)
+                  if (e.target.value === '__combined_hall__') {
+                    navigate('/combined-hall')
+                  } else {
+                    selectBranch(e.target.value)
+                    if (onCombinedHall) navigate('/')
+                  }
                 }}
               >
                 {branches.map(b => (

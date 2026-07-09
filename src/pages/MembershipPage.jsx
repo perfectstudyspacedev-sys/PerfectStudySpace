@@ -39,7 +39,9 @@ function ActiveMembersTab({ branchId, tempPackages, permPackages }) {
   const [closeModal, setCloseModal] = useState(null)
   const [closeSummary, setCloseSummary] = useState(null)
   const [closeLoading, setCloseLoading] = useState(false)
+  const [closePayMode, setClosePayMode] = useState('cash')
   const [cashbackNotice, setCashbackNotice] = useState(null)
+  const [settlementNotice, setSettlementNotice] = useState(null)
 
   const load = useCallback(async () => {
     if (!branchId) return
@@ -82,7 +84,7 @@ function ActiveMembersTab({ branchId, tempPackages, permPackages }) {
   }
 
   const openRenewModal = (m) => {
-    setRenewModal({ membershipId: m.membership_id, studentName: m.student_name })
+    setRenewModal({ membershipId: m.membership_id, studentName: m.student_name, pendingCashback: m.pending_cashback })
     setRenewCategory(m.category)
     setRenewHoursPerDay(m.hours_per_day)
     setRenewMonths(1)
@@ -95,6 +97,7 @@ function ActiveMembersTab({ branchId, tempPackages, permPackages }) {
   const openCloseModal = async (membershipId, studentName) => {
     setCloseModal({ membershipId, studentName })
     setCloseSummary(null)
+    setClosePayMode('cash')
     try {
       const summary = await api('get_membership_closure_summary', { membershipId })
       setCloseSummary(summary)
@@ -105,10 +108,13 @@ function ActiveMembersTab({ branchId, tempPackages, permPackages }) {
     if (!closeModal) return
     setCloseLoading(true)
     try {
-      const res = await api('close_membership', { membershipId: closeModal.membershipId })
+      const res = await api('close_membership', {
+        membershipId: closeModal.membershipId,
+        paymentMode: closeSummary?.netAmount > 0 ? closePayMode : undefined,
+      })
       setCloseModal(null)
-      if (res.cashbackPayout) {
-        setCashbackNotice({ type: 'payout', amount: res.cashbackPayout })
+      if (res.refundAmount > 0) {
+        setSettlementNotice(res)
       }
       load()
     } catch (err) {
@@ -132,8 +138,8 @@ function ActiveMembersTab({ branchId, tempPackages, permPackages }) {
         advanceAmount: renewPayType === 'partial' ? (Number(renewAdvance) || null) : renewPayType === 'pending' ? 0 : null,
       })
       setRenewModal(null)
-      if (res.cashbackApplied) {
-        setCashbackNotice({ type: 'applied', amount: res.cashbackApplied })
+      if (res.cashbackApplied || res.overtimeCharged) {
+        setCashbackNotice({ amount: res.cashbackApplied, overtimeCharged: res.overtimeCharged })
       }
       load()
     } catch (err) {
@@ -173,7 +179,17 @@ function ActiveMembersTab({ branchId, tempPackages, permPackages }) {
   const renewPkg = renewPackages.find(p => p.hours === renewHoursPerDay) ?? renewPackages[0]
   const renewDiscount = getMultiMonthDiscount(renewMonths)
   const renewGross = renewPkg ? renewPkg.fee * renewMonths : 0
-  const renewTotal = renewGross * (1 - renewDiscount / 100)
+  const renewBeforeCashback = renewGross * (1 - renewDiscount / 100)
+  const renewPendingCashback = renewModal?.pendingCashback ?? null
+  const renewCashbackAmount = renewPendingCashback
+    ? Math.min(
+        renewPendingCashback.cashback_type === 'percent'
+          ? renewBeforeCashback * (Number(renewPendingCashback.cashback_value) / 100)
+          : Number(renewPendingCashback.cashback_value),
+        renewBeforeCashback,
+      )
+    : 0
+  const renewTotal = renewBeforeCashback - renewCashbackAmount
   const renewAdvanceNum = Number(renewAdvance) || 0
   const renewRemaining = renewPayType === 'partial' ? Math.max(renewTotal - renewAdvanceNum, 0) : 0
 
@@ -404,6 +420,12 @@ function ActiveMembersTab({ branchId, tempPackages, permPackages }) {
             )}
 
             <div className="card" style={{ marginBottom: '1rem', background: 'rgba(255,215,0,0.05)' }}>
+              {renewCashbackAmount > 0 && (
+                <>
+                  <p className="mono" style={{ color: 'var(--text-muted)' }}>Before cashback: {formatCurrency(renewBeforeCashback)}</p>
+                  <p className="mono" style={{ color: '#4ade80' }}>🎁 Cashback applied: -{formatCurrency(renewCashbackAmount)}</p>
+                </>
+              )}
               <p className="mono">Total: {formatCurrency(renewTotal)}</p>
               {renewPayType === 'pending' && (
                 <p className="mono" style={{ color: 'var(--accent)', fontWeight: 700 }}>Remaining to be paid: {formatCurrency(renewTotal)}</p>
@@ -436,37 +458,69 @@ function ActiveMembersTab({ branchId, tempPackages, permPackages }) {
             <h2>Finish Membership — {closeModal.studentName}</h2>
 
             {!closeSummary ? (
-              <p>Checking pending dues…</p>
+              <p>Checking final settlement…</p>
             ) : (
-              <div className="card" style={{ marginBottom: '1rem', background: 'rgba(255,215,0,0.05)' }}>
-                <h3 style={{ color: 'var(--accent)', fontSize: '0.9rem', marginBottom: '0.5rem' }}>Payment Summary</h3>
-                <p className="mono" style={{ color: closeSummary.membershipDue > 0 ? '#ff8888' : '#4ade80' }}>
-                  Membership pending: {formatCurrency(closeSummary.membershipDue)}
-                </p>
-                {closeSummary.locker && (
-                  <p className="mono" style={{ color: closeSummary.lockerDue > 0 ? '#ff8888' : '#4ade80' }}>
-                    Locker pending: {formatCurrency(closeSummary.lockerDue)}
-                  </p>
+              <>
+                <div className="card" style={{ marginBottom: '1rem', background: 'rgba(255,215,0,0.05)' }}>
+                  <h3 style={{ color: 'var(--accent)', fontSize: '0.9rem', marginBottom: '0.5rem' }}>Owed to the Business</h3>
+                  <p className="mono" style={{ fontSize: '0.85rem' }}>Membership: {formatCurrency(closeSummary.membershipDue)}</p>
+                  {closeSummary.locker && <p className="mono" style={{ fontSize: '0.85rem' }}>Locker rent: {formatCurrency(closeSummary.lockerDue)}</p>}
+                  {closeSummary.foodPassOwed > 0 && <p className="mono" style={{ fontSize: '0.85rem' }}>Food Pass shortfall: {formatCurrency(closeSummary.foodPassOwed)}</p>}
+                  {closeSummary.overtimeDue > 0 && <p className="mono" style={{ fontSize: '0.85rem' }}>Overtime ({closeSummary.overtimeMinutes}m): {formatCurrency(closeSummary.overtimeDue)}</p>}
+                  <p className="mono" style={{ fontWeight: 700, marginTop: '0.3rem' }}>Total: {formatCurrency(closeSummary.totalOwed)}</p>
+                </div>
+
+                <div className="card" style={{ marginBottom: '1rem', background: 'rgba(74,222,128,0.05)' }}>
+                  <h3 style={{ color: '#4ade80', fontSize: '0.9rem', marginBottom: '0.5rem' }}>Owed Back to the Student</h3>
+                  {closeSummary.lockerDepositRefund > 0 && <p className="mono" style={{ fontSize: '0.85rem' }}>Locker deposit: {formatCurrency(closeSummary.lockerDepositRefund)}</p>}
+                  {closeSummary.foodPassRefund > 0 && <p className="mono" style={{ fontSize: '0.85rem' }}>Food Pass balance: {formatCurrency(closeSummary.foodPassRefund)}</p>}
+                  {closeSummary.cashbackAmount > 0 && <p className="mono" style={{ fontSize: '0.85rem' }}>Unredeemed cashback: {formatCurrency(closeSummary.cashbackAmount)}</p>}
+                  {closeSummary.totalCredit <= 0 && <p style={{ fontSize: '0.82rem', color: 'var(--text-muted)' }}>Nothing owed back.</p>}
+                  <p className="mono" style={{ fontWeight: 700, marginTop: '0.3rem' }}>Total: {formatCurrency(closeSummary.totalCredit)}</p>
+                </div>
+
+                <div className="card" style={{ marginBottom: '1rem', background: 'rgba(255,255,255,0.03)' }}>
+                  {closeSummary.netAmount > 0 ? (
+                    <p className="mono" style={{ fontWeight: 700, fontSize: '1.05rem', color: 'var(--accent)' }}>
+                      Collect {formatCurrency(closeSummary.netAmount)} from the student
+                    </p>
+                  ) : closeSummary.netAmount < 0 ? (
+                    <p className="mono" style={{ fontWeight: 700, fontSize: '1.05rem', color: '#4ade80' }}>
+                      Pay back {formatCurrency(-closeSummary.netAmount)} to the student
+                    </p>
+                  ) : (
+                    <p className="mono" style={{ fontWeight: 700, fontSize: '1.05rem', color: '#4ade80' }}>
+                      Fully settled — nothing to collect or refund
+                    </p>
+                  )}
+                </div>
+
+                {closeSummary.netAmount > 0 && (
+                  <div className="form-group">
+                    <label>Payment Mode</label>
+                    <div style={{ display: 'flex', gap: '0.5rem' }}>
+                      {[{ value: 'cash', label: '💵 Cash' }, { value: 'upi', label: '📱 UPI' }].map(({ value, label }) => (
+                        <button key={value} type="button" onClick={() => setClosePayMode(value)}
+                          style={{ flex: 1, padding: '0.5rem', border: `1px solid ${closePayMode === value ? 'var(--accent)' : '#333'}`, borderRadius: 4, background: closePayMode === value ? 'rgba(255,215,0,0.08)' : '#141414', color: closePayMode === value ? 'var(--accent)' : 'var(--text-muted)', cursor: 'pointer', fontWeight: 600 }}
+                        >{label}</button>
+                      ))}
+                    </div>
+                  </div>
                 )}
-                <p className="mono" style={{ fontWeight: 700, marginTop: '0.4rem', fontSize: '1.05rem', color: closeSummary.canClose ? '#4ade80' : 'var(--accent)' }}>
-                  Remaining to be paid: {formatCurrency(closeSummary.totalDue)}
-                </p>
-                {!closeSummary.canClose && (
-                  <p style={{ fontSize: '0.78rem', color: 'var(--text-muted)', marginTop: '0.5rem' }}>
-                    Everything must be cleared before this membership can be closed. Record the pending payment(s) from the student's profile page first.
-                  </p>
-                )}
-              </div>
+              </>
             )}
 
             <div className="modal-actions">
               <button type="button" className="btn btn-ghost" onClick={() => setCloseModal(null)}>Cancel</button>
               <button
                 type="button" className="btn btn-primary"
-                disabled={!closeSummary?.canClose || closeLoading}
+                disabled={!closeSummary || closeLoading}
                 onClick={confirmClose}
               >
-                {closeLoading ? 'Finishing…' : 'Confirm Finish'}
+                {closeLoading ? 'Finishing…'
+                  : closeSummary?.netAmount > 0 ? `Collect ${formatCurrency(closeSummary.netAmount)} & Finish`
+                  : closeSummary?.netAmount < 0 ? `Pay Back ${formatCurrency(-closeSummary.netAmount)} & Finish`
+                  : 'Confirm Finish'}
               </button>
             </div>
           </div>
@@ -476,19 +530,54 @@ function ActiveMembersTab({ branchId, tempPackages, permPackages }) {
       {cashbackNotice && (
         <div className="modal-overlay" onClick={() => setCashbackNotice(null)}>
           <div className="modal" style={{ maxWidth: 400 }} onClick={(e) => e.stopPropagation()}>
-            <h2>🎁 Cashback {cashbackNotice.type === 'payout' ? 'Payout' : 'Applied'}</h2>
-            <div className="card" style={{ margin: '1rem 0', background: 'rgba(255,215,0,0.05)' }}>
-              <p className="mono" style={{ color: 'var(--accent)', fontSize: '1.3rem', fontWeight: 700 }}>
-                {formatCurrency(cashbackNotice.amount)}
+            <h2>Renewal Settled</h2>
+            {cashbackNotice.amount > 0 && (
+              <div className="card" style={{ margin: '1rem 0', background: 'rgba(255,215,0,0.05)' }}>
+                <p className="mono" style={{ color: 'var(--accent)', fontSize: '1.2rem', fontWeight: 700 }}>
+                  🎁 {formatCurrency(cashbackNotice.amount)}
+                </p>
+                <p style={{ fontSize: '0.85rem', color: 'var(--text-muted)', marginTop: '0.3rem' }}>
+                  A pending cashback was applied as a discount on this renewal.
+                </p>
+              </div>
+            )}
+            {cashbackNotice.overtimeCharged > 0 && (
+              <div className="card" style={{ margin: '1rem 0', background: 'rgba(255,60,60,0.06)' }}>
+                <p className="mono" style={{ color: '#ff8888', fontSize: '1.2rem', fontWeight: 700 }}>
+                  ⏱ {formatCurrency(cashbackNotice.overtimeCharged)}
+                </p>
+                <p style={{ fontSize: '0.85rem', color: 'var(--text-muted)', marginTop: '0.3rem' }}>
+                  Accumulated overtime was added to this renewal's bill.
+                </p>
+              </div>
+            )}
+            <div className="modal-actions">
+              <button type="button" className="btn btn-primary" onClick={() => setCashbackNotice(null)}>Got it</button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {settlementNotice && (
+        <div className="modal-overlay" onClick={() => setSettlementNotice(null)}>
+          <div className="modal" style={{ maxWidth: 400 }} onClick={(e) => e.stopPropagation()}>
+            <h2>💸 Refund Due</h2>
+            <div className="card" style={{ margin: '1rem 0', background: 'rgba(74,222,128,0.05)' }}>
+              <p className="mono" style={{ color: '#4ade80', fontSize: '1.3rem', fontWeight: 700 }}>
+                {formatCurrency(settlementNotice.refundAmount)}
               </p>
               <p style={{ fontSize: '0.85rem', color: 'var(--text-muted)', marginTop: '0.5rem' }}>
-                {cashbackNotice.type === 'payout'
-                  ? 'This cashback was never redeemed at renewal — please pay it out to the student in cash.'
-                  : 'A pending cashback was applied as a discount on this renewal.'}
+                Please pay this back to the student now — it covers
+                {settlementNotice.lockerDepositRefund > 0 && ` their ${formatCurrency(settlementNotice.lockerDepositRefund)} locker deposit`}
+                {settlementNotice.lockerDepositRefund > 0 && settlementNotice.foodPassRefund > 0 && ','}
+                {settlementNotice.foodPassRefund > 0 && ` their ${formatCurrency(settlementNotice.foodPassRefund)} unused Food Pass balance`}
+                {(settlementNotice.lockerDepositRefund > 0 || settlementNotice.foodPassRefund > 0) && settlementNotice.cashbackAmount > 0 && ','}
+                {settlementNotice.cashbackAmount > 0 && ` their ${formatCurrency(settlementNotice.cashbackAmount)} unredeemed cashback`}
+                {' '}minus anything they still owed.
               </p>
             </div>
             <div className="modal-actions">
-              <button type="button" className="btn btn-primary" onClick={() => setCashbackNotice(null)}>Got it</button>
+              <button type="button" className="btn btn-primary" onClick={() => setSettlementNotice(null)}>Got it</button>
             </div>
           </div>
         </div>
@@ -846,6 +935,7 @@ function WaitlistTab({ branchId }) {
   const [notes, setNotes] = useState('')
   const [error, setError] = useState('')
   const [saving, setSaving] = useState(false)
+  const [removeTarget, setRemoveTarget] = useState(null)
 
   const load = useCallback(() => {
     if (!branchId) return
@@ -872,9 +962,10 @@ function WaitlistTab({ branchId }) {
     }
   }
 
-  const handleRemove = async (id, status) => {
-    if (!window.confirm(status === 'fulfilled' ? 'Mark this student as seated and remove from the waitlist?' : 'Remove this entry from the waitlist?')) return
-    await api('remove_from_waitlist', { waitlistId: id, status })
+  const confirmRemove = async () => {
+    if (!removeTarget) return
+    await api('remove_from_waitlist', { waitlistId: removeTarget.id, status: 'cancelled' })
+    setRemoveTarget(null)
     load()
   }
 
@@ -940,9 +1031,8 @@ function WaitlistTab({ branchId }) {
                   <td className="mono">{w.hours_per_day ?? '—'}</td>
                   <td className="mono">{formatDate(w.created_at)}</td>
                   <td style={{ color: 'var(--text-muted)', fontSize: '0.82rem' }}>{w.notes || '—'}</td>
-                  <td style={{ display: 'flex', gap: '0.4rem' }}>
-                    <button type="button" className="btn btn-primary" style={{ padding: '0.3rem 0.6rem', fontSize: '0.78rem' }} onClick={() => handleRemove(w.id, 'fulfilled')}>Seated</button>
-                    <button type="button" className="btn btn-ghost" style={{ padding: '0.3rem 0.6rem', fontSize: '0.78rem' }} onClick={() => handleRemove(w.id, 'cancelled')}>Remove</button>
+                  <td>
+                    <button type="button" className="btn btn-ghost" style={{ padding: '0.3rem 0.6rem', fontSize: '0.78rem' }} onClick={() => setRemoveTarget(w)}>Remove</button>
                   </td>
                 </tr>
               ))}
@@ -950,6 +1040,21 @@ function WaitlistTab({ branchId }) {
           </table>
         )}
       </div>
+
+      {removeTarget && (
+        <div className="modal-overlay" onClick={() => setRemoveTarget(null)}>
+          <div className="modal" style={{ maxWidth: 380 }} onClick={(e) => e.stopPropagation()}>
+            <h2>Remove from Waitlist</h2>
+            <div className="card" style={{ margin: '1rem 0', background: 'rgba(255,60,60,0.06)' }}>
+              <p style={{ fontSize: '0.9rem' }}>Remove <strong>{removeTarget.name}</strong> from the permanent seat waitlist?</p>
+            </div>
+            <div className="modal-actions">
+              <button type="button" className="btn btn-ghost" onClick={() => setRemoveTarget(null)}>Cancel</button>
+              <button type="button" className="btn btn-primary" onClick={confirmRemove}>Remove</button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   )
 }

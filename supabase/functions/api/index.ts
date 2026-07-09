@@ -371,6 +371,9 @@ Deno.serve(async (req) => {
           .select("*", { count: "exact", head: true }).eq("branch_id", b.id).eq("is_active", true).eq("category", "temporary").gte("end_date", today);
         const { count: permanent } = await db.from("memberships")
           .select("*", { count: "exact", head: true }).eq("branch_id", b.id).eq("is_active", true).eq("category", "permanent").gte("end_date", today);
+        // "Pending" = any outstanding balance, regardless of due_date — due_date is always
+        // set a month out on creation/renewal even for a partial payment made today, so
+        // gating on it would hide a real balance for a full month.
         const { count: pending } = await db.from("memberships")
           .select("*", { count: "exact", head: true }).eq("branch_id", b.id).eq("is_active", true).gt("fee_due", 0);
 
@@ -416,9 +419,13 @@ Deno.serve(async (req) => {
       const { date } = payload;
       const targetDate = date || todayISO();
 
+      // Any outstanding balance counts as pending, regardless of due_date — due_date is
+      // always set a month out even on a same-day partial payment, so gating on it would
+      // hide a real balance for a full month. Still sorted by due_date so overdue-longest
+      // shows first.
       const { data: duePayments } = await db.from("memberships")
         .select("*, students(name, phone, course), branches(name)")
-        .eq("is_active", true).lte("due_date", targetDate).gt("fee_due", 0)
+        .eq("is_active", true).gt("fee_due", 0)
         .order("due_date");
       const { data: expiredMemberships } = await db.from("memberships")
         .select("*, students(name, phone, course), branches(name)")
@@ -660,25 +667,29 @@ Deno.serve(async (req) => {
       const daysRemaining = Math.max(1, Math.ceil((new Date(endDate + "T12:00:00").getTime() - new Date(today + "T12:00:00").getTime()) / 86_400_000));
       const proratedFee = Math.round((100 / 30) * daysRemaining);
       const deposit = 100;
-      const amount = proratedFee + deposit;
+
+      // The ₹100 caution deposit is mandatory and collected upfront, always — a locker is
+      // never assigned without it. Only the prorated monthly rent can be deferred.
+      const amountPaid = deposit + (payLater ? 0 : proratedFee);
+      const feeDue = payLater ? proratedFee : 0;
 
       const { data: locker, error: lErr } = await db.from("lockers").insert({
         branch_id: branchId, student_id: studentId, locker_no: lockerNo,
         locker_due_date: endDate, deposit_amount: deposit, monthly_fee: 100,
-        amount_paid: payLater ? 0 : amount, fee_due: payLater ? amount : 0,
+        amount_paid: amountPaid, fee_due: feeDue,
       }).select("*").single();
       if (lErr) return err(lErr.message);
 
-      if (!payLater) {
-        await db.from("transactions").insert({
-          student_id: studentId, branch_id: branchId, category: "locker",
-          amount, payment_mode: paymentMode ?? "cash",
-          notes: `Locker added later — prorated ${daysRemaining}d rent (₹${proratedFee}) + deposit (₹${deposit})`,
-          created_by_staff_id: staff.id,
-        });
-      }
+      await db.from("transactions").insert({
+        student_id: studentId, branch_id: branchId, category: "locker",
+        amount: amountPaid, payment_mode: paymentMode ?? "cash",
+        notes: payLater
+          ? `Locker deposit (₹${deposit}) — rent (₹${proratedFee} for ${daysRemaining}d) deferred`
+          : `Locker — prorated ${daysRemaining}d rent (₹${proratedFee}) + deposit (₹${deposit})`,
+        created_by_staff_id: staff.id,
+      });
 
-      return json({ ok: true, locker, amountCharged: amount, proratedFee, daysRemaining, payLater: !!payLater });
+      return json({ ok: true, locker, amountCharged: amountPaid, proratedFee, deposit, daysRemaining, payLater: !!payLater });
     }
 
     if (action === "remove_locker") {
@@ -862,9 +873,15 @@ Deno.serve(async (req) => {
       const isMember = booking.booking_type !== "walkin";
       const FOOD_CARRY_DAYS = 3;
 
-      // Membership students can carry an unpaid food bill for up to 3 days across
-      // sessions — check by student, not just this booking, since each day is a new booking.
-      const { data: memberUnpaidBills } = isMember
+      // A Food Pass holder never pays cash for food at checkout — any bill still marked
+      // unpaid (e.g. from before the pass existed) is deducted from the pass automatically.
+      const { data: foodPass } = isMember
+        ? await db.from("food_passes").select("*").eq("student_id", booking.student_id).maybeSingle()
+        : { data: null };
+
+      // Membership students without a pass can carry an unpaid food bill for up to 3 days
+      // across sessions — check by student, not just this booking, since each day is a new booking.
+      const { data: memberUnpaidBills } = isMember && !foodPass
         ? await db.from("food_bills").select("id, total, created_at").eq("student_id", booking.student_id).eq("paid", false)
         : { data: null };
       if (memberUnpaidBills?.length) {
@@ -887,23 +904,39 @@ Deno.serve(async (req) => {
         }
       }
 
-      // Walk-ins always settle unpaid food at checkout (no carry-forward concept — the
-      // session ends here). Members only settle now if staff explicitly chose to collect it
-      // (settleFoodNow); otherwise it carries forward within the 3-day window checked above.
-      const unpaidBillsQuery = isMember
-        ? db.from("food_bills").select("id, total").eq("student_id", booking.student_id).eq("paid", false)
-        : db.from("food_bills").select("id, total").eq("booking_id", bookingId).eq("paid", false);
-      const shouldSettleNow = !isMember || settleFoodNow;
-      const { data: unpaidBills } = shouldSettleNow ? await unpaidBillsQuery : { data: null };
-      if (unpaidBills?.length) {
-        const settleMode = overtimePaymentMode ?? booking.payment_mode ?? "cash";
-        for (const bill of unpaidBills) {
-          await db.from("food_bills").update({ paid: true, payment_mode: settleMode }).eq("id", bill.id);
-          await db.from("transactions").insert({
-            student_id: booking.student_id, branch_id: booking.branch_id,
-            food_bill_id: bill.id, category: "food", amount: bill.total,
-            payment_mode: settleMode, created_by_staff_id: staff.id,
-          });
+      if (foodPass) {
+        // Deduct straight from the pass — no cash prompt, no 3-day rule (that's only for
+        // students without a pass).
+        const { data: passUnpaidBills } = await db.from("food_bills").select("id, total")
+          .eq("student_id", booking.student_id).eq("paid", false);
+        if (passUnpaidBills?.length) {
+          const passTotal = passUnpaidBills.reduce((s: number, b: { total: number }) => s + Number(b.total), 0);
+          await db.from("food_passes").update({
+            balance: Number(foodPass.balance) - passTotal, updated_at: new Date().toISOString(),
+          }).eq("id", foodPass.id);
+          for (const bill of passUnpaidBills) {
+            await db.from("food_bills").update({ paid: true, payment_mode: "other" }).eq("id", bill.id);
+          }
+        }
+      } else {
+        // Walk-ins always settle unpaid food at checkout (no carry-forward concept — the
+        // session ends here). Members only settle now if staff explicitly chose to collect it
+        // (settleFoodNow); otherwise it carries forward within the 3-day window checked above.
+        const unpaidBillsQuery = isMember
+          ? db.from("food_bills").select("id, total").eq("student_id", booking.student_id).eq("paid", false)
+          : db.from("food_bills").select("id, total").eq("booking_id", bookingId).eq("paid", false);
+        const shouldSettleNow = !isMember || settleFoodNow;
+        const { data: unpaidBills } = shouldSettleNow ? await unpaidBillsQuery : { data: null };
+        if (unpaidBills?.length) {
+          const settleMode = overtimePaymentMode ?? booking.payment_mode ?? "cash";
+          for (const bill of unpaidBills) {
+            await db.from("food_bills").update({ paid: true, payment_mode: settleMode }).eq("id", bill.id);
+            await db.from("transactions").insert({
+              student_id: booking.student_id, branch_id: booking.branch_id,
+              food_bill_id: bill.id, category: "food", amount: bill.total,
+              payment_mode: settleMode, created_by_staff_id: staff.id,
+            });
+          }
         }
       }
 
@@ -927,15 +960,20 @@ Deno.serve(async (req) => {
             });
           }
         } else {
-          // Member — log overtime to history table, no charge at checkout
-          await db.from("overtime_sessions").insert({
-            booking_id: bookingId,
-            student_id: booking.student_id,
-            membership_id: booking.membership_id ?? null,
-            branch_id: booking.branch_id,
-            overtime_minutes: otMinutes,
-            session_date: todayISO(),
-          });
+          // Member — 15 min grace, same as walk-ins; only the billable remainder is logged.
+          // Not charged now — it accumulates and gets added to the bill when the
+          // membership is finally settled (renewed or closed).
+          const billableMinutes = Math.max(0, otMinutes - 15);
+          if (billableMinutes > 0) {
+            await db.from("overtime_sessions").insert({
+              booking_id: bookingId,
+              student_id: booking.student_id,
+              membership_id: booking.membership_id ?? null,
+              branch_id: booking.branch_id,
+              overtime_minutes: billableMinutes,
+              session_date: todayISO(),
+            });
+          }
         }
       }
 
@@ -994,8 +1032,9 @@ Deno.serve(async (req) => {
       const { data: overtimeSessions } = await db.from("overtime_sessions").select("*").eq("student_id", studentId).order("session_date", { ascending: false }).limit(50);
       const { data: holds } = await db.from("membership_holds").select("*").eq("student_id", studentId).order("paused_at", { ascending: false }).limit(50);
       const { data: discounts } = await db.from("membership_discounts").select("*, staff(display_name, username)").eq("student_id", studentId).order("created_at", { ascending: false }).limit(50);
+      const { data: cashbacks } = await db.from("cashbacks").select("*, staff:granted_by_staff_id(display_name, username)").eq("student_id", studentId).order("created_at", { ascending: false }).limit(50);
 
-      return json({ student, memberships, bookings, transactions, locker, overtimeSessions: overtimeSessions ?? [], holds: holds ?? [], discounts: discounts ?? [] });
+      return json({ student, memberships, bookings, transactions, locker, overtimeSessions: overtimeSessions ?? [], holds: holds ?? [], discounts: discounts ?? [], cashbacks: cashbacks ?? [] });
     }
 
     if (action === "get_top_students") {
@@ -1020,13 +1059,21 @@ Deno.serve(async (req) => {
         const col = sortBy === "hours" ? "hours" : "visits";
         const rows = [...byStudent.values()].sort((a, b) => b[col] - a[col]).slice(0, 20)
           .map(r => ({ id: r.id, name: r.name, phone: r.phone, course: r.course, total_visits: r.visits, total_hours_studied: r.hours }));
-        return json({ students: rows });
+        const { data: activeMemStudents } = rows.length
+          ? await db.from("memberships").select("student_id").in("student_id", rows.map(r => r.id)).eq("is_active", true)
+          : { data: [] as { student_id: string }[] };
+        const memberIds = new Set((activeMemStudents ?? []).map((m: { student_id: string }) => m.student_id));
+        return json({ students: rows.map(r => ({ ...r, is_member: memberIds.has(r.id) })) });
       }
 
       const col = sortBy === "hours" ? "total_hours_studied" : "total_visits";
       const { data } = await db.from("students").select("id, name, phone, total_visits, total_hours_studied, loyalty_tag, course")
         .eq("branch_id", branchId).order(col, { ascending: false }).limit(20);
-      return json({ students: data ?? [] });
+      const { data: activeMemStudents } = data?.length
+        ? await db.from("memberships").select("student_id").in("student_id", data.map((r: { id: string }) => r.id)).eq("is_active", true)
+        : { data: [] as { student_id: string }[] };
+      const memberIds = new Set((activeMemStudents ?? []).map((m: { student_id: string }) => m.student_id));
+      return json({ students: (data ?? []).map((r: { id: string }) => ({ ...r, is_member: memberIds.has(r.id) })) });
     }
 
     if (action === "record_payment") {
@@ -1070,25 +1117,48 @@ Deno.serve(async (req) => {
       if (!mem) return err("Membership not found");
       if (!requireBranch(staff, mem.branch_id)) return err("Branch access denied", 403);
 
+      // Available even with nothing pending — a discount on a fully-paid membership (or one
+      // larger than what's left owing) banks the leftover as a cashback instead of being wasted.
       const feeDue = Number(mem.fee_due);
-      if (feeDue <= 0) return err("No pending fee to discount");
-
-      const rawAmount = discountType === "percent" ? feeDue * (value / 100) : value;
-      const discountAmount = Math.min(rawAmount, feeDue);
-      const newDue = feeDue - discountAmount;
+      const discountBase = feeDue > 0 ? feeDue : Number(mem.monthly_fee) * Number(mem.months_paid);
+      const rawAmount = discountType === "percent" ? discountBase * (value / 100) : value;
+      const appliedToFee = Math.min(rawAmount, feeDue);
+      const bankedAsCashback = Math.max(rawAmount - feeDue, 0);
+      const newDue = feeDue - appliedToFee;
 
       await db.from("memberships").update({ fee_due: newDue }).eq("id", membershipId);
       await db.from("membership_discounts").insert({
         membership_id: membershipId, student_id: mem.student_id, branch_id: mem.branch_id,
-        discount_type: discountType, discount_value: value, discount_amount: discountAmount,
+        discount_type: discountType, discount_value: value, discount_amount: appliedToFee,
         remarks: remarks || null, applied_by_staff_id: staff.id,
       });
+
+      let cashbackBankedNote = null;
+      if (bankedAsCashback > 0) {
+        const { data: existingCashback } = await db.from("cashbacks").select("*")
+          .eq("student_id", mem.student_id).eq("status", "pending").maybeSingle();
+        if (!existingCashback) {
+          await db.from("cashbacks").insert({
+            student_id: mem.student_id, branch_id: mem.branch_id,
+            month_label: new Date().toLocaleString("en-US", { month: "long", year: "numeric" }),
+            cashback_type: "fixed", cashback_value: bankedAsCashback,
+            notes: `Banked from a discount that exceeded the pending fee${remarks ? ` — ${remarks}` : ""}`,
+            granted_by_staff_id: staff.id,
+          });
+        } else if (existingCashback.cashback_type === "fixed") {
+          await db.from("cashbacks").update({
+            cashback_value: Number(existingCashback.cashback_value) + bankedAsCashback,
+          }).eq("id", existingCashback.id);
+        } else {
+          cashbackBankedNote = "Could not bank the excess — this student already has a percent-based cashback pending.";
+        }
+      }
 
       if (newDue === 0) {
         await db.from("alerts").update({ status: "resolved" }).eq("student_id", mem.student_id).eq("alert_type", "payment_due").eq("status", "pending");
       }
       await refreshStudentStatus(db, mem.student_id);
-      return json({ ok: true, discountAmount, newFeeDue: newDue });
+      return json({ ok: true, discountAmount: appliedToFee, newFeeDue: newDue, bankedAsCashback, cashbackBankedNote });
     }
 
     // Cashback for a top-hours student this month — staff or owner grants it after checking
@@ -1101,6 +1171,12 @@ Deno.serve(async (req) => {
       const value = Number(cashbackValue);
       if (!(value > 0)) return err("Cashback value must be greater than 0");
       if (cashbackType === "percent" && value > 100) return err("Percentage cashback cannot exceed 100");
+
+      // Redemption only makes sense against a renewal or closure, both of which require
+      // an active membership — walk-in-only students have neither.
+      const { data: activeMem } = await db.from("memberships").select("id")
+        .eq("student_id", studentId).eq("is_active", true).maybeSingle();
+      if (!activeMem) return err("This student doesn't have an active membership — cashback can only be granted to membership students");
 
       const { data: existing } = await db.from("cashbacks").select("id")
         .eq("student_id", studentId).eq("status", "pending").maybeSingle();
@@ -1180,7 +1256,7 @@ Deno.serve(async (req) => {
     }
 
     if (action === "create_food_bill") {
-      const { branchId, studentId, studentName, studentPhone, bookingId, items, paymentMode, discountType, discountValue, discountAmount, useFoodPass } = payload;
+      const { branchId, studentId, studentName, studentPhone, bookingId, items, paymentMode, discountType, discountValue, discountAmount } = payload;
       if (!requireBranch(staff, branchId)) return err("Branch access denied", 403);
 
       let subtotal = 0;
@@ -1198,17 +1274,22 @@ Deno.serve(async (req) => {
       const disc = Number(discountAmount) || 0;
       const total = Math.max(subtotal - disc, 0);
 
-      // Food Pass deducts immediately (balance can go negative — settled separately later).
-      // Money for it was already collected at top-up time, so no new transaction here.
+      // A student with a Food Pass pays through it exclusively — not a choice, a rule.
+      // Balance can go negative (settled separately); the money for it was already
+      // collected at top-up time, so no new transaction gets recorded here.
       let payFromPass = false;
-      if (useFoodPass && studentId) {
-        const { data: pass } = await db.from("food_passes").select("*").eq("student_id", studentId).maybeSingle();
-        if (pass) {
-          payFromPass = true;
-          await db.from("food_passes").update({
-            balance: Number(pass.balance) - total, updated_at: new Date().toISOString(),
-          }).eq("id", pass.id);
-        }
+      let newPassBalance = null;
+      let pass = null;
+      if (studentId) {
+        const { data: p } = await db.from("food_passes").select("*").eq("student_id", studentId).maybeSingle();
+        pass = p;
+      }
+      if (pass) {
+        payFromPass = true;
+        newPassBalance = Number(pass.balance) - total;
+        await db.from("food_passes").update({
+          balance: newPassBalance, updated_at: new Date().toISOString(),
+        }).eq("id", pass.id);
       }
 
       // Otherwise: no payment mode ⇒ bill is recorded unpaid, carried on the student's tab
@@ -1236,7 +1317,10 @@ Deno.serve(async (req) => {
         });
       }
 
-      return json({ bill: { id: bill!.id, total, subtotal, discountAmount: disc, items: lineItems, paid: isPaid, paidFromPass: payFromPass } });
+      return json({
+        bill: { id: bill!.id, total, subtotal, discountAmount: disc, items: lineItems, paid: isPaid, paidFromPass: payFromPass },
+        foodPassBalance: newPassBalance,
+      });
     }
 
     if (action === "create_food_item") {
@@ -1320,7 +1404,51 @@ Deno.serve(async (req) => {
           .sort((a, b) => b.amount - a.amount);
       }
 
-      return json({ total, byCategory: cats, byPaymentMode: modes, trend, byBranch: branchRevenue, dateFrom: range.from, dateTo: range.to });
+      // Cashback payouts, locker deposit refunds, and unused Food Pass balances handed back
+      // to students aren't revenue transactions — net them out to show the real final figure.
+      const { data: payouts } = await db.from("payouts").select("payout_type, amount")
+        .in("branch_id", branchFilter)
+        .gte("created_at", range.from + "T00:00:00Z")
+        .lte("created_at", range.to + "T23:59:59Z");
+      const payoutTotals = { cashback: 0, locker_deposit: 0, food_pass_refund: 0 };
+      for (const p of payouts ?? []) {
+        payoutTotals[p.payout_type as keyof typeof payoutTotals] = (payoutTotals[p.payout_type as keyof typeof payoutTotals] ?? 0) + Number(p.amount);
+      }
+      const totalPayouts = Object.values(payoutTotals).reduce((a, b) => a + b, 0);
+      const netRevenue = total - totalPayouts;
+
+      return json({
+        total, byCategory: cats, byPaymentMode: modes, trend, byBranch: branchRevenue,
+        dateFrom: range.from, dateTo: range.to,
+        payouts: payoutTotals, totalPayouts, netRevenue,
+      });
+    }
+
+    if (action === "get_referral_stats") {
+      const { branchId, allBranches } = payload;
+      let branchFilter: string[] = [];
+      if (allBranches && isOwner(staff)) {
+        const { data: bs } = await db.from("branches").select("id");
+        branchFilter = bs?.map(b => b.id) ?? [];
+      } else {
+        const bid = branchId ?? staff.branch_id;
+        if (!bid || !requireBranch(staff, bid)) return err("Branch access denied", 403);
+        branchFilter = [bid];
+      }
+
+      const { data: students } = await db.from("students").select("referral_source")
+        .in("branch_id", branchFilter).not("referral_source", "is", null);
+      const counts: Record<string, number> = {};
+      for (const s of students ?? []) {
+        const key = s.referral_source || "unknown";
+        counts[key] = (counts[key] ?? 0) + 1;
+      }
+      const total = Object.values(counts).reduce((a, b) => a + b, 0);
+      const rows = Object.entries(counts)
+        .map(([source, count]) => ({ source, count, percent: total ? Math.round((count / total) * 1000) / 10 : 0 }))
+        .sort((a, b) => b.count - a.count);
+
+      return json({ rows, total });
     }
 
     if (action === "list_transactions") {
@@ -1680,8 +1808,11 @@ Deno.serve(async (req) => {
       const today = todayISO();
       const weekAgo = new Date(); weekAgo.setDate(weekAgo.getDate() - 7);
 
+      // Any outstanding balance is actionable, regardless of due_date — due_date is always
+      // set a month out even on a same-day partial payment, so gating on it would hide a
+      // real balance for a full month.
       const { data: dueToday } = await db.from("memberships").select("*, students(name, phone, course)")
-        .eq("branch_id", branchId).eq("is_active", true).lte("due_date", today).gt("fee_due", 0);
+        .eq("branch_id", branchId).eq("is_active", true).gt("fee_due", 0);
 
       const { data: expiringSoon } = await db.from("memberships").select("*, students(name, phone)")
         .eq("branch_id", branchId).eq("is_active", true)
@@ -1743,11 +1874,19 @@ Deno.serve(async (req) => {
         unpaidFoodTotalsByStudent.set(fb.student_id, (unpaidFoodTotalsByStudent.get(fb.student_id) ?? 0) + Number(fb.total));
       }
 
+      // Food Pass holders never see a "pending, pay cash" food bill — it's auto-settled from
+      // the pass at checkout — so the frontend needs to know who has one.
+      const { data: foodPasses } = memberStudentIds.length
+        ? await db.from("food_passes").select("student_id").in("student_id", memberStudentIds)
+        : { data: [] };
+      const foodPassStudentIds = new Set((foodPasses ?? []).map((p: { student_id: string }) => p.student_id));
+
       const bookings = (data ?? []).map(b => ({
         ...b,
         memberships: activeMemByStudent.get(b.student_id) ?? b.memberships,
         foodTotal: foodTotals.get(b.id) ?? 0,
         unpaidFoodTotal: b.booking_type === "walkin" ? (unpaidFoodTotalsByBooking.get(b.id) ?? 0) : (unpaidFoodTotalsByStudent.get(b.student_id) ?? 0),
+        hasFoodPass: foodPassStudentIds.has(b.student_id),
       }));
       return json({ bookings });
     }
@@ -1794,6 +1933,12 @@ Deno.serve(async (req) => {
         .eq("is_active", true)
         .order("end_date");
       type MemRow = { id: string; category: string; hours_per_day: number; start_date: string; end_date: string; cabin_no: string | null; is_paused: boolean; hold_days: number; fee_due: number; total_paid: number; students: { id: string; name: string; phone: string } | null };
+      const studentIds = (data as MemRow[] ?? []).map(m => m.students?.id).filter((id): id is string => !!id);
+      const { data: pendingCashbacks } = studentIds.length
+        ? await db.from("cashbacks").select("student_id, cashback_type, cashback_value").in("student_id", studentIds).eq("status", "pending")
+        : { data: [] };
+      const cashbackByStudent = new Map((pendingCashbacks ?? []).map((c: { student_id: string; cashback_type: string; cashback_value: number }) => [c.student_id, c]));
+
       const members = (data as MemRow[] ?? []).map(m => ({
         membership_id: m.id,
         student_id: m.students?.id,
@@ -1808,6 +1953,7 @@ Deno.serve(async (req) => {
         hold_days: m.hold_days,
         fee_due: m.fee_due,
         total_paid: m.total_paid,
+        pending_cashback: m.students?.id ? (cashbackByStudent.get(m.students.id) ?? null) : null,
       }));
 
       // Remind staff to collect renewal during the student's final week of validity —
@@ -1851,7 +1997,15 @@ Deno.serve(async (req) => {
       const cashbackAmount = pendingCashback
         ? Math.min(pendingCashback.cashback_type === "percent" ? totalBeforeCashback * (Number(pendingCashback.cashback_value) / 100) : Number(pendingCashback.cashback_value), totalBeforeCashback)
         : 0;
-      const totalFee = totalBeforeCashback - cashbackAmount;
+
+      // Any overtime run up since the last settlement gets folded into this renewal's bill.
+      const { data: unbilledOvertime } = await db.from("overtime_sessions").select("id, overtime_minutes")
+        .eq("student_id", mem.student_id).is("billed_at", null);
+      const overtimeMinutes = (unbilledOvertime ?? []).reduce((s: number, o: { overtime_minutes: number }) => s + Number(o.overtime_minutes), 0);
+      const overtimeHourlyRate = Number(mem.monthly_fee) / (Number(mem.hours_per_day) * 30);
+      const overtimeDue = Math.round(overtimeMinutes * overtimeHourlyRate / 60);
+
+      const totalFee = totalBeforeCashback - cashbackAmount + overtimeDue;
 
       const feePaid = advanceAmount != null ? Number(advanceAmount) : totalFee;
       const feeDue = Math.max(totalFee - feePaid, 0);
@@ -1912,8 +2066,17 @@ Deno.serve(async (req) => {
         }).eq("id", pendingCashback.id);
       }
 
+      if (unbilledOvertime?.length) {
+        await db.from("overtime_sessions").update({ billed_at: new Date().toISOString(), billed_amount: overtimeDue })
+          .in("id", unbilledOvertime.map((o: { id: string }) => o.id));
+      }
+
       await refreshStudentStatus(db, mem.student_id);
-      return json({ ok: true, membershipId: newMem!.id, cashbackApplied: cashbackAmount > 0 ? cashbackAmount : null });
+      return json({
+        ok: true, membershipId: newMem!.id,
+        cashbackApplied: cashbackAmount > 0 ? cashbackAmount : null,
+        overtimeCharged: overtimeDue > 0 ? overtimeDue : null,
+      });
     }
 
     // ─── CLOSE MEMBERSHIP ───
@@ -1925,33 +2088,123 @@ Deno.serve(async (req) => {
 
       const { data: locker } = await db.from("lockers").select("*")
         .eq("student_id", mem.student_id).eq("is_active", true).maybeSingle();
+      const { data: foodPass } = await db.from("food_passes").select("*")
+        .eq("student_id", mem.student_id).maybeSingle();
+      const { data: pendingCashback } = await db.from("cashbacks").select("*")
+        .eq("student_id", mem.student_id).eq("status", "pending").maybeSingle();
+      const { data: unbilledOvertime } = await db.from("overtime_sessions").select("overtime_minutes")
+        .eq("student_id", mem.student_id).is("billed_at", null);
 
       const membershipDue = Number(mem.fee_due ?? 0);
       const lockerDue = Number(locker?.fee_due ?? 0);
+      // The caution deposit is owed back to the student once the locker is given up —
+      // it's a credit against whatever else they owe, not revenue.
+      const lockerDepositRefund = locker && !locker.deposit_returned ? Number(locker.deposit_amount ?? 0) : 0;
+      const foodPassBalance = Number(foodPass?.balance ?? 0);
+      const foodPassRefund = Math.max(foodPassBalance, 0);
+      const foodPassOwed = Math.max(-foodPassBalance, 0);
+      const cashbackBase = Number(mem.monthly_fee) * Number(mem.months_paid);
+      const cashbackAmount = pendingCashback
+        ? (pendingCashback.cashback_type === "percent" ? cashbackBase * (Number(pendingCashback.cashback_value) / 100) : Number(pendingCashback.cashback_value))
+        : 0;
+      const overtimeMinutes = (unbilledOvertime ?? []).reduce((s: number, o: { overtime_minutes: number }) => s + Number(o.overtime_minutes), 0);
+      const overtimeHourlyRate = Number(mem.monthly_fee) / (Number(mem.hours_per_day) * 30);
+      const overtimeDue = Math.round(overtimeMinutes * overtimeHourlyRate / 60);
+
+      const totalOwed = membershipDue + lockerDue + foodPassOwed + overtimeDue;
+      const totalCredit = lockerDepositRefund + foodPassRefund + cashbackAmount;
+      const netAmount = totalOwed - totalCredit;
 
       return json({
-        membershipDue, lockerDue, totalDue: membershipDue + lockerDue,
-        canClose: membershipDue <= 0 && lockerDue <= 0,
+        membershipDue, lockerDue, lockerDepositRefund,
+        foodPassBalance, foodPassRefund, foodPassOwed,
+        cashbackAmount, overtimeMinutes, overtimeDue,
+        totalOwed, totalCredit, netAmount,
+        canClose: true,
         locker: locker ?? null,
       });
     }
 
     if (action === "close_membership") {
-      const { membershipId } = payload;
+      const { membershipId, paymentMode } = payload;
       const { data: mem } = await db.from("memberships").select("*").eq("id", membershipId).single();
       if (!mem) return err("Membership not found");
       if (!requireBranch(staff, mem.branch_id)) return err("Branch access denied", 403);
 
-      if (Number(mem.fee_due ?? 0) > 0) {
-        return err(`This membership still has ₹${Number(mem.fee_due)} pending — clear it before closing.`);
-      }
-      const { data: locker } = await db.from("lockers").select("fee_due")
+      const { data: locker } = await db.from("lockers").select("*")
         .eq("student_id", mem.student_id).eq("is_active", true).maybeSingle();
-      if (locker && Number(locker.fee_due ?? 0) > 0) {
-        return err(`This student's locker still has ₹${Number(locker.fee_due)} pending — clear it before closing.`);
+      const { data: foodPass } = await db.from("food_passes").select("*")
+        .eq("student_id", mem.student_id).maybeSingle();
+      const { data: pendingCashback } = await db.from("cashbacks").select("*")
+        .eq("student_id", mem.student_id).eq("status", "pending").maybeSingle();
+      const { data: unbilledOvertime } = await db.from("overtime_sessions").select("id, overtime_minutes")
+        .eq("student_id", mem.student_id).is("billed_at", null);
+
+      // Final settlement: what's owed to the business nets against what's owed back to
+      // the student (locker deposit, unredeemed Food Pass balance, unredeemed cashback).
+      const membershipDue = Number(mem.fee_due ?? 0);
+      const lockerDue = Number(locker?.fee_due ?? 0);
+      const lockerDepositRefund = locker && !locker.deposit_returned ? Number(locker.deposit_amount ?? 0) : 0;
+      const foodPassBalance = Number(foodPass?.balance ?? 0);
+      const foodPassRefund = Math.max(foodPassBalance, 0);
+      const foodPassOwed = Math.max(-foodPassBalance, 0);
+      const cashbackBase = Number(mem.monthly_fee) * Number(mem.months_paid);
+      const cashbackAmount = pendingCashback
+        ? (pendingCashback.cashback_type === "percent" ? cashbackBase * (Number(pendingCashback.cashback_value) / 100) : Number(pendingCashback.cashback_value))
+        : 0;
+      const overtimeMinutes = (unbilledOvertime ?? []).reduce((s: number, o: { overtime_minutes: number }) => s + Number(o.overtime_minutes), 0);
+      const overtimeHourlyRate = Number(mem.monthly_fee) / (Number(mem.hours_per_day) * 30);
+      const overtimeDue = Math.round(overtimeMinutes * overtimeHourlyRate / 60);
+
+      const totalOwed = membershipDue + lockerDue + foodPassOwed + overtimeDue;
+      const totalCredit = lockerDepositRefund + foodPassRefund + cashbackAmount;
+      const netAmount = totalOwed - totalCredit;
+
+      if (netAmount > 0 && !paymentMode) {
+        return err(`₹${netAmount.toFixed(2)} still needs to be collected before closing — choose a payment mode.`);
       }
 
-      await db.from("memberships").update({ is_active: false }).eq("id", membershipId);
+      await db.from("memberships").update({ is_active: false, fee_due: 0 }).eq("id", membershipId);
+
+      if (unbilledOvertime?.length) {
+        await db.from("overtime_sessions").update({ billed_at: new Date().toISOString(), billed_amount: overtimeDue })
+          .in("id", unbilledOvertime.map((o: { id: string }) => o.id));
+      }
+
+      if (locker) {
+        await db.from("lockers").update({
+          is_active: false, fee_due: 0, deposit_returned: true,
+        }).eq("id", locker.id);
+        if (lockerDepositRefund > 0) {
+          await db.from("payouts").insert({
+            student_id: mem.student_id, branch_id: mem.branch_id, payout_type: "locker_deposit",
+            amount: lockerDepositRefund, notes: "Locker caution deposit returned at membership closure",
+            created_by_staff_id: staff.id,
+          });
+        }
+      }
+      if (foodPass) {
+        await db.from("food_passes").update({ balance: 0, updated_at: new Date().toISOString() }).eq("id", foodPass.id);
+        if (foodPassRefund > 0) {
+          await db.from("payouts").insert({
+            student_id: mem.student_id, branch_id: mem.branch_id, payout_type: "food_pass_refund",
+            amount: foodPassRefund, notes: "Unused Food Pass balance returned at membership closure",
+            created_by_staff_id: staff.id,
+          });
+        }
+      }
+      if (pendingCashback) {
+        await db.from("cashbacks").update({
+          status: "settled", redeemed_amount: cashbackAmount, redeemed_at: new Date().toISOString(),
+        }).eq("id", pendingCashback.id);
+        if (cashbackAmount > 0) {
+          await db.from("payouts").insert({
+            student_id: mem.student_id, branch_id: mem.branch_id, payout_type: "cashback",
+            amount: cashbackAmount, notes: "Cashback settled at membership closure",
+            created_by_staff_id: staff.id,
+          });
+        }
+      }
 
       // Release reserved desk if permanent
       if (mem.desk_id) {
@@ -1962,21 +2215,22 @@ Deno.serve(async (req) => {
 
       await db.from("alerts").update({ status: "resolved" }).eq("student_id", mem.student_id).eq("alert_type", "expiry").eq("status", "pending");
 
-      // A pending cashback that never got redeemed at renewal is paid out in cash instead,
-      // since there's no future renewal fee left to discount against.
-      const { data: pendingCashback } = await db.from("cashbacks").select("*")
-        .eq("student_id", mem.student_id).eq("status", "pending").maybeSingle();
-      let cashbackPayout = null;
-      if (pendingCashback) {
-        const base = Number(mem.monthly_fee) * Number(mem.months_paid);
-        cashbackPayout = pendingCashback.cashback_type === "percent" ? base * (Number(pendingCashback.cashback_value) / 100) : Number(pendingCashback.cashback_value);
-        await db.from("cashbacks").update({
-          status: "settled", redeemed_amount: cashbackPayout, redeemed_at: new Date().toISOString(),
-        }).eq("id", pendingCashback.id);
+      // Only a positive net is real revenue collected — a refund going the other way
+      // isn't logged as a transaction, same as the cashback-payout convention.
+      if (netAmount > 0) {
+        await db.from("transactions").insert({
+          student_id: mem.student_id, branch_id: mem.branch_id, membership_id: membershipId,
+          category: "membership", amount: netAmount, payment_mode: paymentMode,
+          notes: "Final settlement at membership closure", created_by_staff_id: staff.id,
+        });
       }
 
       await refreshStudentStatus(db, mem.student_id);
-      return json({ ok: true, cashbackPayout });
+      return json({
+        ok: true, netAmount,
+        collectedAmount: Math.max(netAmount, 0), refundAmount: Math.max(-netAmount, 0),
+        cashbackAmount, lockerDepositRefund, foodPassRefund, overtimeDue,
+      });
     }
 
     // ─── ENQUIRIES (leads pipeline) ───

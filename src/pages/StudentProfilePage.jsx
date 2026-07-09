@@ -190,7 +190,14 @@ export default function StudentProfilePage() {
       const res = await api('apply_loyalty_discount', {
         membershipId, discountType, discountValue: Number(discountValue), remarks: discountRemarks,
       })
-      setDiscountSuccess(`Discount of ${formatCurrency(res.discountAmount)} applied — new fee due ${formatCurrency(res.newFeeDue)}`)
+      let msg = res.discountAmount > 0
+        ? `Discount of ${formatCurrency(res.discountAmount)} applied — new fee due ${formatCurrency(res.newFeeDue)}`
+        : ''
+      if (res.bankedAsCashback > 0) {
+        msg += `${msg ? ' — ' : ''}🎁 ${formatCurrency(res.bankedAsCashback)} banked as cashback`
+      }
+      if (res.cashbackBankedNote) msg += ` (${res.cashbackBankedNote})`
+      setDiscountSuccess(msg)
       setDiscountValue('')
       setDiscountRemarks('')
       refresh()
@@ -251,8 +258,8 @@ export default function StudentProfilePage() {
         advanceAmount: renewPayType === 'partial' ? (Number(renewAdvance) || null) : renewPayType === 'pending' ? 0 : null,
       })
       setRenewOpen(false)
-      if (res.cashbackApplied) {
-        setCashbackNotice(res.cashbackApplied)
+      if (res.cashbackApplied || res.overtimeCharged) {
+        setCashbackNotice({ amount: res.cashbackApplied, overtimeCharged: res.overtimeCharged })
       }
       refresh()
     } catch (err) {
@@ -265,23 +272,36 @@ export default function StudentProfilePage() {
   if (loading) return <p>Loading profile…</p>
   if (!data?.student) return <p>Student not found.</p>
 
-  const { student, memberships, bookings, transactions, locker, overtimeSessions, holds, discounts } = data
+  const { student, memberships, bookings, transactions, locker, overtimeSessions, holds, discounts, cashbacks } = data
   const activeMem = memberships?.find(m => m.is_active)
   const isPaused = activeMem?.is_paused || activeMem?.status === 'paused'
   const isExpired = !!activeMem && activeMem.end_date < todayISO()
 
   const feeDueNum = Number(activeMem?.fee_due ?? 0)
   const discountValueNum = Number(discountValue) || 0
-  const previewDiscountAmount = discountValueNum > 0
-    ? Math.min(discountType === 'percent' ? feeDueNum * (discountValueNum / 100) : discountValueNum, feeDueNum)
+  const discountBase = feeDueNum > 0 ? feeDueNum : Number(activeMem?.monthly_fee ?? 0) * Number(activeMem?.months_paid ?? 1)
+  const rawDiscountAmount = discountValueNum > 0
+    ? (discountType === 'percent' ? discountBase * (discountValueNum / 100) : discountValueNum)
     : 0
+  const previewDiscountAmount = Math.min(rawDiscountAmount, feeDueNum)
+  const previewBankedAsCashback = Math.max(rawDiscountAmount - feeDueNum, 0)
+  const pendingCashback = (cashbacks ?? []).find(c => c.status === 'pending')
 
   // Renewal pricing — plan (category/hours) is editable at renewal time
   const renewPackages = renewCategory === 'permanent' ? permPackages : tempPackages
   const renewPkg = renewPackages.find(p => p.hours === renewHoursPerDay) ?? renewPackages[0]
   const renewDiscount = getMultiMonthDiscount(renewMonths)
   const renewGross = renewPkg ? renewPkg.fee * renewMonths : 0
-  const renewTotal = renewGross * (1 - renewDiscount / 100)
+  const renewBeforeCashback = renewGross * (1 - renewDiscount / 100)
+  const renewCashbackAmount = pendingCashback
+    ? Math.min(
+        pendingCashback.cashback_type === 'percent'
+          ? renewBeforeCashback * (Number(pendingCashback.cashback_value) / 100)
+          : Number(pendingCashback.cashback_value),
+        renewBeforeCashback,
+      )
+    : 0
+  const renewTotal = renewBeforeCashback - renewCashbackAmount
   const renewAdvanceNum = Number(renewAdvance) || 0
   const renewRemaining = renewPayType === 'partial' ? Math.max(renewTotal - renewAdvanceNum, 0) : 0
 
@@ -316,6 +336,7 @@ export default function StudentProfilePage() {
             <tbody>
               {[
                 ['Phone', <span className="mono" key="phone">{student.phone}</span>],
+                ['Emergency Contact', <span className="mono" key="emergency">{student.emergency_contact || '—'}</span>],
                 ['Course', student.course || '—'],
                 activeMem && ['Membership', (
                   <span key="mem">
@@ -433,12 +454,14 @@ export default function StudentProfilePage() {
           </div>
         )}
 
-        {/* Loyalty Discount — owner only, applied against the pending membership fee */}
-        {isOwner && activeMem?.fee_due > 0 && (
+        {/* Loyalty Discount — owner only. Available on any active membership; if there's no
+            pending fee (or the discount exceeds it), the excess is banked as a cashback. */}
+        {isOwner && activeMem && (
           <div className="card">
             <h3 style={{ color: 'var(--accent)', marginBottom: '0.5rem' }}>🏷️ Discount</h3>
             <p style={{ color: 'var(--text-muted)', fontSize: '0.8rem', marginBottom: '0.75rem' }}>
-              {student.total_visits} visits · {student.total_hours_studied} hrs studied — reward loyalty with a discount on the pending fee.
+              {student.total_visits} visits · {student.total_hours_studied} hrs studied — reward loyalty with a discount.
+              {feeDueNum <= 0 && ' This membership has no pending fee, so the discount will be banked as a cashback.'}
             </p>
             <div className="form-group">
               <div style={{ display: 'flex', gap: '0.5rem' }}>
@@ -485,6 +508,11 @@ export default function StudentProfilePage() {
                 Discount: {formatCurrency(previewDiscountAmount)} → New Fee Due: {formatCurrency(feeDueNum - previewDiscountAmount)}
               </p>
             )}
+            {previewBankedAsCashback > 0 && (
+              <p className="mono" style={{ color: 'var(--accent)', fontSize: '0.82rem', marginBottom: '0.5rem' }}>
+                🎁 {formatCurrency(previewBankedAsCashback)} will be banked as cashback
+              </p>
+            )}
             {discountError && <p className="error-msg">{discountError}</p>}
             {discountSuccess && <p style={{ color: '#4ade80', fontSize: '0.82rem', marginBottom: '0.5rem' }}>{discountSuccess}</p>}
             <button
@@ -494,6 +522,22 @@ export default function StudentProfilePage() {
             >
               {discountLoading ? 'Applying…' : 'Apply Discount'}
             </button>
+          </div>
+        )}
+
+        {/* Cashback — read-only display; granted from the Top Students leaderboard */}
+        {activeMem && pendingCashback && (
+          <div className="card">
+            <h3 style={{ color: 'var(--accent)', marginBottom: '0.5rem' }}>🎁 Cashback</h3>
+            <p className="mono" style={{ fontSize: '1.05rem', fontWeight: 700, color: 'var(--accent)', marginBottom: '0.3rem' }}>
+              {pendingCashback.cashback_type === 'percent' ? `${pendingCashback.cashback_value}% Off` : formatCurrency(pendingCashback.cashback_value)}
+            </p>
+            <p style={{ fontSize: '0.82rem', color: 'var(--text-muted)' }}>
+              Pending — will be applied as a discount on the next renewal, or paid out in cash if the membership is closed instead.
+            </p>
+            {pendingCashback.notes && (
+              <p style={{ fontSize: '0.78rem', color: 'var(--text-muted)', marginTop: '0.4rem', fontStyle: 'italic' }}>{pendingCashback.notes}</p>
+            )}
           </div>
         )}
 
@@ -726,6 +770,34 @@ export default function StudentProfilePage() {
         </div>
       )}
 
+      {(cashbacks ?? []).length > 0 && (
+        <div className="card" style={{ marginTop: '1rem' }}>
+          <h3 style={{ color: 'var(--accent)', marginBottom: '0.75rem' }}>🎁 Cashback History</h3>
+          <table className="data-table">
+            <thead>
+              <tr><th>Date</th><th>Type</th><th>Value</th><th>Status</th><th>Redeemed/Settled Amount</th><th>Granted By</th><th>Notes</th></tr>
+            </thead>
+            <tbody>
+              {cashbacks.map(c => (
+                <tr key={c.id}>
+                  <td className="mono">{formatDate(c.created_at)}</td>
+                  <td className="cap">{c.cashback_type}</td>
+                  <td className="mono">{c.cashback_type === 'percent' ? `${c.cashback_value}%` : formatCurrency(c.cashback_value)}</td>
+                  <td>
+                    <span className={`badge ${c.status === 'pending' ? 'badge-pending' : c.status === 'redeemed' ? 'badge-active' : 'badge-trial'} cap`}>
+                      {c.status === 'redeemed' ? 'Redeemed at Renewal' : c.status === 'settled' ? 'Paid Out at Closure' : 'Pending'}
+                    </span>
+                  </td>
+                  <td className="mono" style={{ color: '#4ade80' }}>{c.redeemed_amount != null ? formatCurrency(c.redeemed_amount) : '—'}</td>
+                  <td>{c.staff?.display_name || c.staff?.username || '—'}</td>
+                  <td style={{ color: 'var(--text-muted)', fontSize: '0.82rem' }}>{c.notes || '—'}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+
       {(bookings ?? []).length > 0 && (
         <div className="card" style={{ marginTop: '1rem' }}>
           <h3 style={{ color: 'var(--accent)', marginBottom: '0.75rem' }}>Attendance History</h3>
@@ -754,10 +826,11 @@ export default function StudentProfilePage() {
           <h3 style={{ color: 'var(--accent)', marginBottom: '0.75rem' }}>Overtime History</h3>
           <p style={{ color: 'var(--text-muted)', fontSize: '0.82rem', marginBottom: '0.75rem' }}>
             Total overtime: {(overtimeSessions ?? []).reduce((sum, s) => sum + s.overtime_minutes, 0)} minutes
+            {' '}(15 min grace already excluded — this is the billable portion)
           </p>
           <table className="data-table">
             <thead>
-              <tr><th>Date</th><th>Duration</th></tr>
+              <tr><th>Date</th><th>Duration</th><th>Status</th></tr>
             </thead>
             <tbody>
               {(overtimeSessions ?? []).map(s => {
@@ -768,6 +841,13 @@ export default function StudentProfilePage() {
                     <td className="mono">{formatDate(s.session_date)}</td>
                     <td style={{ color: '#ff8888', fontWeight: 600 }}>
                       {h > 0 ? `${h}h ${m}m` : `${m}m`}
+                    </td>
+                    <td>
+                      {s.billed_at ? (
+                        <span className="badge badge-active">Billed{s.billed_amount != null ? ` (${formatCurrency(s.billed_amount)})` : ''}</span>
+                      ) : (
+                        <span className="badge badge-pending">Pending</span>
+                      )}
                     </td>
                   </tr>
                 )
@@ -858,6 +938,12 @@ export default function StudentProfilePage() {
             )}
 
             <div className="card" style={{ marginBottom: '1rem', background: 'rgba(255,215,0,0.05)' }}>
+              {renewCashbackAmount > 0 && (
+                <>
+                  <p className="mono" style={{ color: 'var(--text-muted)' }}>Before cashback: {formatCurrency(renewBeforeCashback)}</p>
+                  <p className="mono" style={{ color: '#4ade80' }}>🎁 Cashback applied: -{formatCurrency(renewCashbackAmount)}</p>
+                </>
+              )}
               <p className="mono">Total: {formatCurrency(renewTotal)}</p>
               {renewPayType === 'pending' && (
                 <p className="mono" style={{ color: 'var(--accent)', fontWeight: 700 }}>Remaining to be paid: {formatCurrency(renewTotal)}</p>
@@ -888,15 +974,27 @@ export default function StudentProfilePage() {
       {cashbackNotice && (
         <div className="modal-overlay" onClick={() => setCashbackNotice(null)}>
           <div className="modal" style={{ maxWidth: 400 }} onClick={(e) => e.stopPropagation()}>
-            <h2>🎁 Cashback Applied</h2>
-            <div className="card" style={{ margin: '1rem 0', background: 'rgba(255,215,0,0.05)' }}>
-              <p className="mono" style={{ color: 'var(--accent)', fontSize: '1.3rem', fontWeight: 700 }}>
-                {formatCurrency(cashbackNotice)}
-              </p>
-              <p style={{ fontSize: '0.85rem', color: 'var(--text-muted)', marginTop: '0.5rem' }}>
-                A pending cashback was applied as a discount on this renewal.
-              </p>
-            </div>
+            <h2>Renewal Settled</h2>
+            {cashbackNotice.amount > 0 && (
+              <div className="card" style={{ margin: '1rem 0', background: 'rgba(255,215,0,0.05)' }}>
+                <p className="mono" style={{ color: 'var(--accent)', fontSize: '1.2rem', fontWeight: 700 }}>
+                  🎁 {formatCurrency(cashbackNotice.amount)}
+                </p>
+                <p style={{ fontSize: '0.85rem', color: 'var(--text-muted)', marginTop: '0.3rem' }}>
+                  A pending cashback was applied as a discount on this renewal.
+                </p>
+              </div>
+            )}
+            {cashbackNotice.overtimeCharged > 0 && (
+              <div className="card" style={{ margin: '1rem 0', background: 'rgba(255,60,60,0.06)' }}>
+                <p className="mono" style={{ color: '#ff8888', fontSize: '1.2rem', fontWeight: 700 }}>
+                  ⏱ {formatCurrency(cashbackNotice.overtimeCharged)}
+                </p>
+                <p style={{ fontSize: '0.85rem', color: 'var(--text-muted)', marginTop: '0.3rem' }}>
+                  Accumulated overtime was added to this renewal's bill.
+                </p>
+              </div>
+            )}
             <div className="modal-actions">
               <button type="button" className="btn btn-primary" onClick={() => setCashbackNotice(null)}>Got it</button>
             </div>
