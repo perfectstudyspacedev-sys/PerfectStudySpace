@@ -15,7 +15,7 @@ function json(data: unknown, status = 200) {
 
 function err(message: string, status = 400) {
   return json({ error: message }, status);
-}
+} 
 
 const JWT_SECRET = Deno.env.get("STAFF_JWT_SECRET") ?? Deno.env.get("JWT_SECRET") ?? "dev-secret-change-in-production";
 
