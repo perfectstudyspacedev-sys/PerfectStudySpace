@@ -222,7 +222,7 @@ export default function Shell() {
             </div>
           )}
           {!isOwner && activeBranch && (
-            <span className="mono" style={{ fontSize: '0.8rem', color: 'var(--accent)' }}>{activeBranch.name}</span>
+            <span className="mono" style={{ fontSize: '1.1rem', color: 'var(--accent)' }}>{activeBranch.name}</span>
           )}
         </div>
 

@@ -8,8 +8,8 @@
   --booked: #ffd700;
   --blocked: #2a2a2a;
   --border: rgba(255, 215, 0, 0.25);
-  --font-display: 'Archivo Black', sans-serif;
-  --font-brand: 'Poppins', sans-serif;
+  --font-display: 'League Spartan', sans-serif;
+  --font-brand: 'League Spartan', sans-serif;
   --font-mono: 'JetBrains Mono', monospace;
 }
 
@@ -143,8 +143,8 @@ h1, h2, h3 {
 }
 
 .topbar-brand-logo {
-  height: 48px;
-  width: 48px;
+  height: 68px;
+  width: 68px;
   border-radius: 50%;
   object-fit: cover;
   flex-shrink: 0;
@@ -184,7 +184,7 @@ h1, h2, h3 {
   font-family: var(--font-brand);
   font-weight: 800;
   color: var(--accent);
-  font-size: 1.35rem;
+  font-size: 1.75rem;
   letter-spacing: 0.01em;
   white-space: nowrap;
   text-shadow: 0 0 18px rgba(255, 215, 0, 0.25);
@@ -402,8 +402,8 @@ input[type="week"]::-webkit-calendar-picker-indicator {
   font-family: var(--font-brand);
   font-weight: 900;
   color: var(--accent);
-  font-size: 2rem;
-  letter-spacing: 0.01em;
+  font-size: 2.75rem;
+  letter-spacing: 0.05em;
   text-shadow: 0 0 24px rgba(255, 215, 0, 0.3);
   margin: 0;
 }
