@@ -1829,16 +1829,20 @@ Deno.serve(async (req) => {
       if (!isOwner(staff)) return err("Owner only", 403);
       const { staffId, username, newPassword, displayName, branchId, isActive } = payload;
       if (!staffId) return err("Staff ID required");
-      const { data: target } = await db.from("staff").select("id, role").eq("id", staffId).single();
+      const { data: target } = await db.from("staff").select("id, role, is_active").eq("id", staffId).single();
       if (!target) return err("Staff not found");
       if (target.role === "owner") return err("Owner accounts can't be edited here");
       if (staffId === staff.id) return err("You can't edit your own account from here");
+      // Deactivation is permanent — once a staff account is turned off it can never be
+      // switched back on, so this deliberately does not accept isActive: true on an
+      // already-inactive account.
+      if (!target.is_active) return err("This staff account has been permanently removed and cannot be reactivated");
 
       const updates: Record<string, unknown> = { updated_at: new Date().toISOString() };
       if (username !== undefined && username !== "") updates.username = username;
       if (displayName !== undefined) updates.display_name = displayName;
       if (branchId !== undefined && branchId !== "") updates.branch_id = branchId;
-      if (isActive !== undefined) updates.is_active = isActive;
+      if (isActive === false) updates.is_active = false;
       if (newPassword) {
         const { data: hash } = await db.rpc("hash_staff_password", { plain_password: newPassword });
         updates.password_hash = hash;

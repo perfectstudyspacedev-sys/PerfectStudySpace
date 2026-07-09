@@ -48,6 +48,7 @@ export default function StaffPage() {
   const [editPassword, setEditPassword] = useState('')
   const [editError, setEditError] = useState('')
   const [editSaving, setEditSaving] = useState(false)
+  const [confirmDialog, setConfirmDialog] = useState(null)
 
   const load = useCallback(async () => {
     const [s, b] = await Promise.all([api('list_staff'), api('list_branches')])
@@ -114,15 +115,18 @@ export default function StaffPage() {
     }
   }
 
-  const toggleActive = async (s) => {
-    const verb = s.is_active ? 'deactivate' : 'reactivate'
-    if (!window.confirm(`Are you sure you want to ${verb} ${s.display_name || s.username}?`)) return
-    try {
-      await api('update_staff', { staffId: s.id, isActive: !s.is_active })
-      load()
-    } catch (err) {
-      window.alert(err.message)
-    }
+  const deactivateStaff = (s) => {
+    setConfirmDialog({
+      message: `Permanently remove ${s.display_name || s.username}? This cannot be undone — they will be logged out immediately and can never be reactivated.`,
+      onConfirm: async () => {
+        try {
+          await api('update_staff', { staffId: s.id, isActive: false })
+          load()
+        } catch (err) {
+          window.alert(err.message)
+        }
+      },
+    })
   }
 
   return (
@@ -182,25 +186,31 @@ export default function StaffPage() {
                       )}
                     </div>
                   </div>
-                  <span className={`badge badge-${s.is_active ? 'active' : 'inactive'}`}>{s.is_active ? 'Active' : 'Inactive'}</span>
+                  <span className={`badge badge-${s.is_active ? 'active' : 'inactive'}`}>{s.is_active ? 'Active' : 'Removed'}</span>
                 </div>
                 {s.role !== 'owner' && (
                   <div style={{ display: 'flex', gap: '0.4rem' }}>
-                    <button type="button" className="btn btn-ghost" style={{ flex: 1, padding: '0.35rem', fontSize: '0.75rem' }} onClick={() => openEdit(s)}>
-                      Edit
-                    </button>
-                    <button
-                      type="button"
-                      style={{
-                        flex: 1, padding: '0.35rem', fontSize: '0.75rem', borderRadius: 4, cursor: 'pointer',
-                        background: s.is_active ? 'rgba(255,60,60,0.08)' : 'rgba(74,222,128,0.08)',
-                        border: `1px solid ${s.is_active ? 'rgba(255,60,60,0.35)' : 'rgba(74,222,128,0.35)'}`,
-                        color: s.is_active ? '#ff8888' : '#4ade80',
-                      }}
-                      onClick={() => toggleActive(s)}
-                    >
-                      {s.is_active ? 'Deactivate' : 'Reactivate'}
-                    </button>
+                    {s.is_active ? (
+                      <>
+                        <button type="button" className="btn btn-ghost" style={{ flex: 1, padding: '0.35rem', fontSize: '0.75rem' }} onClick={() => openEdit(s)}>
+                          Edit
+                        </button>
+                        <button
+                          type="button"
+                          style={{
+                            flex: 1, padding: '0.35rem', fontSize: '0.75rem', borderRadius: 4, cursor: 'pointer',
+                            background: 'rgba(255,60,60,0.08)', border: '1px solid rgba(255,60,60,0.35)', color: '#ff8888',
+                          }}
+                          onClick={() => deactivateStaff(s)}
+                        >
+                          Deactivate
+                        </button>
+                      </>
+                    ) : (
+                      <p style={{ fontSize: '0.75rem', color: 'var(--text-muted)', margin: 0 }}>
+                        Permanently removed — cannot be reactivated
+                      </p>
+                    )}
                   </div>
                 )}
               </div>
@@ -284,6 +294,25 @@ export default function StaffPage() {
               <button type="button" className="btn btn-ghost" onClick={() => setEditTarget(null)}>Cancel</button>
               <button type="button" className="btn btn-primary" disabled={editSaving} onClick={handleEditSave}>
                 {editSaving ? 'Saving…' : 'Save Changes'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {confirmDialog && (
+        <div className="modal-overlay" onClick={() => setConfirmDialog(null)}>
+          <div className="modal" style={{ maxWidth: 400 }} onClick={(e) => e.stopPropagation()}>
+            <h2>Are you sure?</h2>
+            <p style={{ color: 'var(--text-muted)', fontSize: '0.9rem', marginBottom: '1.5rem' }}>{confirmDialog.message}</p>
+            <div className="modal-actions">
+              <button type="button" className="btn btn-ghost" onClick={() => setConfirmDialog(null)}>Cancel</button>
+              <button
+                type="button"
+                className="btn btn-danger"
+                onClick={() => { const { onConfirm } = confirmDialog; setConfirmDialog(null); onConfirm() }}
+              >
+                Deactivate
               </button>
             </div>
           </div>
