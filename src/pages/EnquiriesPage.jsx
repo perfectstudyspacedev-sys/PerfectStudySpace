@@ -2,7 +2,7 @@ import { useState, useEffect, useMemo, useCallback, useRef } from 'react'
 import { createPortal } from 'react-dom'
 import { useAuth } from '../context/AuthContext'
 import { api } from '../lib/api'
-import { exportToCSV, formatDate, formatDateTime } from '../lib/utils'
+import { exportToCSV, formatDate, formatDateTime, openWhatsApp } from '../lib/utils'
 
 const STATUSES = ['new', 'contacted', 'trial_session', 'converted', 'dropped']
 const STATUS_LABEL = { new: 'New', contacted: 'Contacted', trial_session: 'Trial Session', converted: 'Converted', dropped: 'Dropped' }
@@ -432,10 +432,7 @@ export default function EnquiriesPage() {
   }
 
   const waLink = (phone, name) => {
-    const clean = (phone || '').replace(/\D/g, '')
-    if (!clean) return
-    const msg = encodeURIComponent(`Hi ${name}, this is Perfect Study Space — following up on your enquiry. How can we help you?`)
-    window.open(`https://wa.me/${clean}?text=${msg}`, '_blank')
+    openWhatsApp(phone, `Hi ${name}, this is Perfect Study Space — following up on your enquiry. How can we help you?`)
   }
   const openEmailModal = (enq) => {
     setEmailModal({

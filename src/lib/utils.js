@@ -86,8 +86,11 @@ export function paymentModeLabel(mode) {
 // Opens a WhatsApp chat pre-filled with a message — same wa.me pattern used
 // throughout the app's WhatsApp buttons.
 export function openWhatsApp(phone, message) {
-  const clean = (phone || '').replace(/\D/g, '')
+  let clean = (phone || '').replace(/\D/g, '')
   if (!clean) return
+  // Numbers are stored as plain 10-digit Indian mobile numbers with no country code —
+  // wa.me requires the full international number (no leading +), so default to +91.
+  if (clean.length === 10) clean = `91${clean}`
   window.open(`https://wa.me/${clean}?text=${encodeURIComponent(message || '')}`, '_blank')
 }
 
