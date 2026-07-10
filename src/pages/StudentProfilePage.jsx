@@ -19,6 +19,217 @@ const DEFAULT_PERM_PACKAGES = [
   { hours: 15, fee: 2400 }, { hours: 24, fee: 2500 },
 ]
 
+function toLocalDateInput(isoString) {
+  const d = new Date(isoString)
+  const pad = (n) => String(n).padStart(2, '0')
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`
+}
+function toLocalTimeInput(isoString) {
+  const d = new Date(isoString)
+  const pad = (n) => String(n).padStart(2, '0')
+  return `${pad(d.getHours())}:${pad(d.getMinutes())}`
+}
+function combineDateTime(dateStr, timeStr) {
+  const [h, m] = timeStr.split(':').map(Number)
+  const d = new Date(`${dateStr}T00:00:00`)
+  d.setHours(h, m, 0, 0)
+  return d
+}
+
+// Shared modal for both editing an existing attendance record's in/out time and adding a
+// forgotten one from scratch — same fields either way, just a different submit action.
+function AttendanceModal({ studentId, branchId, booking, onClose, onDone }) {
+  const isEdit = !!booking
+  const [date, setDate] = useState(booking ? toLocalDateInput(booking.start_time) : todayISO())
+  const [checkIn, setCheckIn] = useState(booking ? toLocalTimeInput(booking.start_time) : '09:00')
+  const [checkOut, setCheckOut] = useState(booking && booking.status !== 'active' ? toLocalTimeInput(booking.end_time) : '')
+  const [loading, setLoading] = useState(false)
+  const [error, setError] = useState('')
+
+  const handleSave = async () => {
+    if (!checkOut) return setError('Check-out time is required')
+    setLoading(true)
+    setError('')
+    try {
+      const startTime = combineDateTime(date, checkIn).toISOString()
+      const endTime = combineDateTime(date, checkOut).toISOString()
+      if (isEdit) {
+        await api('update_attendance', { bookingId: booking.id, startTime, endTime })
+      } else {
+        await api('add_attendance', { studentId, branchId, startTime, endTime })
+      }
+      onDone()
+    } catch (err) {
+      setError(err.message)
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  return (
+    <div className="modal-overlay" onClick={onClose}>
+      <div className="modal" style={{ maxWidth: 400 }} onClick={(e) => e.stopPropagation()}>
+        <h2>{isEdit ? 'Edit Attendance' : 'Add Attendance'}</h2>
+        <div className="form-group">
+          <label>Date</label>
+          <input type="date" value={date} onChange={(e) => setDate(e.target.value)} max={todayISO()} />
+        </div>
+        <div className="form-group">
+          <label>Check-in Time</label>
+          <input type="time" value={checkIn} onChange={(e) => setCheckIn(e.target.value)} />
+        </div>
+        <div className="form-group">
+          <label>Check-out Time</label>
+          <input type="time" value={checkOut} onChange={(e) => setCheckOut(e.target.value)} />
+        </div>
+        {error && <p className="error-msg">{error}</p>}
+        <div className="modal-actions">
+          <button type="button" className="btn btn-ghost" onClick={onClose}>Cancel</button>
+          <button type="button" className="btn btn-primary" disabled={loading} onClick={handleSave}>
+            {loading ? 'Saving…' : 'Save'}
+          </button>
+        </div>
+      </div>
+    </div>
+  )
+}
+
+// Mid-cycle plan change (temp <-> permanent, or hours/day) on the current active
+// membership — prorates the difference over the days remaining, doesn't touch expiry.
+function ChangePlanModal({ membership, tempPackages, permPackages, onClose, onDone }) {
+  const [category, setCategory] = useState(membership.category)
+  const [hoursPerDay, setHoursPerDay] = useState(membership.hours_per_day)
+  const [loading, setLoading] = useState(false)
+  const [error, setError] = useState('')
+
+  const packages = category === 'permanent' ? permPackages : tempPackages
+  const pkg = packages.find(p => p.hours === hoursPerDay) ?? packages[0]
+  const remainingDays = Math.max(1, Math.ceil((new Date(membership.end_date + 'T12:00:00') - new Date()) / 86_400_000))
+  const oldDailyRate = Number(membership.monthly_fee) / 30
+  const newDailyRate = pkg ? pkg.fee / 30 : 0
+  const proratedPreview = Math.round((newDailyRate - oldDailyRate) * remainingDays)
+  const noChange = category === membership.category && hoursPerDay === membership.hours_per_day
+
+  const handleSubmit = async () => {
+    if (!pkg) return setError('Select a valid plan')
+    setLoading(true)
+    setError('')
+    try {
+      await api('change_membership_plan', { membershipId: membership.id, newCategory: category, newHoursPerDay: pkg.hours })
+      onDone()
+    } catch (err) {
+      setError(err.message)
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  return (
+    <div className="modal-overlay" onClick={onClose}>
+      <div className="modal" style={{ maxWidth: 420 }} onClick={(e) => e.stopPropagation()}>
+        <h2>Change Plan</h2>
+        <p style={{ color: 'var(--text-muted)', fontSize: '0.85rem', marginBottom: '1rem' }}>
+          Currently: <span className="cap">{membership.category}</span> · {membership.hours_per_day}h/day. Change takes effect immediately;
+          the {remainingDays} day{remainingDays === 1 ? '' : 's'} left on this membership are prorated at the new rate.
+        </p>
+        <div className="form-group">
+          <label>Category</label>
+          <div style={{ display: 'flex', gap: '0.5rem' }}>
+            {['temporary', 'permanent'].map(c => (
+              <button
+                key={c} type="button"
+                onClick={() => { setCategory(c); const opts = c === 'permanent' ? permPackages : tempPackages; if (opts.length) setHoursPerDay(opts[0].hours) }}
+                style={{
+                  flex: 1, padding: '0.55rem', textTransform: 'capitalize',
+                  border: `1px solid ${category === c ? 'var(--accent)' : '#333'}`, borderRadius: 4,
+                  background: category === c ? 'rgba(255,215,0,0.08)' : '#141414',
+                  color: category === c ? 'var(--accent)' : 'var(--text-muted)', cursor: 'pointer', fontWeight: 600,
+                }}
+              >{c}</button>
+            ))}
+          </div>
+        </div>
+        <div className="form-group">
+          <label>Hours / Day</label>
+          <select value={hoursPerDay} onChange={(e) => setHoursPerDay(Number(e.target.value))}>
+            {packages.map(p => <option key={p.hours} value={p.hours}>{p.hours}h/day — {formatCurrency(p.fee)}/mo</option>)}
+          </select>
+        </div>
+        {!noChange && (
+          <p className="mono" style={{ marginBottom: '1rem', color: proratedPreview >= 0 ? '#ff8888' : '#4ade80' }}>
+            {proratedPreview >= 0
+              ? `Additional ₹${proratedPreview} will be added to fee due`
+              : `₹${Math.abs(proratedPreview)} credit will be applied`}
+          </p>
+        )}
+        {error && <p className="error-msg">{error}</p>}
+        <div className="modal-actions">
+          <button type="button" className="btn btn-ghost" onClick={onClose}>Cancel</button>
+          <button type="button" className="btn btn-primary" disabled={loading || noChange} onClick={handleSubmit}>
+            {loading ? 'Saving…' : 'Confirm Change'}
+          </button>
+        </div>
+      </div>
+    </div>
+  )
+}
+
+function ChangeCabinModal({ membership, branchId, onClose, onDone }) {
+  const [desks, setDesks] = useState(null)
+  const [selectedDesk, setSelectedDesk] = useState('')
+  const [loading, setLoading] = useState(false)
+  const [error, setError] = useState('')
+
+  useEffect(() => {
+    api('get_seat_map', { branchId }).then(d => setDesks((d.desks ?? []).filter(x => x.status === 'free'))).catch(() => setDesks([]))
+  }, [branchId])
+
+  const handleSubmit = async () => {
+    if (!selectedDesk) return setError('Select a cabin')
+    setLoading(true)
+    setError('')
+    try {
+      await api('change_membership_cabin', { membershipId: membership.id, deskId: selectedDesk })
+      onDone()
+    } catch (err) {
+      setError(err.message)
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  return (
+    <div className="modal-overlay" onClick={onClose}>
+      <div className="modal" style={{ maxWidth: 380 }} onClick={(e) => e.stopPropagation()}>
+        <h2>Change Cabin</h2>
+        <p style={{ color: 'var(--text-muted)', fontSize: '0.85rem', marginBottom: '1rem' }}>
+          Current cabin: {membership.cabin_no ?? '—'}
+        </p>
+        <div className="form-group">
+          <label>New Cabin</label>
+          {desks === null ? (
+            <p style={{ color: 'var(--text-muted)' }}>Loading…</p>
+          ) : desks.length === 0 ? (
+            <p style={{ color: 'var(--text-muted)' }}>No free cabins available.</p>
+          ) : (
+            <select value={selectedDesk} onChange={(e) => setSelectedDesk(e.target.value)}>
+              <option value="">Select a cabin</option>
+              {desks.map(d => <option key={d.id} value={d.id}>{d.label}</option>)}
+            </select>
+          )}
+        </div>
+        {error && <p className="error-msg">{error}</p>}
+        <div className="modal-actions">
+          <button type="button" className="btn btn-ghost" onClick={onClose}>Cancel</button>
+          <button type="button" className="btn btn-primary" disabled={loading || !selectedDesk} onClick={handleSubmit}>
+            {loading ? 'Saving…' : 'Confirm'}
+          </button>
+        </div>
+      </div>
+    </div>
+  )
+}
+
 export default function StudentProfilePage() {
   const { id } = useParams()
   const { isOwner } = useAuth()
@@ -58,6 +269,9 @@ export default function StudentProfilePage() {
   const [foodPassPayMode, setFoodPassPayMode] = useState('cash')
   const [foodPassLoading, setFoodPassLoading] = useState(false)
   const [foodPassError, setFoodPassError] = useState('')
+  const [attendanceModal, setAttendanceModal] = useState(null) // { booking } to edit, or {} to add
+  const [planChangeOpen, setPlanChangeOpen] = useState(false)
+  const [cabinChangeOpen, setCabinChangeOpen] = useState(false)
 
   const refresh = useCallback(() => {
     setLoading(true)
@@ -272,10 +486,13 @@ export default function StudentProfilePage() {
   if (loading) return <p>Loading profile…</p>
   if (!data?.student) return <p>Student not found.</p>
 
-  const { student, memberships, bookings, transactions, locker, overtimeSessions, holds, discounts, cashbacks } = data
+  const { student, memberships, bookings, transactions, locker, overtimeSessions, holds, discounts, cashbacks, planChanges } = data
   const activeMem = memberships?.find(m => m.is_active)
   const isPaused = activeMem?.is_paused || activeMem?.status === 'paused'
   const isExpired = !!activeMem && activeMem.end_date < todayISO()
+  const daysLeft = activeMem
+    ? Math.round((new Date(activeMem.end_date + 'T12:00:00').getTime() - new Date(todayISO() + 'T12:00:00').getTime()) / 86_400_000)
+    : 0
 
   const feeDueNum = Number(activeMem?.fee_due ?? 0)
   const discountValueNum = Number(discountValue) || 0
@@ -347,6 +564,11 @@ export default function StudentProfilePage() {
                 activeMem && ['Cabin', activeMem.cabin_no ?? 'Floating'],
                 activeMem && ['Started', formatDate(activeMem.start_date)],
                 activeMem && ['Expires', formatDate(activeMem.end_date)],
+                activeMem && ['Days Left', (
+                  <span key="daysleft" style={{ color: daysLeft < 0 ? '#ff6b6b' : daysLeft <= 5 ? '#ffaa44' : undefined, fontWeight: 700 }}>
+                    {daysLeft < 0 ? `Expired ${Math.abs(daysLeft)}d ago` : `${daysLeft} day${daysLeft === 1 ? '' : 's'}`}
+                  </span>
+                )],
                 activeMem && ['Due Date', formatDate(activeMem.due_date)],
                 activeMem?.fee_due > 0 && ['Fee Due', <span key="fee" style={{ color: '#ff6b6b', fontWeight: 700 }}>{formatCurrency(activeMem.fee_due)}</span>],
                 locker && ['Locker', `${locker.locker_no} · Due ${formatDate(locker.locker_due_date)}`],
@@ -420,6 +642,18 @@ export default function StudentProfilePage() {
               </>
             )}
             {holdError && <p className="error-msg">{holdError}</p>}
+            {!isExpired && !isPaused && (
+              <div style={{ display: 'flex', gap: '0.5rem', marginTop: '0.25rem' }}>
+                <button type="button" className="btn btn-ghost" style={{ flex: 1, fontSize: '0.8rem' }} onClick={() => setPlanChangeOpen(true)}>
+                  ⇄ Change Plan
+                </button>
+                {activeMem.category === 'permanent' && (
+                  <button type="button" className="btn btn-ghost" style={{ flex: 1, fontSize: '0.8rem' }} onClick={() => setCabinChangeOpen(true)}>
+                    🪑 Change Cabin
+                  </button>
+                )}
+              </div>
+            )}
           </div>
         )}
 
@@ -801,12 +1035,43 @@ export default function StudentProfilePage() {
         </div>
       )}
 
-      {(bookings ?? []).length > 0 && (
+      {(planChanges ?? []).length > 0 && (
         <div className="card" style={{ marginTop: '1rem' }}>
-          <h3 style={{ color: 'var(--accent)', marginBottom: '0.75rem' }}>Attendance History</h3>
+          <h3 style={{ color: 'var(--accent)', marginBottom: '0.75rem' }}>⇄ Plan Change History</h3>
           <table className="data-table">
             <thead>
-              <tr><th>Date</th><th>Type</th><th>Desk</th><th>Check-in</th><th>Check-out</th><th>Hours</th><th>Status</th></tr>
+              <tr><th>Date</th><th>From</th><th>To</th><th>Prorated</th><th>Changed By</th></tr>
+            </thead>
+            <tbody>
+              {planChanges.map(p => (
+                <tr key={p.id}>
+                  <td className="mono">{formatDate(p.created_at)}</td>
+                  <td className="cap" style={{ fontSize: '0.85rem' }}>{p.old_category} · {p.old_hours_per_day}h/day</td>
+                  <td className="cap" style={{ fontSize: '0.85rem' }}>{p.new_category} · {p.new_hours_per_day}h/day</td>
+                  <td className="mono" style={{ color: Number(p.prorated_amount) >= 0 ? '#ff8888' : '#4ade80' }}>
+                    {Number(p.prorated_amount) >= 0 ? formatCurrency(p.prorated_amount) : `−${formatCurrency(Math.abs(p.prorated_amount))}`}
+                  </td>
+                  <td>{p.staff?.display_name || p.staff?.username || '—'}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+
+      <div className="card" style={{ marginTop: '1rem' }}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.75rem', flexWrap: 'wrap', gap: '0.5rem' }}>
+          <h3 style={{ color: 'var(--accent)' }}>Attendance History</h3>
+          <button type="button" className="btn btn-ghost" style={{ fontSize: '0.8rem' }} onClick={() => setAttendanceModal({})}>
+            + Add Attendance
+          </button>
+        </div>
+        {(bookings ?? []).length === 0 ? (
+          <p style={{ color: 'var(--text-muted)' }}>No attendance records yet.</p>
+        ) : (
+          <table className="data-table">
+            <thead>
+              <tr><th>Date</th><th>Type</th><th>Desk</th><th>Check-in</th><th>Check-out</th><th>Hours</th><th>Status</th><th></th></tr>
             </thead>
             <tbody>
               {bookings.map(b => (
@@ -822,11 +1087,51 @@ export default function StudentProfilePage() {
                   </td>
                   <td className="mono">{b.hours ?? '—'}</td>
                   <td><span className={`badge ${b.status === 'active' ? 'badge-active' : b.status === 'cancelled' ? 'badge-inactive' : 'badge-pending'} cap`}>{b.status}</span></td>
+                  <td>
+                    {b.status !== 'active' && (
+                      <button
+                        type="button" className="btn btn-ghost"
+                        style={{ fontSize: '0.72rem', padding: '0.25rem 0.5rem' }}
+                        onClick={() => setAttendanceModal({ booking: b })}
+                      >
+                        Edit
+                      </button>
+                    )}
+                  </td>
                 </tr>
               ))}
             </tbody>
           </table>
-        </div>
+        )}
+      </div>
+
+      {attendanceModal && (
+        <AttendanceModal
+          studentId={id}
+          branchId={student.branch_id}
+          booking={attendanceModal.booking}
+          onClose={() => setAttendanceModal(null)}
+          onDone={() => { setAttendanceModal(null); refresh() }}
+        />
+      )}
+
+      {planChangeOpen && activeMem && (
+        <ChangePlanModal
+          membership={activeMem}
+          tempPackages={tempPackages}
+          permPackages={permPackages}
+          onClose={() => setPlanChangeOpen(false)}
+          onDone={() => { setPlanChangeOpen(false); refresh() }}
+        />
+      )}
+
+      {cabinChangeOpen && activeMem && (
+        <ChangeCabinModal
+          membership={activeMem}
+          branchId={student.branch_id}
+          onClose={() => setCabinChangeOpen(false)}
+          onDone={() => { setCabinChangeOpen(false); refresh() }}
+        />
       )}
 
       {(overtimeSessions ?? []).length > 0 && (

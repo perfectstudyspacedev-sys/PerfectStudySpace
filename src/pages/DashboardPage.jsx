@@ -85,6 +85,9 @@ function CheckInModal({ branchId, onClose, onDone }) {
       if (result.crossBranchVisit) {
         notices.push(`${student.name} is registered at a different branch — their home branch has been notified of today's visit.`)
       }
+      if (result.isSplitSession) {
+        notices.push(`This is a split session — ${result.sessionHours}h remaining of today's daily quota has been allotted for this check-in.`)
+      }
       if (notices.length) {
         setSuccessNotices(notices)
         setLoading(false)

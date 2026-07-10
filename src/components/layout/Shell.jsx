@@ -3,6 +3,7 @@ import { NavLink, Outlet, useNavigate, useLocation } from 'react-router-dom'
 import { useAuth } from '../../context/AuthContext'
 import { useSessionAlerts } from '../../hooks/useSessionAlerts'
 import { useMessageAlerts } from '../../hooks/useMessageAlerts'
+import { api } from '../../lib/api'
 
 function BackgroundSketches() {
   return (
@@ -188,10 +189,18 @@ export default function Shell() {
   const toasts = [...session.toasts, ...messages.toasts]
   const dismiss = (id) => { session.dismiss(id); messages.dismiss(id) }
   const dismissAll = () => { session.dismissAll(); messages.dismissAll() }
+  const [sessionEnded, setSessionEnded] = useState(false)
 
   const handleLogout = () => {
     logout()
     navigate('/login')
+  }
+
+  const handleEndSession = async () => {
+    try {
+      await api('end_staff_session')
+      setSessionEnded(true)
+    } catch { /* ignore */ }
   }
 
   return (
@@ -250,6 +259,16 @@ export default function Shell() {
                 {staff?.role}
               </span>
             </span>
+            {!isOwner && (
+              <button
+                type="button" className="btn btn-ghost"
+                onClick={handleEndSession}
+                disabled={sessionEnded}
+                title="Mark that you're ending your session for the day"
+              >
+                {sessionEnded ? '✓ Session Ended' : 'End Session'}
+              </button>
+            )}
             <button type="button" className="btn btn-ghost" onClick={handleLogout}>Logout</button>
           </div>
         </div>

@@ -55,8 +55,10 @@ export function useMessageAlerts(branchId, currentStaffId) {
       }
 
       const newToasts = []
+      let sawUnseen = false
       for (const m of messages) {
         if (seen.current.has(m.id)) continue
+        sawUnseen = true
         seen.current.add(m.id)
         if (m.sender_staff_id === currentStaffId) continue
         const senderName = m.staff?.display_name || m.staff?.username || 'Staff'
@@ -65,10 +67,11 @@ export function useMessageAlerts(branchId, currentStaffId) {
           message: `${senderName}: ${m.content}`,
         })
       }
-      if (newToasts.length) {
-        setToasts(prev => [...prev, ...newToasts])
-        saveSeen(currentStaffId, seen.current)
-      }
+      // Persist whenever anything new was marked seen — not just when it produced a toast —
+      // otherwise a message from the current staff member (skipped from toasting) would be
+      // re-evaluated as "new" again on the next reload since it never got saved.
+      if (sawUnseen) saveSeen(currentStaffId, seen.current)
+      if (newToasts.length) setToasts(prev => [...prev, ...newToasts])
     } catch { /* ignore network errors */ }
   }, [branchId, currentStaffId])
 

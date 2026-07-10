@@ -3,6 +3,8 @@ import { api } from '../lib/api'
 
 const POLL_INTERVAL = 60_000       // check every 60 s
 const WARN_BEFORE_MS = 5 * 60_000  // warn 5 min before end
+const FIRED_KEY = 'pss_session_alerts_fired'
+const FIRED_CAP = 500
 
 function fireBrowserNotification(title, body) {
   if (!('Notification' in window)) return
@@ -14,9 +16,23 @@ function fireBrowserNotification(title, body) {
   }
 }
 
+function loadFired() {
+  try {
+    const raw = localStorage.getItem(FIRED_KEY)
+    return raw ? new Set(JSON.parse(raw)) : new Set()
+  } catch { return new Set() }
+}
+
+function saveFired(set) {
+  try { localStorage.setItem(FIRED_KEY, JSON.stringify([...set].slice(-FIRED_CAP))) } catch { /* ignore */ }
+}
+
 export function useSessionAlerts(branchId) {
   const [toasts, setToasts] = useState([])
-  const fired = useRef(new Set())
+  // Persisted across reloads/logins — once a session's warn/end alert has fired (and been
+  // dismissed), it must not pop back up just because the page was refreshed and this ref
+  // reset to empty.
+  const fired = useRef(loadFired())
 
   const check = useCallback(async () => {
     if (!branchId) return
@@ -55,6 +71,7 @@ export function useSessionAlerts(branchId) {
 
       if (newToasts.length) {
         setToasts(prev => [...prev, ...newToasts])
+        saveFired(fired.current)
       }
     } catch { /* ignore network errors */ }
   }, [branchId])

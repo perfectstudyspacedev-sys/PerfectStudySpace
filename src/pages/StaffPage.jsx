@@ -26,6 +26,126 @@ function BranchPillFilter({ branches, value, onChange }) {
   )
 }
 
+// Drag-and-drop branch board — cards default to each staff member's home branch column;
+// dragging a card to a different column assigns them there for today only (covering an
+// absence), and dropping back on their home column clears the override.
+function StaffBranchBoard() {
+  const [grid, setGrid] = useState(null)
+  const [dragStaffId, setDragStaffId] = useState(null)
+  const [dropTarget, setDropTarget] = useState(null)
+  const [busyStaffId, setBusyStaffId] = useState(null)
+  const [error, setError] = useState('')
+
+  const load = useCallback(async () => {
+    try {
+      const data = await api('get_staff_grid')
+      setGrid(data)
+    } catch (err) {
+      setError(err.message)
+    }
+  }, [])
+
+  useEffect(() => { load() }, [load])
+
+  const handleDrop = async (branchId) => {
+    setDropTarget(null)
+    if (!dragStaffId) return
+    setBusyStaffId(dragStaffId)
+    setDragStaffId(null)
+    setError('')
+    try {
+      await api('assign_staff_override', { staffId: dragStaffId, branchId })
+      await load()
+    } catch (err) {
+      setError(err.message)
+    } finally {
+      setBusyStaffId(null)
+    }
+  }
+
+  const handleReset = async (staffId) => {
+    setBusyStaffId(staffId)
+    setError('')
+    try {
+      await api('clear_staff_override', { staffId })
+      await load()
+    } catch (err) {
+      setError(err.message)
+    } finally {
+      setBusyStaffId(null)
+    }
+  }
+
+  if (!grid) return <p style={{ color: 'var(--text-muted)' }}>Loading branch board…</p>
+
+  return (
+    <div className="card" style={{ marginBottom: '1.5rem' }}>
+      <h3 style={{ color: 'var(--accent)', marginBottom: '0.6rem', fontSize: '1.3rem' }}>Branch Assignment Board</h3>
+      <p style={{ color: 'var(--text-muted)', fontSize: '1rem', marginBottom: '1.25rem' }}>
+        Drag a staff card onto another branch to cover an absence for today only ({grid.date}). Drop it back on their home branch to undo.
+      </p>
+      {error && <p className="error-msg">{error}</p>}
+      <div style={{ display: 'grid', gridTemplateColumns: `repeat(${grid.branches.length}, minmax(260px, 1fr))`, gap: '1rem', overflowX: 'auto' }}>
+        {grid.branches.map(b => {
+          const staffHere = grid.staff.filter(s => s.effectiveBranchId === b.id)
+          const isDropTarget = dropTarget === b.id
+          return (
+            <div
+              key={b.id}
+              onDragOver={(e) => { e.preventDefault(); setDropTarget(b.id) }}
+              onDragLeave={() => setDropTarget(t => (t === b.id ? null : t))}
+              onDrop={(e) => { e.preventDefault(); handleDrop(b.id) }}
+              style={{
+                background: isDropTarget ? 'rgba(255,215,0,0.14)' : '#141414',
+                border: '2px solid var(--accent)',
+                boxShadow: isDropTarget ? '0 0 0 2px rgba(255,215,0,0.35)' : 'none',
+                borderRadius: 10, padding: '1rem', minHeight: 200,
+              }}
+            >
+              <div style={{ fontWeight: 700, fontSize: '1.15rem', color: 'var(--accent)', marginBottom: '0.85rem' }}>
+                {b.name} <span style={{ color: 'var(--text-muted)', fontWeight: 400, fontSize: '1rem' }}>({staffHere.length})</span>
+              </div>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '0.6rem' }}>
+                {staffHere.map(s => (
+                  <div
+                    key={s.id}
+                    draggable
+                    onDragStart={() => setDragStaffId(s.id)}
+                    onDragEnd={() => setDragStaffId(null)}
+                    style={{
+                      padding: '0.75rem 0.9rem', borderRadius: 8, cursor: 'grab',
+                      background: s.isOverrideToday ? 'rgba(255,150,0,0.1)' : '#1c1c1c',
+                      border: `1px solid ${s.isOverrideToday ? 'rgba(255,150,0,0.45)' : '#333'}`,
+                      opacity: busyStaffId === s.id ? 0.5 : 1,
+                    }}
+                  >
+                    <div style={{ fontSize: '1.05rem', fontWeight: 700 }}>{s.displayName}</div>
+                    {s.isOverrideToday && (
+                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: '0.4rem' }}>
+                        <span style={{ fontSize: '0.85rem', fontWeight: 600, color: '#ffaa44' }}>Covering today</span>
+                        <button
+                          type="button"
+                          onClick={() => handleReset(s.id)}
+                          style={{ background: 'none', border: 'none', color: 'var(--text-muted)', fontSize: '0.85rem', cursor: 'pointer', textDecoration: 'underline' }}
+                        >
+                          reset
+                        </button>
+                      </div>
+                    )}
+                  </div>
+                ))}
+                {staffHere.length === 0 && (
+                  <p style={{ fontSize: '0.9rem', color: 'var(--text-muted)', margin: 0 }}>No staff</p>
+                )}
+              </div>
+            </div>
+          )
+        })}
+      </div>
+    </div>
+  )
+}
+
 export default function StaffPage() {
   const { isOwner } = useAuth()
   const [staffList, setStaffList] = useState([])
@@ -52,14 +172,22 @@ export default function StaffPage() {
   const [confirmDialog, setConfirmDialog] = useState(null)
 
   const load = useCallback(async () => {
-    const [s, b] = await Promise.all([api('list_staff'), api('list_branches')])
-    setStaffList(s.staff ?? [])
-    setBranches(b.branches ?? [])
+    try {
+      const [s, b] = await Promise.all([api('list_staff'), api('list_branches')])
+      setStaffList(s.staff ?? [])
+      setBranches(b.branches ?? [])
+    } catch (err) {
+      setError(err.message)
+    }
   }, [])
 
   const loadAttendance = useCallback(async () => {
-    const a = await api('list_staff_attendance', { date: attendanceDate })
-    setAttendance(a)
+    try {
+      const a = await api('list_staff_attendance', { date: attendanceDate })
+      setAttendance(a)
+    } catch (err) {
+      setError(err.message)
+    }
   }, [attendanceDate])
 
   useEffect(() => { if (isOwner) load() }, [isOwner, load])
@@ -135,6 +263,8 @@ export default function StaffPage() {
   return (
     <>
       <div className="page-header"><h1>Staff Management</h1></div>
+
+      <StaffBranchBoard />
 
       <div className="card" style={{ maxWidth: 480, marginBottom: '1.5rem' }}>
         <h3 style={{ color: 'var(--accent)', marginBottom: '1rem' }}>Add Staff Account</h3>
@@ -264,39 +394,41 @@ export default function StaffPage() {
           <BranchPillFilter branches={branches} value={attendanceBranchFilter} onChange={setAttendanceBranchFilter} />
         </div>
         <p style={{ color: 'var(--text-muted)', fontSize: '0.82rem', marginBottom: '0.75rem' }}>
-          Automatically marked the first time a staff member logs in each day.
+          Login is marked automatically the moment a staff member is active in the app for the day.
         </p>
         {!attendance || filteredAttendance.length === 0 ? (
           <p style={{ color: 'var(--text-muted)' }}>No staff found.</p>
         ) : (
-          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(260px, 1fr))', gap: '0.75rem' }}>
-            {filteredAttendance.map(r => (
-              <div key={r.staffId} style={{
-                display: 'flex', justifyContent: 'space-between', alignItems: 'center',
-                padding: '0.75rem 0.9rem', borderRadius: 8, background: '#141414',
-                border: `1px solid ${r.present ? 'rgba(74,222,128,0.3)' : 'rgba(255,60,60,0.25)'}`,
-              }}>
-                <div>
-                  <strong style={{ fontSize: '0.88rem' }}>{r.displayName}</strong>
-                  <div style={{ fontSize: '0.72rem', color: 'var(--text-muted)', marginTop: '0.15rem' }}>{r.branchName ?? '—'}</div>
-                </div>
-                <div style={{ textAlign: 'right' }}>
-                  <span style={{
-                    display: 'inline-block', padding: '2px 8px', borderRadius: 4, fontSize: '0.72rem', fontWeight: 700,
-                    background: r.present ? 'rgba(74,222,128,0.1)' : 'rgba(255,60,60,0.1)',
-                    color: r.present ? '#4ade80' : '#ff8888',
-                  }}>
-                    {r.present ? 'Present' : 'Absent'}
-                  </span>
-                  {r.present && (
-                    <div className="mono" style={{ fontSize: '0.7rem', color: 'var(--text-muted)', marginTop: '0.2rem' }}>
-                      {new Date(r.firstLoginAt).toLocaleTimeString('en-IN')}
-                    </div>
-                  )}
-                </div>
-              </div>
-            ))}
-          </div>
+          <table className="data-table">
+            <thead>
+              <tr>
+                <th>Staff</th><th>Branch</th><th>Status</th><th>Login Time</th><th>Logout Time</th>
+              </tr>
+            </thead>
+            <tbody>
+              {filteredAttendance.map(r => (
+                <tr key={r.staffId}>
+                  <td style={{ fontWeight: 700, fontSize: '0.95rem' }}>{r.displayName}</td>
+                  <td>{r.branchName ?? '—'}</td>
+                  <td>
+                    <span style={{
+                      display: 'inline-block', padding: '3px 10px', borderRadius: 4, fontSize: '0.78rem', fontWeight: 700,
+                      background: r.present ? 'rgba(74,222,128,0.1)' : 'rgba(255,60,60,0.1)',
+                      color: r.present ? '#4ade80' : '#ff8888',
+                    }}>
+                      {r.present ? 'Present' : 'Absent'}
+                    </span>
+                  </td>
+                  <td className="mono" style={{ fontSize: '0.9rem' }}>
+                    {r.present ? new Date(r.firstLoginAt).toLocaleTimeString('en-IN') : '—'}
+                  </td>
+                  <td className="mono" style={{ fontSize: '0.9rem', color: r.lastLogoutAt ? '#ffaa44' : 'var(--text-muted)' }}>
+                    {r.present ? (r.lastLogoutAt ? new Date(r.lastLogoutAt).toLocaleTimeString('en-IN') : 'Still in session') : '—'}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
         )}
       </div>
 

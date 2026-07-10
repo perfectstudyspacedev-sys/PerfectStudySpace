@@ -1,11 +1,21 @@
 import { useState, useEffect, useCallback } from 'react'
+import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer } from 'recharts'
 import { useAuth } from '../context/AuthContext'
 import { api } from '../lib/api'
 import { formatCurrency, todayISO, exportToCSV, paymentModeLabel, formatDate } from '../lib/utils'
 
+const TOOLTIP_STYLE = {
+  contentStyle: { background: '#111', border: '1px solid #333', borderRadius: 6 },
+  labelStyle: { color: '#fff', fontWeight: 700, marginBottom: 4 },
+  itemStyle: { color: '#fff' },
+}
+
 export default function ReportsPage() {
   const { branchId, isOwner } = useAuth()
   const [date, setDate] = useState(todayISO())
+  const [period, setPeriod] = useState('day') // owner only: day | week | month | custom
+  const [customFrom, setCustomFrom] = useState(todayISO())
+  const [customTo, setCustomTo] = useState(todayISO())
   const [report, setReport] = useState(null)
   const [actionable, setActionable] = useState(null)
   const [taskReport, setTaskReport] = useState(null)
@@ -16,8 +26,11 @@ export default function ReportsPage() {
     if (!branchId) return
     setLoading(true)
     try {
+      const reportPayload = isOwner && period !== 'day'
+        ? { branchId, period, dateFrom: period === 'custom' ? customFrom : undefined, dateTo: period === 'custom' ? customTo : undefined }
+        : { branchId, date }
       const [rpt, act] = await Promise.all([
-        api('get_daily_report', { branchId, date }),
+        api('get_daily_report', reportPayload),
         api('get_actionable_items', { branchId }),
       ])
       setReport(rpt)
@@ -27,7 +40,7 @@ export default function ReportsPage() {
     } finally {
       setLoading(false)
     }
-  }, [branchId, date])
+  }, [branchId, date, isOwner, period, customFrom, customTo])
 
   const loadTaskReport = useCallback(async () => {
     if (!branchId) return
@@ -70,7 +83,7 @@ export default function ReportsPage() {
 
   const exportDaily = () => {
     if (!report) return
-    exportToCSV(`daily-report-${date}.csv`,
+    exportToCSV(`daily-report-${report.dateFrom ?? date}_${report.dateTo ?? date}.csv`,
       ['Type', 'Detail', 'Amount'],
       [
         ...(report.transactions ?? []).map(t => ['Transaction', t.category, t.amount]),
@@ -100,10 +113,50 @@ export default function ReportsPage() {
         </div>
       </div>
 
-      <div className="form-group" style={{ maxWidth: 200, marginBottom: '1rem' }}>
-        <label>Report Date</label>
-        <input type="date" value={date} onChange={(e) => setDate(e.target.value)} />
-      </div>
+      {isOwner && (
+        <div style={{ display: 'flex', gap: '0.4rem', marginBottom: '1rem', flexWrap: 'wrap' }}>
+          {[{ key: 'day', label: 'Day' }, { key: 'week', label: 'Week' }, { key: 'month', label: 'Month' }, { key: 'custom', label: 'Custom' }].map(p => (
+            <button
+              key={p.key} type="button"
+              onClick={() => setPeriod(p.key)}
+              style={{
+                padding: '0.4rem 1rem', borderRadius: 20, fontSize: '0.82rem', fontWeight: 700, cursor: 'pointer',
+                border: `1px solid ${period === p.key ? 'var(--accent)' : '#333'}`,
+                background: period === p.key ? 'rgba(255,215,0,0.1)' : '#141414',
+                color: period === p.key ? 'var(--accent)' : 'var(--text-muted)',
+              }}
+            >
+              {p.label}
+            </button>
+          ))}
+        </div>
+      )}
+
+      {(!isOwner || period === 'day') && (
+        <div className="form-group" style={{ maxWidth: 200, marginBottom: '1rem' }}>
+          <label>Report Date</label>
+          <input type="date" value={date} onChange={(e) => setDate(e.target.value)} />
+        </div>
+      )}
+
+      {isOwner && period === 'custom' && (
+        <div style={{ display: 'flex', gap: '1rem', marginBottom: '1rem', flexWrap: 'wrap' }}>
+          <div className="form-group" style={{ maxWidth: 200 }}>
+            <label>From</label>
+            <input type="date" value={customFrom} onChange={(e) => setCustomFrom(e.target.value)} />
+          </div>
+          <div className="form-group" style={{ maxWidth: 200 }}>
+            <label>To</label>
+            <input type="date" value={customTo} onChange={(e) => setCustomTo(e.target.value)} />
+          </div>
+        </div>
+      )}
+
+      {isOwner && (period === 'week' || period === 'month') && report?.dateFrom && (
+        <p style={{ color: 'var(--text-muted)', fontSize: '0.85rem', marginBottom: '1rem' }}>
+          Showing {formatDate(report.dateFrom)} – {formatDate(report.dateTo)}
+        </p>
+      )}
 
       {loading && <p>Loading…</p>}
 
@@ -116,20 +169,6 @@ export default function ReportsPage() {
                 <div className="label">Total Collections</div>
               </div>
             )}
-            <div className="card stat-card">
-              <div className="value">{report.walkins?.length ?? 0}</div>
-              <div className="label">Walk-ins</div>
-            </div>
-            <div className="card stat-card">
-              <div className="value">{report.newMembers?.length ?? 0}</div>
-              <div className="label">New Memberships</div>
-            </div>
-            {canSeeCollections && (
-              <div className="card stat-card">
-                <div className="value">{report.transactions?.length ?? 0}</div>
-                <div className="label">Transactions</div>
-              </div>
-            )}
             {isOwner && (
               <div className="card stat-card">
                 <div className="value" style={{ color: totalPendingDue > 0 ? '#ff8888' : undefined }}>{formatCurrency(totalPendingDue)}</div>
@@ -138,15 +177,85 @@ export default function ReportsPage() {
             )}
           </div>
 
+          {report.attendanceBreakdown && (
+            <div className="card" style={{ marginBottom: '1rem' }}>
+              <h3 style={{ color: 'var(--accent)', marginBottom: '0.75rem' }}>
+                Attendance Breakdown — {report.dateFrom && report.dateFrom !== report.dateTo
+                  ? `${formatDate(report.dateFrom)} – ${formatDate(report.dateTo)}`
+                  : formatDate(report.date ?? date)}
+              </h3>
+              <div className="stats-row" style={{ marginBottom: 0 }}>
+                <div className="card stat-card">
+                  <div className="value">{report.attendanceBreakdown.total}</div>
+                  <div className="label">Total Attendance</div>
+                </div>
+                <div className="card stat-card">
+                  <div className="value">{report.walkins?.length ?? 0}</div>
+                  <div className="label">Walk-ins</div>
+                </div>
+                <div className="card stat-card">
+                  <div className="value">{report.newMembers?.length ?? 0}</div>
+                  <div className="label">New Memberships</div>
+                </div>
+                <div className="card stat-card">
+                  <div className="value">{report.attendanceBreakdown.temporary}</div>
+                  <div className="label">Temporary</div>
+                </div>
+                <div className="card stat-card">
+                  <div className="value">{report.attendanceBreakdown.permanent}</div>
+                  <div className="label">Permanent</div>
+                </div>
+              </div>
+            </div>
+          )}
+
+          {(report.attendanceTrend?.length > 0 || report.registrationsTrend?.length > 0) && (
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(340px, 1fr))', gap: '1rem', marginBottom: '1rem' }}>
+              {report.attendanceTrend?.length > 0 && (
+                <div className="card chart-card">
+                  <h3 style={{ color: 'var(--accent)', marginBottom: '1rem' }}>Attendance Trend</h3>
+                  <ResponsiveContainer width="100%" height={240}>
+                    <BarChart data={report.attendanceTrend}>
+                      <XAxis dataKey="label" tick={{ fill: 'var(--text-muted)', fontSize: 11 }} />
+                      <YAxis allowDecimals={false} tick={{ fill: 'var(--text-muted)', fontSize: 11 }} />
+                      <Tooltip {...TOOLTIP_STYLE} formatter={(v) => [`${v} students`, 'Attendance']} />
+                      <Bar dataKey="count" fill="#FFD700" radius={[4, 4, 0, 0]} />
+                    </BarChart>
+                  </ResponsiveContainer>
+                </div>
+              )}
+              {report.registrationsTrend?.length > 0 && (
+                <div className="card chart-card">
+                  <h3 style={{ color: 'var(--accent)', marginBottom: '1rem' }}>New Membership Registrations Trend</h3>
+                  <ResponsiveContainer width="100%" height={240}>
+                    <BarChart data={report.registrationsTrend}>
+                      <XAxis dataKey="label" tick={{ fill: 'var(--text-muted)', fontSize: 11 }} />
+                      <YAxis allowDecimals={false} tick={{ fill: 'var(--text-muted)', fontSize: 11 }} />
+                      <Tooltip {...TOOLTIP_STYLE} formatter={(v) => [`${v} new memberships`, 'Registrations']} />
+                      <Bar dataKey="count" fill="#4ade80" radius={[4, 4, 0, 0]} />
+                    </BarChart>
+                  </ResponsiveContainer>
+                </div>
+              )}
+            </div>
+          )}
+
           {canSeeCollections && (
             <div className="card" style={{ marginBottom: '1rem' }}>
-              <h3 style={{ color: 'var(--accent)', marginBottom: '0.75rem' }}>End-of-Day Summary — {formatDate(date)}</h3>
+              <h3 style={{ color: 'var(--accent)', marginBottom: '0.75rem' }}>
+                Collections Summary — {report.dateFrom && report.dateFrom !== report.dateTo
+                  ? `${formatDate(report.dateFrom)} – ${formatDate(report.dateTo)}`
+                  : formatDate(report.date ?? date)}
+              </h3>
               <table className="data-table">
-                <thead><tr><th>Time</th><th>Category</th><th>Amount</th><th>Mode</th></tr></thead>
+                <thead><tr><th>{report.dateFrom !== report.dateTo ? 'Date/Time' : 'Time'}</th><th>Category</th><th>Amount</th><th>Mode</th></tr></thead>
                 <tbody>
                   {(report.transactions ?? []).map(t => (
                     <tr key={t.id}>
-                      <td className="mono">{new Date(t.created_at).toLocaleTimeString('en-IN')}</td>
+                      <td className="mono">
+                        {report.dateFrom !== report.dateTo ? `${formatDate(t.created_at)} ` : ''}
+                        {new Date(t.created_at).toLocaleTimeString('en-IN')}
+                      </td>
                       <td className="cap">{t.category}</td>
                       <td className="mono">{formatCurrency(t.amount)}</td>
                       <td>{paymentModeLabel(t.payment_mode)}</td>

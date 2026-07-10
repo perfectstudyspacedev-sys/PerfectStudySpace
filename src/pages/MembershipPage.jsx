@@ -307,6 +307,7 @@ function ActiveMembersTab({ branchId, tempPackages, permPackages }) {
               <th>Student</th>
               <th>Plan</th>
               <th>Expires</th>
+              <th>Days Left</th>
               <th>Balance</th>
               <th>Status</th>
               <th>Actions</th>
@@ -332,9 +333,9 @@ function ActiveMembersTab({ branchId, tempPackages, permPackages }) {
                     {isExpired && (
                       <div style={{ color: '#ff6b6b', fontSize: '0.7rem', fontWeight: 700 }}>EXPIRED</div>
                     )}
-                    {expiringSoonRow && (
-                      <div style={{ color: '#ffaa44', fontSize: '0.7rem', fontWeight: 700 }}>{daysLeft}d left</div>
-                    )}
+                  </td>
+                  <td className="mono" style={{ fontSize: '0.85rem', fontWeight: 700, color: isExpired ? '#ff6b6b' : expiringSoonRow ? '#ffaa44' : undefined }}>
+                    {isExpired ? `${Math.abs(daysLeft)}d ago` : `${daysLeft}d`}
                   </td>
                   <td>
                     {m.fee_due > 0 ? (
@@ -526,6 +527,18 @@ function ActiveMembersTab({ branchId, tempPackages, permPackages }) {
               <p>Checking final settlement…</p>
             ) : (
               <>
+                {closeSummary.planChanges?.length > 0 && (
+                  <div className="card" style={{ marginBottom: '1rem', background: 'rgba(255,255,255,0.03)' }}>
+                    <h3 style={{ fontSize: '0.9rem', marginBottom: '0.5rem' }}>Plans Taken This Membership</h3>
+                    {closeSummary.planChanges.map(p => (
+                      <p key={p.id} className="mono" style={{ fontSize: '0.8rem', color: 'var(--text-muted)' }}>
+                        <span className="cap">{p.old_category}</span> {p.old_hours_per_day}h/day → <span className="cap">{p.new_category}</span> {p.new_hours_per_day}h/day
+                        {' '}({formatDate(p.created_at)})
+                      </p>
+                    ))}
+                  </div>
+                )}
+
                 <div className="card" style={{ marginBottom: '1rem', background: 'rgba(255,215,0,0.05)' }}>
                   <h3 style={{ color: 'var(--accent)', fontSize: '0.9rem', marginBottom: '0.5rem' }}>Owed to the Business</h3>
                   <p className="mono" style={{ fontSize: '0.85rem' }}>Membership: {formatCurrency(closeSummary.membershipDue)}</p>
