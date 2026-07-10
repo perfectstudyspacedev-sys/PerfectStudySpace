@@ -806,7 +806,7 @@ export default function StudentProfilePage() {
           <h3 style={{ color: 'var(--accent)', marginBottom: '0.75rem' }}>Attendance History</h3>
           <table className="data-table">
             <thead>
-              <tr><th>Date</th><th>Type</th><th>Desk</th><th>Check-in</th><th>Hours</th><th>Status</th></tr>
+              <tr><th>Date</th><th>Type</th><th>Desk</th><th>Check-in</th><th>Check-out</th><th>Hours</th><th>Status</th></tr>
             </thead>
             <tbody>
               {bookings.map(b => (
@@ -815,6 +815,11 @@ export default function StudentProfilePage() {
                   <td className="cap">{b.booking_type}</td>
                   <td>{b.desks?.label ?? '—'}</td>
                   <td className="mono">{new Date(b.start_time).toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit' })}</td>
+                  <td className="mono">
+                    {b.status === 'active'
+                      ? '—'
+                      : new Date(b.end_time).toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit' })}
+                  </td>
                   <td className="mono">{b.hours ?? '—'}</td>
                   <td><span className={`badge ${b.status === 'active' ? 'badge-active' : b.status === 'cancelled' ? 'badge-inactive' : 'badge-pending'} cap`}>{b.status}</span></td>
                 </tr>

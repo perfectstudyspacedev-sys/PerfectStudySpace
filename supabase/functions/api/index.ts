@@ -17,7 +17,14 @@ function err(message: string, status = 400) {
   return json({ error: message }, status);
 }
 
-const JWT_SECRET = Deno.env.get("STAFF_JWT_SECRET") ?? Deno.env.get("JWT_SECRET") ?? "dev-secret-change-in-production";
+// No hardcoded fallback: a guessable default secret would let anyone forge staff JWTs
+// (full account takeover). If the real secret isn't configured, fall back to a random
+// value generated fresh per cold start — this fails safe (existing sessions/tokens just
+// stop validating) instead of failing open with a publicly-known signing key.
+const JWT_SECRET = Deno.env.get("STAFF_JWT_SECRET") ?? Deno.env.get("JWT_SECRET") ?? (() => {
+  console.error("STAFF_JWT_SECRET is not set — using an ephemeral per-instance secret. Set STAFF_JWT_SECRET in Supabase project secrets.");
+  return crypto.randomUUID() + crypto.randomUUID();
+})();
 
 async function signToken(payload: Record<string, unknown>) {
   const secret = new TextEncoder().encode(JWT_SECRET);
@@ -199,8 +206,14 @@ Deno.serve(async (req) => {
       const { username, password } = payload;
       if (!username || !password) return err("Username and password required");
       const { data, error } = await db.rpc("verify_staff_login", { p_username: username, p_password: password });
-      if (error || !data?.length) return err("Invalid login credentials", 401);
+      if (error || !data?.length) {
+        // Locked-out or wrong-password attempts both land here — register_failed_login is a
+        // no-op if the username doesn't exist, so this can't be used to enumerate accounts.
+        await db.rpc("register_failed_login", { p_username: username });
+        return err("Invalid login credentials", 401);
+      }
       const row = data[0];
+      await db.rpc("register_login_success", { p_staff_id: row.id });
       const token = await signToken({ sub: row.id, role: row.role, username: row.username });
 
       // Auto-mark attendance on first login of the day (no-op if already marked) — owner is exempt
@@ -651,6 +664,8 @@ Deno.serve(async (req) => {
     if (action === "add_locker") {
       const { studentId, branchId, lockerNo, paymentMode, payLater } = payload;
       if (!requireBranch(staff, branchId)) return err("Branch access denied", 403);
+      const { data: lockerStudent } = await db.from("students").select("branch_id").eq("id", studentId).single();
+      if (!lockerStudent || lockerStudent.branch_id !== branchId) return err("Student does not belong to this branch", 403);
 
       const { data: existing } = await db.from("lockers").select("id").eq("student_id", studentId).eq("is_active", true).maybeSingle();
       if (existing) return err("Student already has an active locker");
@@ -1173,6 +1188,8 @@ Deno.serve(async (req) => {
     if (action === "grant_cashback") {
       const { studentId, branchId, cashbackType, cashbackValue, monthLabel, notes } = payload;
       if (!requireBranch(staff, branchId)) return err("Branch access denied", 403);
+      const { data: cbStudent } = await db.from("students").select("branch_id").eq("id", studentId).single();
+      if (!cbStudent || cbStudent.branch_id !== branchId) return err("Student does not belong to this branch", 403);
       if (!["percent", "fixed"].includes(cashbackType)) return err("Invalid cashback type");
       const value = Number(cashbackValue);
       if (!(value > 0)) return err("Cashback value must be greater than 0");
@@ -1281,6 +1298,8 @@ Deno.serve(async (req) => {
     if (action === "topup_food_pass") {
       const { studentId, branchId, amount, paymentMode } = payload;
       if (!requireBranch(staff, branchId)) return err("Branch access denied", 403);
+      const { data: passStudent } = await db.from("students").select("branch_id").eq("id", studentId).single();
+      if (!passStudent || passStudent.branch_id !== branchId) return err("Student does not belong to this branch", 403);
       const amt = Number(amount);
       if (!(amt > 0)) return err("Top-up amount must be greater than 0");
 
@@ -1324,6 +1343,10 @@ Deno.serve(async (req) => {
     if (action === "create_food_bill") {
       const { branchId, studentId, studentName, studentPhone, bookingId, items, paymentMode, discountType, discountValue, discountAmount } = payload;
       if (!requireBranch(staff, branchId)) return err("Branch access denied", 403);
+      if (studentId) {
+        const { data: billStudent } = await db.from("students").select("branch_id").eq("id", studentId).single();
+        if (!billStudent || billStudent.branch_id !== branchId) return err("Student does not belong to this branch", 403);
+      }
 
       let subtotal = 0;
       const lineItems = [];

@@ -2,11 +2,9 @@ import { useState, useEffect, useCallback } from 'react'
 import { api } from '../lib/api'
 import { nowTimeStr, localTimeStrToISO, formatCurrency } from '../lib/utils'
 
-export const WALKIN_HOUR_OPTIONS = [3, 4, 5, 6, 7, 8, 9, 12]
-const WALKIN_FEES = { 3: 35, 4: 45, 5: 55, 6: 60, 7: 70, 8: 80, 9: 90, 12: 100 }
-export function walkinFee(hours) {
-  return WALKIN_FEES[hours] ?? 100
-}
+// Fallback used only until live fee config loads from the backend.
+const FALLBACK_FEES = { 3: 35, 4: 45, 5: 55, 6: 60, 7: 70, 8: 80, 9: 90, 12: 100 }
+export const WALKIN_HOUR_OPTIONS = Object.keys(FALLBACK_FEES).map(Number)
 
 // Walk-in modal — name/phone autocomplete + hourly booking, no page navigation
 export default function WalkInModal({ branchId, onClose, onDone }) {
@@ -20,6 +18,23 @@ export default function WalkInModal({ branchId, onClose, onDone }) {
   const [receipt, setReceipt] = useState(null)
   const [selectedStudent, setSelectedStudent] = useState(null)
   const [nameMatches, setNameMatches] = useState([])
+  const [fees, setFees] = useState(FALLBACK_FEES)
+
+  useEffect(() => {
+    api('list_fee_config').then(data => {
+      const walkinRows = (data.config ?? []).filter(f => f.config_type === 'walkin')
+      if (walkinRows.length) {
+        const map = {}
+        walkinRows.forEach(f => { map[f.max_hours] = Number(f.fee) })
+        setFees(map)
+        if (!(hours in map)) setHours(Number(Object.keys(map)[0]))
+      }
+    }).catch(() => { /* keep fallback */ })
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
+
+  const hourOptions = Object.keys(fees).map(Number).sort((a, b) => a - b)
+  const walkinFee = (h) => fees[h] ?? 0
 
   const lookupPhone = useCallback(async (p) => {
     if (p.length !== 10) return
@@ -132,7 +147,7 @@ export default function WalkInModal({ branchId, onClose, onDone }) {
               <div className="form-group">
                 <label>Number of Hours</label>
                 <select value={hours} onChange={(e) => setHours(Number(e.target.value))}>
-                  {WALKIN_HOUR_OPTIONS.map(h => (
+                  {hourOptions.map(h => (
                     <option key={h} value={h}>{h} hrs — {formatCurrency(walkinFee(h))}</option>
                   ))}
                 </select>

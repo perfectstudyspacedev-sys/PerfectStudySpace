@@ -121,7 +121,7 @@ export default function BranchSettingsPage() {
           <div style={{ display: 'flex', flexDirection: 'column', gap: '0.6rem', marginBottom: '1rem' }}>
             {walkinFees.map(f => (
               <div key={f.id} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '0.5rem 0.75rem', background: '#141414', border: '1px solid #2c2c2c', borderRadius: 6 }}>
-                <span style={{ fontSize: '0.88rem' }}>Up to {f.max_hours} hrs</span>
+                <span style={{ fontSize: '0.88rem' }}>{f.max_hours} hrs</span>
                 <div style={{ display: 'flex', alignItems: 'center', gap: '0.3rem' }}>
                   <span style={{ color: 'var(--text-muted)' }}>₹</span>
                   <input

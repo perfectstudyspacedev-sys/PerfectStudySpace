@@ -31,6 +31,7 @@ export default function StaffPage() {
   const [staffList, setStaffList] = useState([])
   const [branches, setBranches] = useState([])
   const [staffBranchFilter, setStaffBranchFilter] = useState('')
+  const [showInactive, setShowInactive] = useState(false)
   const [attendanceBranchFilter, setAttendanceBranchFilter] = useState('')
   const [attendance, setAttendance] = useState(null)
   const [attendanceDate, setAttendanceDate] = useState(todayISO())
@@ -64,7 +65,9 @@ export default function StaffPage() {
   useEffect(() => { if (isOwner) load() }, [isOwner, load])
   useEffect(() => { if (isOwner) loadAttendance() }, [isOwner, loadAttendance])
 
-  const filteredStaff = staffBranchFilter ? staffList.filter(s => s.branch_id === staffBranchFilter) : staffList
+  const branchScoped = staffBranchFilter ? staffList.filter(s => s.branch_id === staffBranchFilter) : staffList
+  const activeStaff = branchScoped.filter(s => s.is_active)
+  const inactiveStaff = branchScoped.filter(s => !s.is_active)
   const filteredAttendance = attendance
     ? (attendanceBranchFilter
         ? attendance.rows.filter(r => r.branchId === attendanceBranchFilter)
@@ -165,16 +168,15 @@ export default function StaffPage() {
           <h3 style={{ color: 'var(--accent)' }}>All Accounts</h3>
           <BranchPillFilter branches={branches} value={staffBranchFilter} onChange={setStaffBranchFilter} />
         </div>
-        {filteredStaff.length === 0 ? (
-          <p style={{ color: 'var(--text-muted)' }}>No staff found.</p>
+        {activeStaff.length === 0 ? (
+          <p style={{ color: 'var(--text-muted)' }}>No active staff found.</p>
         ) : (
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(240px, 1fr))', gap: '0.75rem' }}>
-            {filteredStaff.map(s => (
+            {activeStaff.map(s => (
               <div key={s.id} style={{
                 display: 'flex', flexDirection: 'column', gap: '0.6rem',
                 padding: '0.75rem 0.9rem', borderRadius: 8,
-                background: '#141414', border: `1px solid ${s.is_active ? '#2c2c2c' : 'rgba(255,60,60,0.3)'}`,
-                opacity: s.is_active ? 1 : 0.6,
+                background: '#141414', border: '1px solid #2c2c2c',
               }}>
                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
                   <div>
@@ -186,35 +188,67 @@ export default function StaffPage() {
                       )}
                     </div>
                   </div>
-                  <span className={`badge badge-${s.is_active ? 'active' : 'inactive'}`}>{s.is_active ? 'Active' : 'Removed'}</span>
+                  <span className="badge badge-active">Active</span>
                 </div>
                 {s.role !== 'owner' && (
                   <div style={{ display: 'flex', gap: '0.4rem' }}>
-                    {s.is_active ? (
-                      <>
-                        <button type="button" className="btn btn-ghost" style={{ flex: 1, padding: '0.35rem', fontSize: '0.75rem' }} onClick={() => openEdit(s)}>
-                          Edit
-                        </button>
-                        <button
-                          type="button"
-                          style={{
-                            flex: 1, padding: '0.35rem', fontSize: '0.75rem', borderRadius: 4, cursor: 'pointer',
-                            background: 'rgba(255,60,60,0.08)', border: '1px solid rgba(255,60,60,0.35)', color: '#ff8888',
-                          }}
-                          onClick={() => deactivateStaff(s)}
-                        >
-                          Deactivate
-                        </button>
-                      </>
-                    ) : (
-                      <p style={{ fontSize: '0.75rem', color: 'var(--text-muted)', margin: 0 }}>
-                        Permanently removed — cannot be reactivated
-                      </p>
-                    )}
+                    <button type="button" className="btn btn-ghost" style={{ flex: 1, padding: '0.35rem', fontSize: '0.75rem' }} onClick={() => openEdit(s)}>
+                      Edit
+                    </button>
+                    <button
+                      type="button"
+                      style={{
+                        flex: 1, padding: '0.35rem', fontSize: '0.75rem', borderRadius: 4, cursor: 'pointer',
+                        background: 'rgba(255,60,60,0.08)', border: '1px solid rgba(255,60,60,0.35)', color: '#ff8888',
+                      }}
+                      onClick={() => deactivateStaff(s)}
+                    >
+                      Deactivate
+                    </button>
                   </div>
                 )}
               </div>
             ))}
+          </div>
+        )}
+
+        {inactiveStaff.length > 0 && (
+          <div style={{ marginTop: '1.25rem', paddingTop: '1rem', borderTop: '1px solid #2c2c2c' }}>
+            <button
+              type="button"
+              className="btn btn-ghost"
+              style={{ fontSize: '0.78rem' }}
+              onClick={() => setShowInactive(v => !v)}
+            >
+              {showInactive ? 'Hide' : 'Show'} Inactive ({inactiveStaff.length})
+            </button>
+            {showInactive && (
+              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(240px, 1fr))', gap: '0.75rem', marginTop: '0.9rem' }}>
+                {inactiveStaff.map(s => (
+                  <div key={s.id} style={{
+                    display: 'flex', flexDirection: 'column', gap: '0.6rem',
+                    padding: '0.75rem 0.9rem', borderRadius: 8,
+                    background: '#141414', border: '1px solid rgba(255,60,60,0.3)', opacity: 0.6,
+                  }}>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                      <div>
+                        <strong style={{ fontSize: '0.9rem' }}>{s.display_name || s.username}</strong>
+                        <div style={{ display: 'flex', gap: '0.4rem', alignItems: 'center', marginTop: '0.2rem' }}>
+                          <span className="mono" style={{ fontSize: '0.72rem', color: 'var(--text-muted)', textTransform: 'uppercase' }}>{s.role}</span>
+                          {s.branches?.name && (
+                            <span style={{ fontSize: '0.72rem', color: 'var(--accent)' }}>· {s.branches.name}</span>
+                          )}
+                        </div>
+                      </div>
+                      <span className="badge badge-inactive">Removed</span>
+                    </div>
+                    <p style={{ fontSize: '0.75rem', color: 'var(--text-muted)', margin: 0 }}>
+                      Permanently removed — cannot be reactivated
+                    </p>
+                  </div>
+                ))}
+              </div>
+            )}
           </div>
         )}
       </div>
