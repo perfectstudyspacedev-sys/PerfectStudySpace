@@ -83,6 +83,14 @@ async function authStaff(req: Request): Promise<StaffRow | null> {
       data = withOverride.data;
     }
     if (!data?.is_active) return null;
+    // Cuts off an already-open tab/device too, not just fresh logins — once "End Session"
+    // has been recorded for today, every subsequent request from this staff member (any
+    // token) is treated as unauthorized until tomorrow's attendance row resets it.
+    if (data.role !== "owner") {
+      const { data: att } = await db.from("staff_attendance").select("last_logout_at")
+        .eq("staff_id", data.id).eq("attendance_date", todayISO()).maybeSingle();
+      if (att?.last_logout_at) return null;
+    }
     // A same-day branch override (covering an absent colleague) swaps in as the effective
     // branch_id for every requireBranch() check downstream — the staff member's actual
     // `branch_id` column (their permanent home branch) is untouched in the DB.
@@ -108,7 +116,13 @@ async function getOwnerStaffIds(db: ReturnType<typeof adminClient>): Promise<str
   return (data ?? []).map(r => r.id);
 }
 
-function todayISO() { return new Date().toISOString().slice(0, 10); }
+// The edge function runs on UTC infrastructure with no "local" timezone, but the app is
+// used in India — so "today" must be computed in IST (UTC+5:30), not the server's UTC
+// date. Without this shift, the calendar day would flip 5.5 hours early (at UTC midnight,
+// i.e. 5:30 AM IST) instead of at actual IST midnight, throwing off attendance, "due
+// today" checks, daily reports, and the End Session day-lockout.
+const IST_OFFSET_MS = 5.5 * 60 * 60 * 1000;
+function todayISO() { return new Date(Date.now() + IST_OFFSET_MS).toISOString().slice(0, 10); }
 
 function addMonths(dateStr: string, months: number): string {
   const d = new Date(dateStr + "T12:00:00");
@@ -285,6 +299,18 @@ Deno.serve(async (req) => {
       const { data, error } = await db.rpc("verify_staff_login", { p_username: username, p_password: password });
       if (error || !data?.length) return err("Invalid login credentials", 401);
       const row = data[0];
+
+      // Once a staff member has ended their session for the day, they're locked out of
+      // logging back in until tomorrow — mirrors clocking out at a physical front desk.
+      // Owner is exempt (End Session isn't offered to them in the first place).
+      if (row.role !== "owner") {
+        const { data: att } = await db.from("staff_attendance").select("last_logout_at")
+          .eq("staff_id", row.id).eq("attendance_date", todayISO()).maybeSingle();
+        if (att?.last_logout_at) {
+          return err("You've already ended your session for today — you can log in again tomorrow.", 403);
+        }
+      }
+
       const token = await signToken({ sub: row.id, role: row.role, username: row.username });
 
       // Auto-mark attendance on first login of the day (no-op if already marked) — owner is exempt
@@ -318,6 +344,25 @@ Deno.serve(async (req) => {
     const staff = await authStaff(req);
     if (!staff) return err("Unauthorized", 401);
     await markAttendanceIfNeeded(db, staff.id, staff.role, staff.homeBranchId);
+
+    // Lets the frontend re-sync a staff member's own profile (display name, branch
+    // reassignment, etc.) without needing to log out and back in — polled periodically
+    // so an owner's edit shows up in that staff member's already-open session promptly.
+    // Also doubles as a lightweight "am I still allowed in" check: since it goes through
+    // the same authStaff() gate above, a deactivated account or an ended-for-today
+    // session gets a 401 here just like any other action.
+    if (action === "whoami") {
+      const { data: branch } = staff.branch_id
+        ? await db.from("branches").select("name").eq("id", staff.branch_id).single()
+        : { data: null };
+      return json({
+        staff: {
+          id: staff.id, username: staff.username, role: staff.role,
+          displayName: staff.display_name, branchId: staff.branch_id, branchName: branch?.name ?? null,
+          homeBranchId: staff.homeBranchId, isOverrideToday: staff.isOverrideToday,
+        },
+      });
+    }
 
     // ─── BRANCHES ───
     if (action === "list_branches") {

@@ -54,6 +54,42 @@ export function AuthProvider({ children }) {
     setBranches([])
   }, [])
 
+  // If any API call comes back Unauthorized mid-session (account deactivated, or the
+  // day's session was ended — by the owner or by the staff member themselves), log out
+  // immediately instead of leaving the page silently broken.
+  useEffect(() => {
+    const handler = () => logout()
+    window.addEventListener('pss:unauthorized', handler)
+    return () => window.removeEventListener('pss:unauthorized', handler)
+  }, [logout])
+
+  // Re-syncs this staff member's own profile (display name, branch reassignment, etc.)
+  // periodically and whenever the tab regains focus — so an owner's edit shows up in an
+  // already-open session promptly, without requiring the staff member to log out first.
+  useEffect(() => {
+    if (!staff) return
+    const refresh = async () => {
+      try {
+        const data = await api('whoami')
+        setStoredStaff(data.staff)
+        setStaff(data.staff)
+        // Staff (not owner, who picks a branch manually) follow their assigned branch —
+        // if the owner reassigns them, their active working branch should follow too.
+        if (data.staff.role !== 'owner' && data.staff.branchId && data.staff.branchId !== getStoredBranchId()) {
+          setBranchId(data.staff.branchId)
+          setStoredBranchId(data.staff.branchId)
+        }
+      } catch { /* handled globally via pss:unauthorized if the session is actually invalid */ }
+    }
+    const interval = setInterval(refresh, 45_000)
+    const onVisible = () => { if (document.visibilityState === 'visible') refresh() }
+    document.addEventListener('visibilitychange', onVisible)
+    return () => {
+      clearInterval(interval)
+      document.removeEventListener('visibilitychange', onVisible)
+    }
+  }, [staff?.id])
+
   const selectBranch = useCallback((id) => {
     setBranchId(id)
     setStoredBranchId(id)

@@ -41,6 +41,14 @@ export async function api(action, payload = {}) {
     if (lower.includes('no available desk') || lower.includes('no free desk')) {
       throw new Error('No available desk')
     }
+    // A 401 mid-session means the account was deactivated, or its day's session was ended
+    // (by the owner, or by the staff member themselves via End Session) since this tab
+    // logged in — force it back to the login screen immediately instead of leaving the
+    // page silently broken. Not raised for the login action itself (wrong credentials).
+    if (action !== 'login' && lower === 'unauthorized') {
+      window.dispatchEvent(new Event('pss:unauthorized'))
+      throw new Error('Your session has ended — please log in again')
+    }
     if (lower.includes('non-2xx')) {
       if (action === 'login') throw new Error('Invalid credentials')
       throw new Error('Something went wrong')

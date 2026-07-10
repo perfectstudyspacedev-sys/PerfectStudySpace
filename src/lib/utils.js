@@ -17,8 +17,13 @@ export function formatTime(t) {
   return t.slice(0, 5)
 }
 
+// Uses the device's local calendar date (not toISOString's UTC date) — the app is used
+// in India, so this assumes the device clock is set to IST. Between IST midnight and
+// UTC midnight (00:00–05:30 IST), toISOString() would still report yesterday's date.
 export function todayISO() {
-  return new Date().toISOString().slice(0, 10)
+  const d = new Date()
+  const pad = (n) => String(n).padStart(2, '0')
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`
 }
 
 export function shiftDate(iso, days) {

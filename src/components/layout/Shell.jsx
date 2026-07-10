@@ -200,6 +200,8 @@ export default function Shell() {
     try {
       await api('end_staff_session')
       setSessionEnded(true)
+      logout()
+      navigate('/login')
     } catch { /* ignore */ }
   }
 
