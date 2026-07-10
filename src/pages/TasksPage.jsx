@@ -59,7 +59,7 @@ function TaskTable({ tasks, allBranches, onToggle, currentStaffId }) {
   )
 }
 
-function IncompleteTaskTable({ tasks, allBranches, onComplete, currentStaffId }) {
+function IncompleteTaskTable({ tasks, allBranches, onComplete, currentStaffId, isOwner }) {
   if (tasks.length === 0) return <p style={{ color: 'var(--text-muted)' }}>No incomplete tasks in the last 7 days. 🎉</p>
   return (
     <table className="data-table">
@@ -87,7 +87,7 @@ function IncompleteTaskTable({ tasks, allBranches, onComplete, currentStaffId })
             <td style={{ fontSize: '0.8rem', textTransform: 'capitalize' }}>{t.repeatInterval === 'none' ? '—' : t.repeatInterval}</td>
             <td className="mono" style={{ fontSize: '0.82rem', color: '#ff8888', fontWeight: 700 }}>{formatDate(t.missedDate)}</td>
             <td>
-              {t.assignedToStaffId === currentStaffId ? (
+              {t.assignedToStaffId === currentStaffId || isOwner ? (
                 <button
                   type="button"
                   className="btn btn-primary"
@@ -257,7 +257,7 @@ export default function TasksPage() {
                   <button
                     key={value} type="button" onClick={() => setRepeatInterval(value)}
                     style={{
-                      flex: '1 0 auto', padding: '0.4rem 0.6rem', fontSize: '0.8rem', fontWeight: 600, cursor: 'pointer', borderRadius: 4,
+                      flex: '1 0 auto', padding: '0.4rem 0.6rem', fontSize: '0.8rem', fontWeight: 600, cursor: 'pointer', borderRadius: 999,
                       border: `1px solid ${repeatInterval === value ? 'var(--accent)' : '#333'}`,
                       background: repeatInterval === value ? 'rgba(255,215,0,0.08)' : '#141414',
                       color: repeatInterval === value ? 'var(--accent)' : 'var(--text-muted)',
@@ -294,7 +294,7 @@ export default function TasksPage() {
 
           <div className="card">
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.75rem' }}>
-              <h3 style={{ color: 'var(--accent)' }}>Tasks Today</h3>
+              <h3 style={{ color: 'var(--accent)' }}>Staff Tasks Today</h3>
               <div className="period-toggle">
                 {['', 'pending', 'done'].map(s => (
                   <button key={s || 'all'} type="button" className={statusFilter === s ? 'active' : ''} onClick={() => setStatusFilter(s)}>
@@ -315,7 +315,7 @@ export default function TasksPage() {
               Tasks that were due on a past date and were never marked done, from the last 7 days.
             </p>
             {loading ? <p>Loading…</p> : (
-              <IncompleteTaskTable tasks={incompleteTasks} allBranches={allBranches} onComplete={completeMissed} currentStaffId={staff?.id} />
+              <IncompleteTaskTable tasks={incompleteTasks} allBranches={allBranches} onComplete={completeMissed} currentStaffId={staff?.id} isOwner={isOwner} />
             )}
           </div>
         </div>

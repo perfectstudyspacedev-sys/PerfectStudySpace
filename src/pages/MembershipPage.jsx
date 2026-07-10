@@ -2,7 +2,7 @@ import { useState, useEffect, useCallback } from 'react'
 import { useNavigate, Link } from 'react-router-dom'
 import { useAuth } from '../context/AuthContext'
 import { api } from '../lib/api'
-import { formatCurrency, formatDate, getMultiMonthDiscount, todayISO, openWhatsApp } from '../lib/utils'
+import { formatCurrency, formatDate, getMultiMonthDiscount, todayISO, openWhatsApp, getWelcomeTemplate, saveWelcomeTemplate } from '../lib/utils'
 
 // Fallback packages — used only until live rates are fetched from fee_config (Branch Settings)
 const DEFAULT_TEMP_PACKAGES = [
@@ -367,13 +367,13 @@ function ActiveMembersTab({ branchId, tempPackages, permPackages }) {
                         <>
                           <button
                             type="button"
-                            style={{ padding: '0.3rem 0.7rem', fontSize: '0.8rem', background: 'rgba(255,215,0,0.08)', border: '1px solid rgba(255,215,0,0.4)', color: 'var(--accent)', borderRadius: 4, cursor: 'pointer', fontWeight: 600 }}
+                            style={{ padding: '0.3rem 0.7rem', fontSize: '0.8rem', background: 'rgba(255,215,0,0.08)', border: '1px solid rgba(255,215,0,0.4)', color: 'var(--accent)', borderRadius: 999, cursor: 'pointer', fontWeight: 600 }}
                             disabled={actionLoading === m.membership_id + ':renew'}
                             onClick={() => openRenewModal(m)}
                           >↺ Renew</button>
                           <button
                             type="button"
-                            style={{ padding: '0.3rem 0.7rem', fontSize: '0.8rem', background: 'rgba(255,60,60,0.08)', border: '1px solid rgba(255,60,60,0.4)', color: '#ff8888', borderRadius: 4, cursor: 'pointer', fontWeight: 600 }}
+                            style={{ padding: '0.3rem 0.7rem', fontSize: '0.8rem', background: 'rgba(255,60,60,0.08)', border: '1px solid rgba(255,60,60,0.4)', color: '#ff8888', borderRadius: 999, cursor: 'pointer', fontWeight: 600 }}
                             disabled={actionLoading === m.membership_id + ':close'}
                             onClick={() => openCloseModal(m.membership_id, m.student_name)}
                           >✕ Finish</button>
@@ -383,7 +383,7 @@ function ActiveMembersTab({ branchId, tempPackages, permPackages }) {
                           {expiringSoonRow && (
                             <button
                               type="button"
-                              style={{ padding: '0.3rem 0.7rem', fontSize: '0.8rem', background: 'rgba(255,215,0,0.08)', border: '1px solid rgba(255,215,0,0.4)', color: 'var(--accent)', borderRadius: 4, cursor: 'pointer', fontWeight: 600 }}
+                              style={{ padding: '0.3rem 0.7rem', fontSize: '0.8rem', background: 'rgba(255,215,0,0.08)', border: '1px solid rgba(255,215,0,0.4)', color: 'var(--accent)', borderRadius: 999, cursor: 'pointer', fontWeight: 600 }}
                               disabled={actionLoading === m.membership_id + ':renew'}
                               onClick={() => openRenewModal(m)}
                             >↺ Renew</button>
@@ -398,7 +398,7 @@ function ActiveMembersTab({ branchId, tempPackages, permPackages }) {
                           ) : (
                             <button
                               type="button"
-                              style={{ padding: '0.3rem 0.7rem', fontSize: '0.8rem', background: 'rgba(255,150,0,0.08)', border: '1px solid rgba(255,150,0,0.4)', color: '#ffaa44', borderRadius: 4, cursor: 'pointer', fontWeight: 600 }}
+                              style={{ padding: '0.3rem 0.7rem', fontSize: '0.8rem', background: 'rgba(255,150,0,0.08)', border: '1px solid rgba(255,150,0,0.4)', color: '#ffaa44', borderRadius: 999, cursor: 'pointer', fontWeight: 600 }}
                               disabled={actionLoading === m.membership_id + ':hold'}
                               onClick={() => handleHold(m.membership_id)}
                             >⏸ Hold</button>
@@ -409,7 +409,7 @@ function ActiveMembersTab({ branchId, tempPackages, permPackages }) {
                         <button
                           type="button"
                           title="Send attendance details via WhatsApp"
-                          style={{ padding: '0.3rem 0.6rem', fontSize: '0.8rem', background: 'rgba(74,222,128,0.08)', border: '1px solid rgba(74,222,128,0.4)', color: '#4ade80', borderRadius: 4, cursor: 'pointer', fontWeight: 600 }}
+                          style={{ padding: '0.3rem 0.6rem', fontSize: '0.8rem', background: 'rgba(74,222,128,0.08)', border: '1px solid rgba(74,222,128,0.4)', color: '#4ade80', borderRadius: 999, cursor: 'pointer', fontWeight: 600 }}
                           disabled={waLoadingId === m.membership_id}
                           onClick={() => sendAttendanceWhatsApp(m)}
                         >{waLoadingId === m.membership_id ? '…' : '💬'}</button>
@@ -461,7 +461,7 @@ function ActiveMembersTab({ branchId, tempPackages, permPackages }) {
               <div style={{ display: 'flex', gap: '0.5rem' }}>
                 {[{ value: 'cash', label: '💵 Cash' }, { value: 'upi', label: '📱 UPI' }].map(({ value, label }) => (
                   <button key={value} type="button" onClick={() => setRenewPayMode(value)}
-                    style={{ flex: 1, padding: '0.5rem', border: `1px solid ${renewPayMode === value ? 'var(--accent)' : '#333'}`, borderRadius: 4, background: renewPayMode === value ? 'rgba(255,215,0,0.08)' : '#141414', color: renewPayMode === value ? 'var(--accent)' : 'var(--text-muted)', cursor: 'pointer', fontWeight: 600 }}
+                    style={{ flex: 1, padding: '0.5rem', border: `1px solid ${renewPayMode === value ? 'var(--accent)' : '#333'}`, borderRadius: 999, background: renewPayMode === value ? 'rgba(255,215,0,0.08)' : '#141414', color: renewPayMode === value ? 'var(--accent)' : 'var(--text-muted)', cursor: 'pointer', fontWeight: 600 }}
                   >{label}</button>
                 ))}
               </div>
@@ -472,7 +472,7 @@ function ActiveMembersTab({ branchId, tempPackages, permPackages }) {
               <div style={{ display: 'flex', gap: '0.5rem' }}>
                 {[{ value: 'full', label: 'Full' }, { value: 'partial', label: 'Partial' }, { value: 'pending', label: 'Pay Later' }].map(({ value, label }) => (
                   <button key={value} type="button" onClick={() => setRenewPayType(value)}
-                    style={{ flex: 1, padding: '0.5rem', border: `1px solid ${renewPayType === value ? 'var(--accent)' : '#333'}`, borderRadius: 4, background: renewPayType === value ? 'rgba(255,215,0,0.08)' : '#141414', color: renewPayType === value ? 'var(--accent)' : 'var(--text-muted)', cursor: 'pointer', fontWeight: 600, fontSize: '0.85rem' }}
+                    style={{ flex: 1, padding: '0.5rem', border: `1px solid ${renewPayType === value ? 'var(--accent)' : '#333'}`, borderRadius: 999, background: renewPayType === value ? 'rgba(255,215,0,0.08)' : '#141414', color: renewPayType === value ? 'var(--accent)' : 'var(--text-muted)', cursor: 'pointer', fontWeight: 600, fontSize: '0.85rem' }}
                   >{label}</button>
                 ))}
               </div>
@@ -579,7 +579,7 @@ function ActiveMembersTab({ branchId, tempPackages, permPackages }) {
                     <div style={{ display: 'flex', gap: '0.5rem' }}>
                       {[{ value: 'cash', label: '💵 Cash' }, { value: 'upi', label: '📱 UPI' }].map(({ value, label }) => (
                         <button key={value} type="button" onClick={() => setClosePayMode(value)}
-                          style={{ flex: 1, padding: '0.5rem', border: `1px solid ${closePayMode === value ? 'var(--accent)' : '#333'}`, borderRadius: 4, background: closePayMode === value ? 'rgba(255,215,0,0.08)' : '#141414', color: closePayMode === value ? 'var(--accent)' : 'var(--text-muted)', cursor: 'pointer', fontWeight: 600 }}
+                          style={{ flex: 1, padding: '0.5rem', border: `1px solid ${closePayMode === value ? 'var(--accent)' : '#333'}`, borderRadius: 999, background: closePayMode === value ? 'rgba(255,215,0,0.08)' : '#141414', color: closePayMode === value ? 'var(--accent)' : 'var(--text-muted)', cursor: 'pointer', fontWeight: 600 }}
                         >{label}</button>
                       ))}
                     </div>
@@ -686,10 +686,12 @@ function NewMembershipForm({ branchId, onCreated, tempPackages, permPackages }) 
   const [loading, setLoading] = useState(false)
   const [receipt, setReceipt] = useState(null)
   const [waSent, setWaSent] = useState(false)
-  const [waTemplate, setWaTemplate] = useState(
-    'Hi {name}, welcome to Perfect Study Space! 🎉 Your membership is now active. '
-    + "We're excited to have you with us — if you have any questions, feel free to reach out anytime."
-  )
+  const [waTemplate, setWaTemplate] = useState(getWelcomeTemplate)
+
+  const updateWaTemplate = (text) => {
+    setWaTemplate(text)
+    saveWelcomeTemplate(text)
+  }
 
   useEffect(() => {
     if (!branchId) return
@@ -818,7 +820,7 @@ function NewMembershipForm({ branchId, onCreated, tempPackages, permPackages }) 
               onClick={() => openWhatsApp(receipt.phone, waTemplate.replace(/\{name\}/gi, receipt.name))}
               style={{
                 width: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '0.5rem',
-                padding: '0.65rem', borderRadius: 4, fontWeight: 700, cursor: 'pointer',
+                padding: '0.65rem', borderRadius: 999, fontWeight: 700, cursor: 'pointer',
                 background: 'rgba(74,222,128,0.1)', border: '1px solid rgba(74,222,128,0.4)', color: '#4ade80',
               }}
             >
@@ -920,7 +922,7 @@ function NewMembershipForm({ branchId, onCreated, tempPackages, permPackages }) 
               type="button" onClick={() => setWithLocker(false)}
               style={{
                 flex: 1, padding: '0.6rem', border: `1px solid ${!withLocker ? 'var(--accent)' : '#333'}`,
-                borderRadius: 4, background: !withLocker ? 'rgba(255,215,0,0.08)' : '#141414',
+                borderRadius: 999, background: !withLocker ? 'rgba(255,215,0,0.08)' : '#141414',
                 color: !withLocker ? 'var(--accent)' : 'var(--text-muted)', cursor: 'pointer', fontWeight: 600, fontSize: '0.88rem',
               }}
             >🕓 Avail Later</button>
@@ -929,7 +931,7 @@ function NewMembershipForm({ branchId, onCreated, tempPackages, permPackages }) 
               disabled={lockerStatus != null && lockerStatus.available <= 0}
               style={{
                 flex: 1, padding: '0.6rem', border: `1px solid ${withLocker ? 'var(--accent)' : '#333'}`,
-                borderRadius: 4, background: withLocker ? 'rgba(255,215,0,0.08)' : '#141414',
+                borderRadius: 999, background: withLocker ? 'rgba(255,215,0,0.08)' : '#141414',
                 color: withLocker ? 'var(--accent)' : 'var(--text-muted)', cursor: 'pointer', fontWeight: 600, fontSize: '0.88rem',
                 opacity: (lockerStatus != null && lockerStatus.available <= 0) ? 0.4 : 1,
               }}
@@ -966,7 +968,7 @@ function NewMembershipForm({ branchId, onCreated, tempPackages, permPackages }) 
                 style={{
                   flex: 1, padding: '0.6rem',
                   border: `1px solid ${paymentMode === value ? 'var(--accent)' : '#333'}`,
-                  borderRadius: 4,
+                  borderRadius: 999,
                   background: paymentMode === value ? 'rgba(255,215,0,0.08)' : '#141414',
                   color: paymentMode === value ? 'var(--accent)' : 'var(--text-muted)',
                   cursor: 'pointer', fontWeight: 600, fontSize: '0.9rem',
@@ -984,7 +986,7 @@ function NewMembershipForm({ branchId, onCreated, tempPackages, permPackages }) 
               { value: 'pending', label: '✕ Full Pending' },
             ].map(({ value, label }) => (
               <button key={value} type="button" onClick={() => setPaymentType(value)}
-                style={{ flex: 1, padding: '0.6rem', border: `1px solid ${paymentType === value ? 'var(--accent)' : '#333'}`, borderRadius: 4, background: paymentType === value ? 'rgba(255,215,0,0.08)' : '#141414', color: paymentType === value ? 'var(--accent)' : 'var(--text-muted)', cursor: 'pointer', fontWeight: 600, fontSize: '0.85rem' }}
+                style={{ flex: 1, padding: '0.6rem', border: `1px solid ${paymentType === value ? 'var(--accent)' : '#333'}`, borderRadius: 999, background: paymentType === value ? 'rgba(255,215,0,0.08)' : '#141414', color: paymentType === value ? 'var(--accent)' : 'var(--text-muted)', cursor: 'pointer', fontWeight: 600, fontSize: '0.85rem' }}
               >{label}</button>
             ))}
           </div>
@@ -1039,7 +1041,7 @@ function NewMembershipForm({ branchId, onCreated, tempPackages, permPackages }) 
           one registration.
         </p>
         <div className="form-group" style={{ marginBottom: 0 }}>
-          <textarea rows={6} value={waTemplate} onChange={(e) => setWaTemplate(e.target.value)} />
+          <textarea rows={6} value={waTemplate} onChange={(e) => updateWaTemplate(e.target.value)} />
         </div>
       </div>
     )}

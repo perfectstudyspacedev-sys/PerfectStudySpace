@@ -86,7 +86,7 @@ export default function MessagesPage() {
       </div>
 
       {tab === 'chat' && (
-        <div className="card" style={{ maxWidth: 640, padding: 0, overflow: 'hidden', display: 'flex', flexDirection: 'column' }}>
+        <div className="card" style={{ padding: 0, overflow: 'hidden', display: 'flex', flexDirection: 'column', height: 'calc(100vh - 260px)' }}>
           <div style={{ padding: '0.85rem 1rem', borderBottom: '1px solid #262626' }}>
             <div className="period-toggle">
               <button type="button" className={channel === 'branch' ? 'active' : ''} onClick={() => setChannel('branch')}>
@@ -105,7 +105,7 @@ export default function MessagesPage() {
             ref={scrollRef}
             style={{
               display: 'flex', flexDirection: 'column', gap: '0.15rem',
-              padding: '1rem', height: 420, overflowY: 'auto',
+              padding: '1rem', flex: 1, minHeight: 0, overflowY: 'auto',
               background: 'repeating-linear-gradient(135deg, #0f0f0f 0px, #0f0f0f 2px, #111 2px, #111 4px)',
             }}
           >

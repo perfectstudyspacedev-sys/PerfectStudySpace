@@ -76,7 +76,7 @@ function SessionToasts({ toasts, dismiss, dismissAll }) {
           style={{
             pointerEvents: 'all',
             background: 'rgba(255,255,255,0.05)', border: '1px solid #333',
-            color: 'var(--text-muted)', borderRadius: 4, padding: '0.3rem 0.75rem',
+            color: 'var(--text-muted)', borderRadius: 999, padding: '0.3rem 0.75rem',
             cursor: 'pointer', fontSize: '0.75rem',
           }}
         >

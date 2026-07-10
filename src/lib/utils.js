@@ -121,3 +121,20 @@ export function getMultiMonthDiscount(months) {
   if (months >= 2) return 5
   return 0
 }
+
+// Shared WhatsApp welcome-message template — used by both new membership registration
+// and new walk-in registration, so there's a single reusable template (editable from the
+// Membership page's "New Registration" tab) instead of each flow having its own hardcoded
+// copy. Persisted in localStorage so an edit is picked up by every future send, not just
+// the current form session.
+const WELCOME_TEMPLATE_KEY = 'pss_welcome_template'
+export const DEFAULT_WELCOME_TEMPLATE = 'Hi {name}, welcome to Perfect Study Space! 🎉 Thanks for joining us — '
+  + "we're excited to have you with us. If you have any questions, feel free to reach out anytime."
+
+export function getWelcomeTemplate() {
+  return localStorage.getItem(WELCOME_TEMPLATE_KEY) || DEFAULT_WELCOME_TEMPLATE
+}
+
+export function saveWelcomeTemplate(text) {
+  localStorage.setItem(WELCOME_TEMPLATE_KEY, text)
+}

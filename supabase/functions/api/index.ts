@@ -388,9 +388,6 @@ Deno.serve(async (req) => {
       const { data: alerts } = await db.from("alerts").select("*, students(name, phone)")
         .eq("branch_id", branchId).eq("status", "pending").order("due_date").limit(10);
 
-      const { data: recentBookings } = await db.from("bookings").select("*, students(name, phone)")
-        .eq("branch_id", branchId).order("created_at", { ascending: false }).limit(5);
-
       // Not just "due/expired exactly today" — any membership that's overdue and hasn't
       // been settled/renewed yet should keep showing up until it's dealt with.
       const { data: dueToday } = await db.from("memberships").select("*, students(name, phone)")
@@ -415,14 +412,26 @@ Deno.serve(async (req) => {
           checkedInToday: checkedInToday ?? 0,
         },
         alerts: alerts ?? [],
-        recentActivity: (recentBookings ?? []).map(b => ({
-          id: b.id, type: b.booking_type, studentName: b.students?.name,
-          time: b.created_at, status: b.status,
-        })),
         actionable: {
           dueToday: dueToday ?? [],
           expiredToday: expiredToday ?? [],
         },
+      });
+    }
+
+    // Last 5 bookings branch-wide, newest first — moved off the Dashboard onto the
+    // Reports page as its own lightweight action so Reports doesn't need the full
+    // get_dashboard payload just to show this feed.
+    if (action === "get_recent_activity") {
+      const { branchId } = payload;
+      if (!requireBranch(staff, branchId)) return err("Branch access denied", 403);
+      const { data: recentBookings } = await db.from("bookings").select("*, students(name, phone)")
+        .eq("branch_id", branchId).order("created_at", { ascending: false });
+      return json({
+        recentActivity: (recentBookings ?? []).map(b => ({
+          id: b.id, type: b.booking_type, studentName: b.students?.name, studentPhone: b.students?.phone,
+          time: b.created_at, status: b.status,
+        })),
       });
     }
 
@@ -1731,9 +1740,6 @@ Deno.serve(async (req) => {
       const fromTs = range.from + "T00:00:00Z";
       const toTs = range.to + "T23:59:59Z";
 
-      const { data: txns } = await db.from("transactions").select("*")
-        .eq("branch_id", branchId).gte("created_at", fromTs).lte("created_at", toTs);
-
       const { data: walkins } = await db.from("bookings").select("*, students(name)")
         .eq("branch_id", branchId).eq("booking_type", "walkin")
         .gte("created_at", fromTs).lte("created_at", toTs);
@@ -1761,14 +1767,12 @@ Deno.serve(async (req) => {
         .gte("created_at", fromTs).lte("created_at", toTs);
 
       // Trend charts (owner, non-single-day views only) — attendance and new-membership
-      // registrations bucketed day-by-day (week view) or week-by-week (month/long custom
-      // ranges), so the owner can see day-on-day or week-on-week movement at a glance.
+      // registrations bucketed day-by-day, every date shown separately (never combined into
+      // week-range buckets), so the owner can see day-on-day movement at a glance.
       let attendanceTrend = null;
       let registrationsTrend = null;
       if (isOwner(staff) && period && period !== "day") {
-        const spanDays = Math.round((new Date(range.to).getTime() - new Date(range.from).getTime()) / 86_400_000) + 1;
-        const granularity: "day" | "week" = period === "week" ? "day" : period === "month" ? "week" : (spanDays <= 31 ? "day" : "week");
-        const buckets = buildDateBuckets(range.from, range.to, granularity);
+        const buckets = buildDateBuckets(range.from, range.to, "day");
         attendanceTrend = buckets.map(b => ({
           label: b.label,
           count: new Set(
@@ -1781,12 +1785,8 @@ Deno.serve(async (req) => {
         }));
       }
 
-      const total = (txns ?? []).reduce((s, t) => s + Number(t.amount), 0);
-      const canSeeCollections = isOwner(staff);
       return json({
         date: range.to, dateFrom: range.from, dateTo: range.to,
-        totalCollections: canSeeCollections ? total : null,
-        transactions: canSeeCollections ? txns : null,
         walkins, newMembers, attendanceTrend, registrationsTrend,
         attendanceBreakdown, newRegistrations: newRegistrations ?? 0,
       });
@@ -1947,8 +1947,10 @@ Deno.serve(async (req) => {
       const targetDate = date || todayISO();
       const { data: task } = await db.from("tasks").select("*").eq("id", taskId).single();
       if (!task) return err("Task not found");
-      // Only the assignee can mark their own task complete — being the assigner (even as owner) isn't enough
-      if (task.assigned_to_staff_id !== staff.id) {
+      // Only the assignee can mark their own task complete — except the owner, who can
+      // manually set completion status on any staff member's task (e.g. clearing missed
+      // items in the Incomplete Tasks list).
+      if (task.assigned_to_staff_id !== staff.id && !isOwner(staff)) {
         return err("Only the person a task is assigned to can complete it", 403);
       }
       if (task.repeat_interval === "none") {

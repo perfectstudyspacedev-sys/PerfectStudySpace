@@ -251,7 +251,7 @@ function CheckoutModal({ booking, onConfirm, onCancel, loading }) {
             <div style={{ display: 'flex', gap: '0.5rem' }}>
               {[{ value: 'cash', label: '💵 Cash' }, { value: 'upi', label: '📱 UPI' }].map(({ value, label }) => (
                 <button key={value} type="button" onClick={() => setPayMode(value)}
-                  style={{ flex: 1, padding: '0.5rem', border: `1px solid ${payMode === value ? 'var(--accent)' : '#333'}`, borderRadius: 4, background: payMode === value ? 'rgba(255,215,0,0.08)' : '#141414', color: payMode === value ? 'var(--accent)' : 'var(--text-muted)', cursor: 'pointer', fontWeight: 600 }}
+                  style={{ flex: 1, padding: '0.5rem', border: `1px solid ${payMode === value ? 'var(--accent)' : '#333'}`, borderRadius: 999, background: payMode === value ? 'rgba(255,215,0,0.08)' : '#141414', color: payMode === value ? 'var(--accent)' : 'var(--text-muted)', cursor: 'pointer', fontWeight: 600 }}
                 >{label}</button>
               ))}
             </div>
@@ -375,7 +375,7 @@ function FoodOrderModal({ branchId, booking, onClose, onDone }) {
             <div style={{ display: 'flex', gap: '0.5rem' }}>
               {[{ value: 'cash', label: '💵 Cash' }, { value: 'upi', label: '📱 UPI' }].map(({ value, label }) => (
                 <button key={value} type="button" onClick={() => setCollectMode(value)}
-                  style={{ flex: 1, padding: '0.5rem', border: `1px solid ${collectMode === value ? 'var(--accent)' : '#333'}`, borderRadius: 4, background: collectMode === value ? 'rgba(255,215,0,0.08)' : '#141414', color: collectMode === value ? 'var(--accent)' : 'var(--text-muted)', cursor: 'pointer', fontWeight: 600 }}
+                  style={{ flex: 1, padding: '0.5rem', border: `1px solid ${collectMode === value ? 'var(--accent)' : '#333'}`, borderRadius: 999, background: collectMode === value ? 'rgba(255,215,0,0.08)' : '#141414', color: collectMode === value ? 'var(--accent)' : 'var(--text-muted)', cursor: 'pointer', fontWeight: 600 }}
                 >{label}</button>
               ))}
             </div>
@@ -454,10 +454,10 @@ function FoodOrderModal({ branchId, booking, onClose, onDone }) {
                 <label>Payment</label>
                 <div style={{ display: 'flex', gap: '0.4rem', flexWrap: 'wrap' }}>
                   <button type="button" onClick={() => setPayChoice('now')}
-                    style={{ flex: '1 0 auto', padding: '0.5rem 0.7rem', fontSize: '0.82rem', fontWeight: 600, cursor: 'pointer', borderRadius: 4, border: `1px solid ${payChoice === 'now' ? 'var(--accent)' : '#333'}`, background: payChoice === 'now' ? 'rgba(255,215,0,0.08)' : '#141414', color: payChoice === 'now' ? 'var(--accent)' : 'var(--text-muted)' }}
+                    style={{ flex: '1 0 auto', padding: '0.5rem 0.7rem', fontSize: '0.82rem', fontWeight: 600, cursor: 'pointer', borderRadius: 999, border: `1px solid ${payChoice === 'now' ? 'var(--accent)' : '#333'}`, background: payChoice === 'now' ? 'rgba(255,215,0,0.08)' : '#141414', color: payChoice === 'now' ? 'var(--accent)' : 'var(--text-muted)' }}
                   >Pay Now</button>
                   <button type="button" onClick={() => setPayChoice('later')}
-                    style={{ flex: '1 0 auto', padding: '0.5rem 0.7rem', fontSize: '0.82rem', fontWeight: 600, cursor: 'pointer', borderRadius: 4, border: `1px solid ${payChoice === 'later' ? 'var(--accent)' : '#333'}`, background: payChoice === 'later' ? 'rgba(255,215,0,0.08)' : '#141414', color: payChoice === 'later' ? 'var(--accent)' : 'var(--text-muted)' }}
+                    style={{ flex: '1 0 auto', padding: '0.5rem 0.7rem', fontSize: '0.82rem', fontWeight: 600, cursor: 'pointer', borderRadius: 999, border: `1px solid ${payChoice === 'later' ? 'var(--accent)' : '#333'}`, background: payChoice === 'later' ? 'rgba(255,215,0,0.08)' : '#141414', color: payChoice === 'later' ? 'var(--accent)' : 'var(--text-muted)' }}
                   >Pay Later</button>
                 </div>
               </div>
@@ -466,7 +466,7 @@ function FoodOrderModal({ branchId, booking, onClose, onDone }) {
                   <div style={{ display: 'flex', gap: '0.5rem' }}>
                     {[{ value: 'cash', label: '💵 Cash' }, { value: 'upi', label: '📱 UPI' }].map(({ value, label }) => (
                       <button key={value} type="button" onClick={() => setPayMode(value)}
-                        style={{ flex: 1, padding: '0.5rem', border: `1px solid ${payMode === value ? 'var(--accent)' : '#333'}`, borderRadius: 4, background: payMode === value ? 'rgba(255,215,0,0.08)' : '#141414', color: payMode === value ? 'var(--accent)' : 'var(--text-muted)', cursor: 'pointer', fontWeight: 600 }}
+                        style={{ flex: 1, padding: '0.5rem', border: `1px solid ${payMode === value ? 'var(--accent)' : '#333'}`, borderRadius: 999, background: payMode === value ? 'rgba(255,215,0,0.08)' : '#141414', color: payMode === value ? 'var(--accent)' : 'var(--text-muted)', cursor: 'pointer', fontWeight: 600 }}
                       >{label}</button>
                     ))}
                   </div>
@@ -643,7 +643,7 @@ export default function BookingsPage() {
           <p style={{ color: 'var(--text-muted)' }}>No {typeFilter === 'walkin' ? 'walk-in' : 'member'} students currently present.</p>
         </div>
       ) : (
-        <div className="card" style={{ padding: 0, overflow: 'hidden' }}>
+        <div className="card" style={{ padding: 0, overflowX: 'auto' }}>
           <table className="data-table" style={{ marginBottom: 0 }}>
             <thead>
               <tr>
@@ -744,7 +744,7 @@ export default function BookingsPage() {
                             <button type="button" style={{
                               padding: '0.25rem 0.55rem', fontSize: '0.78rem', fontWeight: 600,
                               background: 'rgba(255,150,0,0.08)', border: '1px solid rgba(255,150,0,0.4)',
-                              color: '#ffaa44', borderRadius: 4, cursor: 'pointer',
+                              color: '#ffaa44', borderRadius: 999, cursor: 'pointer',
                             }}
                               disabled={actionLoading === b.id + ':pause'}
                               onClick={() => doAction(b.id + ':pause', () => api('pause_session', { bookingId: b.id }))}
@@ -761,7 +761,7 @@ export default function BookingsPage() {
                         <button type="button" style={{
                           padding: '0.25rem 0.55rem', fontSize: '0.78rem', fontWeight: 600,
                           background: 'rgba(255,215,0,0.08)', border: '1px solid rgba(255,215,0,0.3)',
-                          color: 'var(--accent)', borderRadius: 4, cursor: 'pointer',
+                          color: 'var(--accent)', borderRadius: 999, cursor: 'pointer',
                           display: 'flex', alignItems: 'center', gap: '0.3rem',
                         }}
                           onClick={() => setFoodOrderBooking(b)}
@@ -777,7 +777,7 @@ export default function BookingsPage() {
                           padding: '0.25rem 0.55rem', fontSize: '0.78rem', fontWeight: 600,
                           background: ts.over ? 'rgba(255,60,60,0.18)' : 'rgba(255,60,60,0.08)',
                           border: `1px solid ${ts.over ? 'rgba(255,60,60,0.6)' : 'rgba(255,60,60,0.3)'}`,
-                          color: '#ff8888', borderRadius: 4, cursor: 'pointer',
+                          color: '#ff8888', borderRadius: 999, cursor: 'pointer',
                         }}
                           disabled={actionLoading === b.id + ':checkout'}
                           onClick={() => handleCheckout(b)}

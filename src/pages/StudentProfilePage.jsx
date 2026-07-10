@@ -141,7 +141,7 @@ function ChangePlanModal({ membership, tempPackages, permPackages, onClose, onDo
                 onClick={() => { setCategory(c); const opts = c === 'permanent' ? permPackages : tempPackages; if (opts.length) setHoursPerDay(opts[0].hours) }}
                 style={{
                   flex: 1, padding: '0.55rem', textTransform: 'capitalize',
-                  border: `1px solid ${category === c ? 'var(--accent)' : '#333'}`, borderRadius: 4,
+                  border: `1px solid ${category === c ? 'var(--accent)' : '#333'}`, borderRadius: 999,
                   background: category === c ? 'rgba(255,215,0,0.08)' : '#141414',
                   color: category === c ? 'var(--accent)' : 'var(--text-muted)', cursor: 'pointer', fontWeight: 600,
                 }}
@@ -235,6 +235,7 @@ export default function StudentProfilePage() {
   const { isOwner } = useAuth()
   const [data, setData] = useState(null)
   const [loading, setLoading] = useState(true)
+  const [openPanel, setOpenPanel] = useState(null) // which shrunk-to-a-button card is currently shown as a modal
   const [payAmount, setPayAmount] = useState('')
   const [payMode, setPayMode] = useState('cash')
   const [holdLoading, setHoldLoading] = useState(false)
@@ -529,24 +530,7 @@ export default function StudentProfilePage() {
         <Link to="/students" className="btn btn-ghost">← Students</Link>
       </div>
 
-      <div className="stats-row">
-        <div className="card stat-card">
-          <div className="value">{student.total_visits}</div>
-          <div className="label">Total Visits</div>
-        </div>
-        <div className="card stat-card">
-          <div className="value">{student.total_hours_studied}</div>
-          <div className="label">Hours Studied</div>
-        </div>
-        <div className="card stat-card">
-          <div className="value">
-            <span className={`badge badge-${student.status} cap`}>{student.status}</span>
-          </div>
-          <div className="label">Status</div>
-        </div>
-      </div>
-
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(280px, 1fr))', gap: '1rem' }}>
+      <div className="profile-summary-grid">
         <div className="card">
           <h3 style={{ color: 'var(--accent)', marginBottom: '1rem' }}>Details</h3>
           <table style={{ width: '100%', borderCollapse: 'collapse' }}>
@@ -586,10 +570,49 @@ export default function StudentProfilePage() {
           </table>
         </div>
 
-        {/* Hold / Resume / Renew — only students who have an availed membership see this card at all */}
-        {activeMem && (
-          <div className="card">
-            <h3 style={{ color: 'var(--accent)', marginBottom: '0.75rem' }}>Membership Control</h3>
+        <div style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem' }}>
+          <div className="card stat-card profile-stat-tile">
+            <div className="value">{student.total_visits}</div>
+            <div className="label">Total Visits</div>
+          </div>
+          <div className="card stat-card profile-stat-tile">
+            <div className="value">{student.total_hours_studied}</div>
+            <div className="label">Hours Studied</div>
+          </div>
+          <div className="card stat-card profile-stat-tile">
+            <div className="value">
+              <span className={`badge badge-${student.status} cap`}>{student.status}</span>
+            </div>
+            <div className="label">Status</div>
+          </div>
+        </div>
+
+        {/* The rest of these were full cards — shrunk to buttons that open the same content in a modal */}
+        <div style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem' }}>
+          {activeMem && (
+            <button type="button" className="btn btn-ghost btn-glass" style={{ width: '100%', flex: 1 }} onClick={() => setOpenPanel('membership')}>⚙ Membership Control</button>
+          )}
+          {activeMem?.fee_due > 0 && (
+            <button type="button" className="btn btn-ghost btn-glass" style={{ width: '100%', flex: 1 }} onClick={() => setOpenPanel('payment')}>💳 Record Payment</button>
+          )}
+          {isOwner && activeMem && (
+            <button type="button" className="btn btn-ghost btn-glass" style={{ width: '100%', flex: 1 }} onClick={() => setOpenPanel('discount')}>🏷️ Discount</button>
+          )}
+          {activeMem && pendingCashback && (
+            <button type="button" className="btn btn-ghost btn-glass" style={{ width: '100%', flex: 1 }} onClick={() => setOpenPanel('cashback')}>🎁 Cashback</button>
+          )}
+          {activeMem && (
+            <button type="button" className="btn btn-ghost btn-glass" style={{ width: '100%', flex: 1 }} onClick={() => setOpenPanel('foodpass')}>🎫 Food Pass</button>
+          )}
+          <button type="button" className="btn btn-ghost btn-glass" style={{ width: '100%', flex: 1 }} onClick={() => setOpenPanel('locker')}>🔑 Locker</button>
+        </div>
+      </div>
+
+      {/* Hold / Resume / Renew — only students who have an availed membership see this card at all */}
+        {activeMem && openPanel === 'membership' && (
+          <div className="modal-overlay" onClick={() => setOpenPanel(null)}>
+          <div className="modal" style={{ maxWidth: 420 }} onClick={(e) => e.stopPropagation()}>
+            <h2 style={{ color: 'var(--accent)', marginBottom: '0.75rem' }}>Membership Control</h2>
             {isExpired && (
               <>
                 <p style={{ color: '#ff8888', fontWeight: 700, fontSize: '0.85rem', marginBottom: '0.75rem' }}>
@@ -600,7 +623,7 @@ export default function StudentProfilePage() {
                   style={{
                     width: '100%', padding: '0.6rem', fontWeight: 700, cursor: 'pointer',
                     background: 'rgba(255,215,0,0.08)', border: '1px solid rgba(255,215,0,0.4)',
-                    color: 'var(--accent)', borderRadius: 4, marginBottom: '0.5rem',
+                    color: 'var(--accent)', borderRadius: 999, marginBottom: '0.5rem',
                   }}
                   onClick={() => openRenew(activeMem)}
                 >
@@ -632,7 +655,7 @@ export default function StudentProfilePage() {
                   style={{
                     width: '100%', padding: '0.6rem', fontWeight: 700, cursor: 'pointer',
                     background: 'rgba(255,150,0,0.08)', border: '1px solid rgba(255,150,0,0.4)',
-                    color: '#ffaa44', borderRadius: 4, marginBottom: '0.5rem',
+                    color: '#ffaa44', borderRadius: 999, marginBottom: '0.5rem',
                   }}
                   onClick={() => handleHold(activeMem.id)}
                   disabled={holdLoading}
@@ -643,24 +666,29 @@ export default function StudentProfilePage() {
             )}
             {holdError && <p className="error-msg">{holdError}</p>}
             {!isExpired && !isPaused && (
-              <div style={{ display: 'flex', gap: '0.5rem', marginTop: '0.25rem' }}>
-                <button type="button" className="btn btn-ghost" style={{ flex: 1, fontSize: '0.8rem' }} onClick={() => setPlanChangeOpen(true)}>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem', marginTop: '0.25rem' }}>
+                <button type="button" className="btn btn-ghost" style={{ width: '100%', fontSize: '0.85rem' }} onClick={() => setPlanChangeOpen(true)}>
                   ⇄ Change Plan
                 </button>
                 {activeMem.category === 'permanent' && (
-                  <button type="button" className="btn btn-ghost" style={{ flex: 1, fontSize: '0.8rem' }} onClick={() => setCabinChangeOpen(true)}>
+                  <button type="button" className="btn btn-ghost" style={{ width: '100%', fontSize: '0.85rem' }} onClick={() => setCabinChangeOpen(true)}>
                     🪑 Change Cabin
                   </button>
                 )}
               </div>
             )}
+            <div className="modal-actions">
+              <button type="button" className="btn btn-ghost" onClick={() => setOpenPanel(null)}>Close</button>
+            </div>
+          </div>
           </div>
         )}
 
         {/* Payment */}
-        {activeMem?.fee_due > 0 && (
-          <div className="card">
-            <h3 style={{ color: 'var(--accent)', marginBottom: '0.75rem' }}>Record Payment</h3>
+        {activeMem?.fee_due > 0 && openPanel === 'payment' && (
+          <div className="modal-overlay" onClick={() => setOpenPanel(null)}>
+          <div className="modal" style={{ maxWidth: 420 }} onClick={(e) => e.stopPropagation()}>
+            <h2 style={{ color: 'var(--accent)', marginBottom: '0.75rem' }}>Record Payment</h2>
             <div className="form-group">
               <label>Amount (₹)</label>
               <input type="number" value={payAmount} onChange={(e) => setPayAmount(e.target.value)} />
@@ -675,7 +703,7 @@ export default function StudentProfilePage() {
                     style={{
                       flex: 1, padding: '0.55rem',
                       border: `1px solid ${payMode === value ? 'var(--accent)' : '#333'}`,
-                      borderRadius: 4,
+                      borderRadius: 999,
                       background: payMode === value ? 'rgba(255,215,0,0.08)' : '#141414',
                       color: payMode === value ? 'var(--accent)' : 'var(--text-muted)',
                       cursor: 'pointer', fontWeight: 600, fontSize: '0.85rem',
@@ -684,15 +712,20 @@ export default function StudentProfilePage() {
                 ))}
               </div>
             </div>
-            <button type="button" className="btn btn-primary" onClick={() => handlePayment(activeMem.id)}>Record</button>
+            <div className="modal-actions">
+              <button type="button" className="btn btn-ghost" onClick={() => setOpenPanel(null)}>Cancel</button>
+              <button type="button" className="btn btn-primary" onClick={() => handlePayment(activeMem.id)}>Record</button>
+            </div>
+          </div>
           </div>
         )}
 
         {/* Loyalty Discount — owner only. Available on any active membership; if there's no
             pending fee (or the discount exceeds it), the excess is banked as a cashback. */}
-        {isOwner && activeMem && (
-          <div className="card">
-            <h3 style={{ color: 'var(--accent)', marginBottom: '0.5rem' }}>🏷️ Discount</h3>
+        {isOwner && activeMem && openPanel === 'discount' && (
+          <div className="modal-overlay" onClick={() => setOpenPanel(null)}>
+          <div className="modal" style={{ maxWidth: 420 }} onClick={(e) => e.stopPropagation()}>
+            <h2 style={{ color: 'var(--accent)', marginBottom: '0.5rem' }}>🏷️ Discount</h2>
             <p style={{ color: 'var(--text-muted)', fontSize: '0.8rem', marginBottom: '0.75rem' }}>
               {student.total_visits} visits · {student.total_hours_studied} hrs studied — reward loyalty with a discount.
               {feeDueNum <= 0 && ' This membership has no pending fee, so the discount will be banked as a cashback.'}
@@ -704,7 +737,7 @@ export default function StudentProfilePage() {
                   style={{
                     flex: 1, padding: '0.55rem',
                     border: `1px solid ${discountType === 'percent' ? 'var(--accent)' : '#333'}`,
-                    borderRadius: 4,
+                    borderRadius: 999,
                     background: discountType === 'percent' ? 'var(--accent)' : '#141414',
                     color: discountType === 'percent' ? '#000' : 'var(--text-muted)',
                     cursor: 'pointer', fontWeight: 700, fontSize: '0.85rem',
@@ -715,7 +748,7 @@ export default function StudentProfilePage() {
                   style={{
                     flex: 1, padding: '0.55rem',
                     border: `1px solid ${discountType === 'fixed' ? 'var(--accent)' : '#333'}`,
-                    borderRadius: 4,
+                    borderRadius: 999,
                     background: discountType === 'fixed' ? 'var(--accent)' : '#141414',
                     color: discountType === 'fixed' ? '#000' : 'var(--text-muted)',
                     cursor: 'pointer', fontWeight: 700, fontSize: '0.85rem',
@@ -749,20 +782,25 @@ export default function StudentProfilePage() {
             )}
             {discountError && <p className="error-msg">{discountError}</p>}
             {discountSuccess && <p style={{ color: '#4ade80', fontSize: '0.82rem', marginBottom: '0.5rem' }}>{discountSuccess}</p>}
-            <button
-              type="button" className="btn btn-primary" style={{ width: '100%' }}
-              onClick={() => handleApplyDiscount(activeMem.id)}
-              disabled={discountLoading || !discountValueNum}
-            >
-              {discountLoading ? 'Applying…' : 'Apply Discount'}
-            </button>
+            <div className="modal-actions">
+              <button type="button" className="btn btn-ghost" onClick={() => setOpenPanel(null)}>Close</button>
+              <button
+                type="button" className="btn btn-primary"
+                onClick={() => handleApplyDiscount(activeMem.id)}
+                disabled={discountLoading || !discountValueNum}
+              >
+                {discountLoading ? 'Applying…' : 'Apply Discount'}
+              </button>
+            </div>
+          </div>
           </div>
         )}
 
         {/* Cashback — read-only display; granted from the Top Students leaderboard */}
-        {activeMem && pendingCashback && (
-          <div className="card">
-            <h3 style={{ color: 'var(--accent)', marginBottom: '0.5rem' }}>🎁 Cashback</h3>
+        {activeMem && pendingCashback && openPanel === 'cashback' && (
+          <div className="modal-overlay" onClick={() => setOpenPanel(null)}>
+          <div className="modal" style={{ maxWidth: 420 }} onClick={(e) => e.stopPropagation()}>
+            <h2 style={{ color: 'var(--accent)', marginBottom: '0.5rem' }}>🎁 Cashback</h2>
             <p className="mono" style={{ fontSize: '1.05rem', fontWeight: 700, color: 'var(--accent)', marginBottom: '0.3rem' }}>
               {pendingCashback.cashback_type === 'percent' ? `${pendingCashback.cashback_value}% Off` : formatCurrency(pendingCashback.cashback_value)}
             </p>
@@ -772,14 +810,19 @@ export default function StudentProfilePage() {
             {pendingCashback.notes && (
               <p style={{ fontSize: '0.78rem', color: 'var(--text-muted)', marginTop: '0.4rem', fontStyle: 'italic' }}>{pendingCashback.notes}</p>
             )}
+            <div className="modal-actions">
+              <button type="button" className="btn btn-ghost" onClick={() => setOpenPanel(null)}>Close</button>
+            </div>
+          </div>
           </div>
         )}
 
         {/* Food Pass — only for students with a currently active membership (not walk-ins),
             same rule as Cashback so the two features are consistent. */}
-        {activeMem && (
-        <div className="card">
-          <h3 style={{ color: 'var(--accent)', marginBottom: '0.75rem' }}>🎫 Food Pass</h3>
+        {activeMem && openPanel === 'foodpass' && (
+          <div className="modal-overlay" onClick={() => setOpenPanel(null)}>
+          <div className="modal" style={{ maxWidth: 420 }} onClick={(e) => e.stopPropagation()}>
+          <h2 style={{ color: 'var(--accent)', marginBottom: '0.75rem' }}>🎫 Food Pass</h2>
           <p className="mono" style={{ fontSize: '1.1rem', fontWeight: 700, color: foodPass && Number(foodPass.balance) < 0 ? '#ff8888' : '#4ade80', marginBottom: '0.5rem' }}>
             Balance: {formatCurrency(Number(foodPass?.balance ?? 0))}
           </p>
@@ -801,7 +844,7 @@ export default function StudentProfilePage() {
                   style={{
                     flex: 1, padding: '0.5rem',
                     border: `1px solid ${foodPassPayMode === value ? 'var(--accent)' : '#333'}`,
-                    borderRadius: 4, background: foodPassPayMode === value ? 'rgba(255,215,0,0.08)' : '#141414',
+                    borderRadius: 999, background: foodPassPayMode === value ? 'rgba(255,215,0,0.08)' : '#141414',
                     color: foodPassPayMode === value ? 'var(--accent)' : 'var(--text-muted)',
                     cursor: 'pointer', fontWeight: 600, fontSize: '0.85rem',
                   }}
@@ -810,15 +853,21 @@ export default function StudentProfilePage() {
             </div>
           </div>
           {foodPassError && <p className="error-msg">{foodPassError}</p>}
-          <button type="button" className="btn btn-primary" style={{ width: '100%' }} disabled={foodPassLoading || !foodPassTopup} onClick={handleFoodPassTopup}>
-            {foodPassLoading ? 'Topping up…' : 'Top Up'}
-          </button>
-        </div>
+          <div className="modal-actions">
+            <button type="button" className="btn btn-ghost" onClick={() => setOpenPanel(null)}>Close</button>
+            <button type="button" className="btn btn-primary" disabled={foodPassLoading || !foodPassTopup} onClick={handleFoodPassTopup}>
+              {foodPassLoading ? 'Topping up…' : 'Top Up'}
+            </button>
+          </div>
+          </div>
+          </div>
         )}
 
         {/* Locker */}
-        <div className="card">
-          <h3 style={{ color: 'var(--accent)', marginBottom: '0.75rem' }}>Locker</h3>
+        {openPanel === 'locker' && (
+          <div className="modal-overlay" onClick={() => setOpenPanel(null)}>
+          <div className="modal" style={{ maxWidth: 420 }} onClick={(e) => e.stopPropagation()}>
+          <h2 style={{ color: 'var(--accent)', marginBottom: '0.75rem' }}>Locker</h2>
           {locker ? (
             <>
               <p style={{ fontSize: '0.88rem', marginBottom: '0.5rem' }}>
@@ -842,7 +891,7 @@ export default function StudentProfilePage() {
                           style={{
                             flex: 1, padding: '0.5rem',
                             border: `1px solid ${lockerPayMode === value ? 'var(--accent)' : '#333'}`,
-                            borderRadius: 4, background: lockerPayMode === value ? 'rgba(255,215,0,0.08)' : '#141414',
+                            borderRadius: 999, background: lockerPayMode === value ? 'rgba(255,215,0,0.08)' : '#141414',
                             color: lockerPayMode === value ? 'var(--accent)' : 'var(--text-muted)',
                             cursor: 'pointer', fontWeight: 600, fontSize: '0.85rem',
                           }}
@@ -889,7 +938,7 @@ export default function StudentProfilePage() {
                           style={{
                             flex: 1, padding: '0.5rem',
                             border: `1px solid ${lockerPayType === value ? 'var(--accent)' : '#333'}`,
-                            borderRadius: 4, background: lockerPayType === value ? 'rgba(255,215,0,0.08)' : '#141414',
+                            borderRadius: 999, background: lockerPayType === value ? 'rgba(255,215,0,0.08)' : '#141414',
                             color: lockerPayType === value ? 'var(--accent)' : 'var(--text-muted)',
                             cursor: 'pointer', fontWeight: 600, fontSize: '0.85rem',
                           }}
@@ -907,7 +956,7 @@ export default function StudentProfilePage() {
                             style={{
                               flex: 1, padding: '0.5rem',
                               border: `1px solid ${lockerPayMode === value ? 'var(--accent)' : '#333'}`,
-                              borderRadius: 4, background: lockerPayMode === value ? 'rgba(255,215,0,0.08)' : '#141414',
+                              borderRadius: 999, background: lockerPayMode === value ? 'rgba(255,215,0,0.08)' : '#141414',
                               color: lockerPayMode === value ? 'var(--accent)' : 'var(--text-muted)',
                               cursor: 'pointer', fontWeight: 600, fontSize: '0.85rem',
                             }}
@@ -933,8 +982,12 @@ export default function StudentProfilePage() {
             </>
           )}
           {lockerError && <p className="error-msg">{lockerError}</p>}
-        </div>
-      </div>
+          <div className="modal-actions">
+            <button type="button" className="btn btn-ghost" onClick={() => setOpenPanel(null)}>Close</button>
+          </div>
+          </div>
+          </div>
+        )}
 
       {(() => {
         const totalHoldDaysFromMemberships = (memberships ?? []).reduce((sum, m) => sum + (m.hold_days ?? 0), 0)
@@ -1226,7 +1279,7 @@ export default function StudentProfilePage() {
               <div style={{ display: 'flex', gap: '0.5rem' }}>
                 {PAYMENT_OPTIONS.map(({ value, label }) => (
                   <button key={value} type="button" onClick={() => setRenewPayMode(value)}
-                    style={{ flex: 1, padding: '0.5rem', border: `1px solid ${renewPayMode === value ? 'var(--accent)' : '#333'}`, borderRadius: 4, background: renewPayMode === value ? 'rgba(255,215,0,0.08)' : '#141414', color: renewPayMode === value ? 'var(--accent)' : 'var(--text-muted)', cursor: 'pointer', fontWeight: 600 }}
+                    style={{ flex: 1, padding: '0.5rem', border: `1px solid ${renewPayMode === value ? 'var(--accent)' : '#333'}`, borderRadius: 999, background: renewPayMode === value ? 'rgba(255,215,0,0.08)' : '#141414', color: renewPayMode === value ? 'var(--accent)' : 'var(--text-muted)', cursor: 'pointer', fontWeight: 600 }}
                   >{label}</button>
                 ))}
               </div>
@@ -1237,7 +1290,7 @@ export default function StudentProfilePage() {
               <div style={{ display: 'flex', gap: '0.5rem' }}>
                 {[{ value: 'full', label: 'Full' }, { value: 'partial', label: 'Partial' }, { value: 'pending', label: 'Pay Later' }].map(({ value, label }) => (
                   <button key={value} type="button" onClick={() => setRenewPayType(value)}
-                    style={{ flex: 1, padding: '0.5rem', border: `1px solid ${renewPayType === value ? 'var(--accent)' : '#333'}`, borderRadius: 4, background: renewPayType === value ? 'rgba(255,215,0,0.08)' : '#141414', color: renewPayType === value ? 'var(--accent)' : 'var(--text-muted)', cursor: 'pointer', fontWeight: 600, fontSize: '0.85rem' }}
+                    style={{ flex: 1, padding: '0.5rem', border: `1px solid ${renewPayType === value ? 'var(--accent)' : '#333'}`, borderRadius: 999, background: renewPayType === value ? 'rgba(255,215,0,0.08)' : '#141414', color: renewPayType === value ? 'var(--accent)' : 'var(--text-muted)', cursor: 'pointer', fontWeight: 600, fontSize: '0.85rem' }}
                   >{label}</button>
                 ))}
               </div>

@@ -1,13 +1,10 @@
 import { useState, useEffect, useCallback } from 'react'
 import { api } from '../lib/api'
-import { nowTimeStr, localTimeStrToISO, formatCurrency, openWhatsApp } from '../lib/utils'
+import { nowTimeStr, localTimeStrToISO, formatCurrency, openWhatsApp, getWelcomeTemplate } from '../lib/utils'
 
 // Fallback used only until live fee config loads from the backend.
 const FALLBACK_FEES = { 3: 35, 4: 45, 5: 55, 6: 60, 7: 70, 8: 80, 9: 90, 12: 100 }
 export const WALKIN_HOUR_OPTIONS = Object.keys(FALLBACK_FEES).map(Number)
-
-const WELCOME_TEMPLATE = 'Hi {name}, welcome to Perfect Study Space! 🎉 Thanks for visiting us today — '
-  + "we hope you had a great study session. Feel free to reach out anytime if you have any questions."
 
 // Walk-in modal — name/phone autocomplete + hourly booking, no page navigation
 export default function WalkInModal({ branchId, onClose, onDone }) {
@@ -88,7 +85,7 @@ export default function WalkInModal({ branchId, onClose, onDone }) {
       setReceipt(result.booking)
       if (result.isNewStudent) {
         setIsNewStudent(true)
-        openWhatsApp(phone, WELCOME_TEMPLATE.replace(/\{name\}/gi, name))
+        openWhatsApp(phone, getWelcomeTemplate().replace(/\{name\}/gi, name))
         setWaSent(true)
       }
     } catch (err) {
@@ -114,9 +111,9 @@ export default function WalkInModal({ branchId, onClose, onDone }) {
                 </p>
                 <button
                   type="button"
-                  onClick={() => openWhatsApp(phone, WELCOME_TEMPLATE.replace(/\{name\}/gi, name))}
+                  onClick={() => openWhatsApp(phone, getWelcomeTemplate().replace(/\{name\}/gi, name))}
                   style={{
-                    width: '100%', padding: '0.6rem', borderRadius: 4, fontWeight: 700, cursor: 'pointer',
+                    width: '100%', padding: '0.6rem', borderRadius: 999, fontWeight: 700, cursor: 'pointer',
                     background: 'rgba(74,222,128,0.1)', border: '1px solid rgba(74,222,128,0.4)', color: '#4ade80',
                   }}
                 >
@@ -189,7 +186,7 @@ export default function WalkInModal({ branchId, onClose, onDone }) {
                       style={{
                         flex: 1, padding: '0.6rem',
                         border: `1px solid ${paymentMode === value ? 'var(--accent)' : '#333'}`,
-                        borderRadius: 4,
+                        borderRadius: 999,
                         background: paymentMode === value ? 'rgba(255,215,0,0.08)' : '#141414',
                         color: paymentMode === value ? 'var(--accent)' : 'var(--text-muted)',
                         cursor: 'pointer', fontWeight: 600, fontSize: '0.9rem',

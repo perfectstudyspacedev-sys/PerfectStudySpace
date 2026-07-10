@@ -7,6 +7,7 @@ import {
 import { useAuth } from '../context/AuthContext'
 import { api } from '../lib/api'
 import { formatCurrency, todayISO, exportToCSV, paymentModeLabel, formatDateTime } from '../lib/utils'
+import { chartTooltip } from '../components/ChartTooltip'
 
 const COLORS = ['#FFD700', '#22d3ee', '#a78bfa', '#4ade80', '#f97316', '#77aef8', '#f472b6']
 const CAT_LABELS = { desk: 'Walk-in', membership: 'Membership', food: 'Food', locker: 'Locker', fine: 'Fine' }
@@ -143,7 +144,7 @@ export default function RevenuePage() {
 
       {tab === 'overview' && revenue && (
         <>
-          {/* Stat cards */}
+          {/* Stat cards — gross/surrendered/net on their own row, category breakdown below */}
           <div className="stats-row">
             <div className="card stat-card">
               <div className="value">{formatCurrency(revenue.total)}</div>
@@ -151,7 +152,7 @@ export default function RevenuePage() {
             </div>
             {revenue.totalPayouts > 0 && (
               <div className="card stat-card">
-                <div className="value" style={{ color: '#ff8888' }}>-{formatCurrency(revenue.totalPayouts)}</div>
+                <div className="value" style={{ color: '#ff8888' }}>{formatCurrency(revenue.totalPayouts)}</div>
                 <div className="label">Surrendered to Students</div>
               </div>
             )}
@@ -161,6 +162,9 @@ export default function RevenuePage() {
                 <div className="label">Net Revenue</div>
               </div>
             )}
+          </div>
+
+          <div className="stats-row">
             {Object.entries(revenue.byCategory).filter(([k]) => k !== 'fine').map(([k, v]) => (
               <div key={k} className="card stat-card">
                 <div className="value" style={{ fontSize: '1.25rem' }}>{formatCurrency(v)}</div>
@@ -174,13 +178,13 @@ export default function RevenuePage() {
               <h3 style={{ color: 'var(--accent)', marginBottom: '0.75rem' }}>Surrendered to Students</h3>
               <div style={{ display: 'flex', gap: '2rem', flexWrap: 'wrap' }}>
                 {revenue.payouts.cashback > 0 && (
-                  <p className="mono" style={{ fontSize: '0.88rem' }}>🎁 Cashback: <strong style={{ color: '#ff8888' }}>{formatCurrency(revenue.payouts.cashback)}</strong></p>
+                  <p className="mono" style={{ fontSize: '1.02rem' }}>🎁 Cashback: <strong style={{ color: '#ff8888' }}>{formatCurrency(revenue.payouts.cashback)}</strong></p>
                 )}
                 {revenue.payouts.locker_deposit > 0 && (
-                  <p className="mono" style={{ fontSize: '0.88rem' }}>🔑 Locker Deposits: <strong style={{ color: '#ff8888' }}>{formatCurrency(revenue.payouts.locker_deposit)}</strong></p>
+                  <p className="mono" style={{ fontSize: '1.02rem' }}>🔑 Locker Deposits: <strong style={{ color: '#ff8888' }}>{formatCurrency(revenue.payouts.locker_deposit)}</strong></p>
                 )}
                 {revenue.payouts.food_pass_refund > 0 && (
-                  <p className="mono" style={{ fontSize: '0.88rem' }}>🎫 Food Pass Refunds: <strong style={{ color: '#ff8888' }}>{formatCurrency(revenue.payouts.food_pass_refund)}</strong></p>
+                  <p className="mono" style={{ fontSize: '1.02rem' }}>🎫 Food Pass Refunds: <strong style={{ color: '#ff8888' }}>{formatCurrency(revenue.payouts.food_pass_refund)}</strong></p>
                 )}
               </div>
             </div>
@@ -224,7 +228,7 @@ export default function RevenuePage() {
           </div>
 
           {/* Day-on-day revenue — area chart styled like enquiry chart */}
-          {revenue.trend?.length > 0 && (
+          {period !== 'today' && revenue.trend?.length > 0 && (
             <div className="card chart-card" style={{ marginTop: '1rem' }}>
               <p style={{ color: 'var(--accent)', fontWeight: 700, fontSize: '0.78rem', letterSpacing: '0.08em', marginBottom: '1.25rem', textTransform: 'uppercase' }}>
                 Daily Revenue — {periodLabel}
@@ -233,11 +237,11 @@ export default function RevenuePage() {
                 <AreaChart data={revenue.trend} margin={{ top: 10, right: 20, left: 10, bottom: 0 }}>
                   <defs>
                     <linearGradient id="revenueGrad" x1="0" y1="0" x2="0" y2="1">
-                      <stop offset="5%" stopColor="var(--accent)" stopOpacity={0.35} />
+                      <stop offset="5%" stopColor="var(--accent)" stopOpacity={0.45} />
                       <stop offset="95%" stopColor="var(--accent)" stopOpacity={0} />
                     </linearGradient>
                   </defs>
-                  <CartesianGrid strokeDasharray="3 3" stroke="#1e1e1e" vertical={false} />
+                  <CartesianGrid stroke="#292929" vertical={false} />
                   <XAxis
                     dataKey="date"
                     tickFormatter={formatDateTick}
@@ -253,11 +257,7 @@ export default function RevenuePage() {
                     tickLine={false}
                     width={48}
                   />
-                  <Tooltip
-                    formatter={(v) => [formatCurrency(v), 'Revenue']}
-                    labelFormatter={formatDateTick}
-                    {...TOOLTIP_STYLE}
-                  />
+                  <Tooltip content={chartTooltip({ formatLabel: formatDateTick, formatValue: formatCurrency })} />
                   <Area
                     type="monotone"
                     dataKey="amount"

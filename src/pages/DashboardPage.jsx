@@ -2,7 +2,7 @@ import { useState, useEffect, useCallback } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { useAuth } from '../context/AuthContext'
 import { api } from '../lib/api'
-import { nowTimeStr, localTimeStrToISO, formatCurrency, formatDate, formatDateTime } from '../lib/utils'
+import { nowTimeStr, localTimeStrToISO, formatCurrency, formatDate } from '../lib/utils'
 import WalkInModal from '../components/WalkInModal'
 
 function autoShift() {
@@ -201,6 +201,7 @@ export default function DashboardPage() {
   const [showCheckIn, setShowCheckIn] = useState(false)
   const [showWalkIn, setShowWalkIn] = useState(false)
   const [myTasks, setMyTasks] = useState([])
+  const [enquiryFollowupCount, setEnquiryFollowupCount] = useState(0)
 
   const load = useCallback(async () => {
     if (!branchId) return
@@ -226,8 +227,23 @@ export default function DashboardPage() {
     } catch { /* ignore */ }
   }, [])
 
+  // Not a real task — a live count of open enquiry follow-ups due today or overdue.
+  // Shows as an extra row in "My Tasks Today" (no Complete button, since it's just a
+  // pointer to the Enquiries tab) and disappears on its own once every follow-up due
+  // today has been marked done there.
+  const loadEnquiryFollowups = useCallback(async () => {
+    if (!branchId) return
+    try {
+      const { followups } = await api('list_open_enquiry_followups', { branchId })
+      const todayEnd = new Date(); todayEnd.setHours(23, 59, 59, 999)
+      const dueOrOverdue = (followups ?? []).filter(f => new Date(f.due_at) <= todayEnd)
+      setEnquiryFollowupCount(dueOrOverdue.length)
+    } catch { /* ignore */ }
+  }, [branchId])
+
   useEffect(() => { load() }, [load])
   useEffect(() => { loadMyTasks() }, [loadMyTasks])
+  useEffect(() => { loadEnquiryFollowups() }, [loadEnquiryFollowups])
 
   const toggleMyTask = async (task) => {
     try {
@@ -366,22 +382,23 @@ export default function DashboardPage() {
           )}
         </div>
         <div className="card">
-          <h3 style={{ color: 'var(--accent)', marginBottom: '0.75rem' }}>Recent Activity</h3>
-          <div className="activity-feed">
-            {(data?.recentActivity ?? []).map(a => (
-              <div key={a.id} className="activity-item">
-                <strong>{a.studentName}</strong> — {a.type}
-                <div className="time">{formatDateTime(a.time)}</div>
-              </div>
-            ))}
-          </div>
-        </div>
-        <div className="card">
           <h3 style={{ color: 'var(--accent)', marginBottom: '0.75rem' }}>My Tasks Today</h3>
-          {myTasks.length === 0 ? (
+          {myTasks.length === 0 && enquiryFollowupCount === 0 ? (
             <p style={{ color: 'var(--text-muted)', fontSize: '0.85rem' }}>No tasks assigned to you today.</p>
           ) : (
             <div style={{ display: 'flex', flexDirection: 'column', gap: '0.4rem' }}>
+              {enquiryFollowupCount > 0 && (
+                <div
+                  onClick={() => navigate('/enquiries')}
+                  style={{
+                    display: 'flex', justifyContent: 'space-between', alignItems: 'center', cursor: 'pointer',
+                    padding: '0.5rem 0.6rem', background: 'rgba(255,215,0,0.06)', border: '1px solid rgba(255,215,0,0.3)', borderRadius: 4,
+                  }}
+                >
+                  <strong style={{ fontSize: '0.85rem', color: 'var(--accent)' }}>Enquiry follow ups</strong>
+                  <span className="mono" style={{ fontSize: '0.72rem', color: 'var(--accent)', fontWeight: 700 }}>{enquiryFollowupCount}</span>
+                </div>
+              )}
               {myTasks.map(t => (
                 <div key={t.id} style={{
                   display: 'flex', justifyContent: 'space-between', alignItems: 'center',

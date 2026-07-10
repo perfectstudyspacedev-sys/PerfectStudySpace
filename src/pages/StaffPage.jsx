@@ -170,6 +170,7 @@ export default function StaffPage() {
   const [editError, setEditError] = useState('')
   const [editSaving, setEditSaving] = useState(false)
   const [confirmDialog, setConfirmDialog] = useState(null)
+  const [showAddStaff, setShowAddStaff] = useState(false)
 
   const load = useCallback(async () => {
     try {
@@ -211,6 +212,7 @@ export default function StaffPage() {
     try {
       await api('create_staff', { username, password, displayName, role: 'staff', branchId })
       setUsername(''); setPassword(''); setDisplayName(''); setBranchId('')
+      setShowAddStaff(false)
       load()
     } catch (err) {
       setError(err.message)
@@ -264,39 +266,62 @@ export default function StaffPage() {
     <>
       <div className="page-header"><h1>Staff Management</h1></div>
 
-      <StaffBranchBoard />
-
-      <div className="card" style={{ maxWidth: 480, marginBottom: '1.5rem' }}>
-        <h3 style={{ color: 'var(--accent)', marginBottom: '1rem' }}>Add Staff Account</h3>
-        <form onSubmit={handleCreate}>
-          <div className="form-group">
-            <label>Username</label>
-            <input value={username} onChange={(e) => setUsername(e.target.value)} required />
+      <div className="card" style={{ marginTop: '1.5rem', marginBottom: '1.5rem' }}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.75rem', flexWrap: 'wrap', gap: '0.75rem' }}>
+          <h3 style={{ color: 'var(--accent)' }}>Attendance</h3>
+          <div className="form-group" style={{ marginBottom: 0 }}>
+            <input type="date" value={attendanceDate} onChange={(e) => setAttendanceDate(e.target.value)} />
           </div>
-          <div className="form-group">
-            <label>Password</label>
-            <input type="password" value={password} onChange={(e) => setPassword(e.target.value)} required />
-          </div>
-          <div className="form-group">
-            <label>Display Name</label>
-            <input value={displayName} onChange={(e) => setDisplayName(e.target.value)} />
-          </div>
-          <div className="form-group">
-            <label>Assigned Branch</label>
-            <select value={branchId} onChange={(e) => setBranchId(e.target.value)} required>
-              <option value="">Select branch</option>
-              {branches.map(b => <option key={b.id} value={b.id}>{b.name}</option>)}
-            </select>
-          </div>
-          {error && <p className="error-msg">{error}</p>}
-          <button type="submit" className="btn btn-primary" disabled={saving}>{saving ? 'Creating…' : 'Create Staff'}</button>
-        </form>
+        </div>
+        <div style={{ marginBottom: '0.75rem' }}>
+          <BranchPillFilter branches={branches} value={attendanceBranchFilter} onChange={setAttendanceBranchFilter} />
+        </div>
+        <p style={{ color: 'var(--text-muted)', fontSize: '0.82rem', marginBottom: '0.75rem' }}>
+          Login is marked automatically the moment a staff member is active in the app for the day.
+        </p>
+        {!attendance || filteredAttendance.length === 0 ? (
+          <p style={{ color: 'var(--text-muted)' }}>No staff found.</p>
+        ) : (
+          <table className="data-table">
+            <thead>
+              <tr>
+                <th>Staff</th><th>Branch</th><th>Status</th><th>Login Time</th><th>Logout Time</th>
+              </tr>
+            </thead>
+            <tbody>
+              {filteredAttendance.map(r => (
+                <tr key={r.staffId}>
+                  <td style={{ fontWeight: 700, fontSize: '0.95rem' }}>{r.displayName}</td>
+                  <td>{r.branchName ?? '—'}</td>
+                  <td>
+                    <span style={{
+                      display: 'inline-block', padding: '3px 10px', borderRadius: 4, fontSize: '0.78rem', fontWeight: 700,
+                      background: r.present ? 'rgba(74,222,128,0.1)' : 'rgba(255,60,60,0.1)',
+                      color: r.present ? '#4ade80' : '#ff8888',
+                    }}>
+                      {r.present ? 'Present' : 'Absent'}
+                    </span>
+                  </td>
+                  <td className="mono" style={{ fontSize: '0.9rem' }}>
+                    {r.present ? new Date(r.firstLoginAt).toLocaleTimeString('en-IN') : '—'}
+                  </td>
+                  <td className="mono" style={{ fontSize: '0.9rem', color: r.lastLogoutAt ? '#ffaa44' : 'var(--text-muted)' }}>
+                    {r.present ? (r.lastLogoutAt ? new Date(r.lastLogoutAt).toLocaleTimeString('en-IN') : 'Still in session') : '—'}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        )}
       </div>
 
       <div className="card">
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1rem', flexWrap: 'wrap', gap: '0.75rem' }}>
           <h3 style={{ color: 'var(--accent)' }}>All Accounts</h3>
-          <BranchPillFilter branches={branches} value={staffBranchFilter} onChange={setStaffBranchFilter} />
+          <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', flexWrap: 'wrap' }}>
+            <BranchPillFilter branches={branches} value={staffBranchFilter} onChange={setStaffBranchFilter} />
+            <button type="button" className="btn btn-primary" onClick={() => setShowAddStaff(true)}>+ Add New Staff</button>
+          </div>
         </div>
         {activeStaff.length === 0 ? (
           <p style={{ color: 'var(--text-muted)' }}>No active staff found.</p>
@@ -328,7 +353,7 @@ export default function StaffPage() {
                     <button
                       type="button"
                       style={{
-                        flex: 1, padding: '0.35rem', fontSize: '0.75rem', borderRadius: 4, cursor: 'pointer',
+                        flex: 1, padding: '0.35rem', fontSize: '0.75rem', borderRadius: 999, cursor: 'pointer',
                         background: 'rgba(255,60,60,0.08)', border: '1px solid rgba(255,60,60,0.35)', color: '#ff8888',
                       }}
                       onClick={() => deactivateStaff(s)}
@@ -383,54 +408,43 @@ export default function StaffPage() {
         )}
       </div>
 
-      <div className="card" style={{ marginTop: '1.5rem' }}>
-        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.75rem', flexWrap: 'wrap', gap: '0.75rem' }}>
-          <h3 style={{ color: 'var(--accent)' }}>Attendance</h3>
-          <div className="form-group" style={{ marginBottom: 0 }}>
-            <input type="date" value={attendanceDate} onChange={(e) => setAttendanceDate(e.target.value)} />
+      <div style={{ marginTop: '1.5rem' }}>
+        <StaffBranchBoard />
+      </div>
+
+      {showAddStaff && (
+        <div className="modal-overlay" onClick={() => setShowAddStaff(false)}>
+          <div className="modal" style={{ maxWidth: 420 }} onClick={(e) => e.stopPropagation()}>
+            <h2>Add New Staff</h2>
+            <form onSubmit={handleCreate}>
+              <div className="form-group">
+                <label>Username</label>
+                <input value={username} onChange={(e) => setUsername(e.target.value)} required />
+              </div>
+              <div className="form-group">
+                <label>Password</label>
+                <input type="password" value={password} onChange={(e) => setPassword(e.target.value)} required />
+              </div>
+              <div className="form-group">
+                <label>Display Name</label>
+                <input value={displayName} onChange={(e) => setDisplayName(e.target.value)} />
+              </div>
+              <div className="form-group">
+                <label>Assigned Branch</label>
+                <select value={branchId} onChange={(e) => setBranchId(e.target.value)} required>
+                  <option value="">Select branch</option>
+                  {branches.map(b => <option key={b.id} value={b.id}>{b.name}</option>)}
+                </select>
+              </div>
+              {error && <p className="error-msg">{error}</p>}
+              <div className="modal-actions">
+                <button type="button" className="btn btn-ghost" onClick={() => setShowAddStaff(false)}>Cancel</button>
+                <button type="submit" className="btn btn-primary" disabled={saving}>{saving ? 'Creating…' : 'Create Staff'}</button>
+              </div>
+            </form>
           </div>
         </div>
-        <div style={{ marginBottom: '0.75rem' }}>
-          <BranchPillFilter branches={branches} value={attendanceBranchFilter} onChange={setAttendanceBranchFilter} />
-        </div>
-        <p style={{ color: 'var(--text-muted)', fontSize: '0.82rem', marginBottom: '0.75rem' }}>
-          Login is marked automatically the moment a staff member is active in the app for the day.
-        </p>
-        {!attendance || filteredAttendance.length === 0 ? (
-          <p style={{ color: 'var(--text-muted)' }}>No staff found.</p>
-        ) : (
-          <table className="data-table">
-            <thead>
-              <tr>
-                <th>Staff</th><th>Branch</th><th>Status</th><th>Login Time</th><th>Logout Time</th>
-              </tr>
-            </thead>
-            <tbody>
-              {filteredAttendance.map(r => (
-                <tr key={r.staffId}>
-                  <td style={{ fontWeight: 700, fontSize: '0.95rem' }}>{r.displayName}</td>
-                  <td>{r.branchName ?? '—'}</td>
-                  <td>
-                    <span style={{
-                      display: 'inline-block', padding: '3px 10px', borderRadius: 4, fontSize: '0.78rem', fontWeight: 700,
-                      background: r.present ? 'rgba(74,222,128,0.1)' : 'rgba(255,60,60,0.1)',
-                      color: r.present ? '#4ade80' : '#ff8888',
-                    }}>
-                      {r.present ? 'Present' : 'Absent'}
-                    </span>
-                  </td>
-                  <td className="mono" style={{ fontSize: '0.9rem' }}>
-                    {r.present ? new Date(r.firstLoginAt).toLocaleTimeString('en-IN') : '—'}
-                  </td>
-                  <td className="mono" style={{ fontSize: '0.9rem', color: r.lastLogoutAt ? '#ffaa44' : 'var(--text-muted)' }}>
-                    {r.present ? (r.lastLogoutAt ? new Date(r.lastLogoutAt).toLocaleTimeString('en-IN') : 'Still in session') : '—'}
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        )}
-      </div>
+      )}
 
       {editTarget && (
         <div className="modal-overlay" onClick={() => setEditTarget(null)}>

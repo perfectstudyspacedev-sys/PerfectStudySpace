@@ -1,13 +1,13 @@
 import { useState, useEffect, useCallback } from 'react'
-import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer } from 'recharts'
+import { XAxis, YAxis, Tooltip, ResponsiveContainer, AreaChart, Area, CartesianGrid } from 'recharts'
 import { useAuth } from '../context/AuthContext'
 import { api } from '../lib/api'
-import { formatCurrency, todayISO, exportToCSV, paymentModeLabel, formatDate } from '../lib/utils'
+import { formatCurrency, todayISO, exportToCSV, formatDate, formatDateTime } from '../lib/utils'
+import { chartTooltip } from '../components/ChartTooltip'
 
-const TOOLTIP_STYLE = {
-  contentStyle: { background: '#111', border: '1px solid #333', borderRadius: 6 },
-  labelStyle: { color: '#fff', fontWeight: 700, marginBottom: 4 },
-  itemStyle: { color: '#fff' },
+function formatDateTick(dateStr) {
+  const d = new Date(dateStr + 'T00:00:00')
+  return d.toLocaleDateString('en-IN', { day: 'numeric', month: 'short' })
 }
 
 export default function ReportsPage() {
@@ -21,6 +21,7 @@ export default function ReportsPage() {
   const [taskReport, setTaskReport] = useState(null)
   const [taskAllBranches, setTaskAllBranches] = useState(isOwner)
   const [loading, setLoading] = useState(false)
+  const [recentActivity, setRecentActivity] = useState([])
 
   const load = useCallback(async () => {
     if (!branchId) return
@@ -50,10 +51,17 @@ export default function ReportsPage() {
     } catch (e) { console.error(e) }
   }, [branchId, date, isOwner, taskAllBranches])
 
+  const loadRecentActivity = useCallback(async () => {
+    if (!branchId) return
+    try {
+      const data = await api('get_recent_activity', { branchId })
+      setRecentActivity(data.recentActivity ?? [])
+    } catch (e) { console.error(e) }
+  }, [branchId])
+
   useEffect(() => { load() }, [load])
   useEffect(() => { loadTaskReport() }, [loadTaskReport])
-
-  const canSeeCollections = report?.totalCollections != null
+  useEffect(() => { loadRecentActivity() }, [loadRecentActivity])
 
   // One row per student — a student who is both expired and payment-due shows up once,
   // with every applicable status badge, instead of duplicating them across separate rows.
@@ -81,18 +89,6 @@ export default function ReportsPage() {
   const actionableRows = buildActionableRows(actionable)
   const totalPendingDue = actionableRows.reduce((sum, r) => sum + Number(r.amount || 0), 0)
 
-  const exportDaily = () => {
-    if (!report) return
-    exportToCSV(`daily-report-${report.dateFrom ?? date}_${report.dateTo ?? date}.csv`,
-      ['Type', 'Detail', 'Amount'],
-      [
-        ...(report.transactions ?? []).map(t => ['Transaction', t.category, t.amount]),
-        ...(report.walkins ?? []).map(w => ['Walk-in', w.students?.name, w.amount]),
-        ...(report.newMembers ?? []).map(m => ['New Member', m.students?.name, m.total_paid]),
-      ],
-    )
-  }
-
   const exportActionable = () => {
     if (!actionableRows.length) return
     const rows = actionableRows.map(r => [r.statuses.join(', '), r.name, r.phone, r.dueDate ?? '', r.amount])
@@ -104,9 +100,6 @@ export default function ReportsPage() {
       <div className="page-header">
         <h1>Daily Reports</h1>
         <div style={{ display: 'flex', gap: '0.5rem' }}>
-          {isOwner && canSeeCollections && (
-            <button type="button" className="btn btn-ghost" onClick={exportDaily}>Export Daily (CSV)</button>
-          )}
           {isOwner && (
             <button type="button" className="btn btn-ghost" onClick={exportActionable}>Export Action Items (CSV)</button>
           )}
@@ -163,12 +156,6 @@ export default function ReportsPage() {
       {report && (
         <>
           <div className="stats-row">
-            {canSeeCollections && (
-              <div className="card stat-card">
-                <div className="value">{formatCurrency(report.totalCollections)}</div>
-                <div className="label">Total Collections</div>
-              </div>
-            )}
             {isOwner && (
               <div className="card stat-card">
                 <div className="value" style={{ color: totalPendingDue > 0 ? '#ff8888' : undefined }}>{formatCurrency(totalPendingDue)}</div>
@@ -213,58 +200,59 @@ export default function ReportsPage() {
             <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(340px, 1fr))', gap: '1rem', marginBottom: '1rem' }}>
               {report.attendanceTrend?.length > 0 && (
                 <div className="card chart-card">
-                  <h3 style={{ color: 'var(--accent)', marginBottom: '1rem' }}>Attendance Trend</h3>
+                  <p style={{ color: 'var(--accent)', fontWeight: 700, fontSize: '0.78rem', letterSpacing: '0.08em', marginBottom: '1.25rem', textTransform: 'uppercase' }}>
+                    Attendance Trend
+                  </p>
                   <ResponsiveContainer width="100%" height={240}>
-                    <BarChart data={report.attendanceTrend}>
-                      <XAxis dataKey="label" tick={{ fill: 'var(--text-muted)', fontSize: 11 }} />
-                      <YAxis allowDecimals={false} tick={{ fill: 'var(--text-muted)', fontSize: 11 }} />
-                      <Tooltip {...TOOLTIP_STYLE} formatter={(v) => [`${v} students`, 'Attendance']} />
-                      <Bar dataKey="count" fill="#FFD700" radius={[4, 4, 0, 0]} />
-                    </BarChart>
+                    <AreaChart data={report.attendanceTrend} margin={{ top: 10, right: 20, left: 10, bottom: 0 }}>
+                      <defs>
+                        <linearGradient id="attendanceGrad" x1="0" y1="0" x2="0" y2="1">
+                          <stop offset="5%" stopColor="var(--accent)" stopOpacity={0.45} />
+                          <stop offset="95%" stopColor="var(--accent)" stopOpacity={0} />
+                        </linearGradient>
+                      </defs>
+                      <CartesianGrid stroke="#292929" vertical={false} />
+                      <XAxis dataKey="label" tickFormatter={formatDateTick} tick={{ fill: '#666', fontSize: 10 }} axisLine={false} tickLine={false} interval={0} />
+                      <YAxis allowDecimals={false} tick={{ fill: '#666', fontSize: 11 }} axisLine={false} tickLine={false} width={32} />
+                      <Tooltip content={chartTooltip({ formatLabel: formatDateTick, formatValue: (v) => `${v} students` })} />
+                      <Area
+                        type="monotone" dataKey="count"
+                        stroke="var(--accent)" strokeWidth={2.5} fill="url(#attendanceGrad)"
+                        dot={false} activeDot={{ r: 5, fill: 'var(--accent)', stroke: '#111', strokeWidth: 2 }}
+                      />
+                    </AreaChart>
                   </ResponsiveContainer>
                 </div>
               )}
               {report.registrationsTrend?.length > 0 && (
                 <div className="card chart-card">
-                  <h3 style={{ color: 'var(--accent)', marginBottom: '1rem' }}>New Membership Registrations Trend</h3>
+                  <p style={{ color: '#4ade80', fontWeight: 700, fontSize: '0.78rem', letterSpacing: '0.08em', marginBottom: '1.25rem', textTransform: 'uppercase' }}>
+                    New Membership Registrations Trend
+                  </p>
                   <ResponsiveContainer width="100%" height={240}>
-                    <BarChart data={report.registrationsTrend}>
-                      <XAxis dataKey="label" tick={{ fill: 'var(--text-muted)', fontSize: 11 }} />
-                      <YAxis allowDecimals={false} tick={{ fill: 'var(--text-muted)', fontSize: 11 }} />
-                      <Tooltip {...TOOLTIP_STYLE} formatter={(v) => [`${v} new memberships`, 'Registrations']} />
-                      <Bar dataKey="count" fill="#4ade80" radius={[4, 4, 0, 0]} />
-                    </BarChart>
+                    <AreaChart data={report.registrationsTrend} margin={{ top: 10, right: 20, left: 10, bottom: 0 }}>
+                      <defs>
+                        <linearGradient id="registrationsGrad" x1="0" y1="0" x2="0" y2="1">
+                          <stop offset="5%" stopColor="#4ade80" stopOpacity={0.45} />
+                          <stop offset="95%" stopColor="#4ade80" stopOpacity={0} />
+                        </linearGradient>
+                      </defs>
+                      <CartesianGrid stroke="#292929" vertical={false} />
+                      <XAxis dataKey="label" tickFormatter={formatDateTick} tick={{ fill: '#666', fontSize: 10 }} axisLine={false} tickLine={false} interval={0} />
+                      <YAxis allowDecimals={false} tick={{ fill: '#666', fontSize: 11 }} axisLine={false} tickLine={false} width={32} />
+                      <Tooltip content={chartTooltip({ formatLabel: formatDateTick, formatValue: (v) => `${v} new memberships` })} />
+                      <Area
+                        type="monotone" dataKey="count"
+                        stroke="#4ade80" strokeWidth={2.5} fill="url(#registrationsGrad)"
+                        dot={false} activeDot={{ r: 5, fill: '#4ade80', stroke: '#111', strokeWidth: 2 }}
+                      />
+                    </AreaChart>
                   </ResponsiveContainer>
                 </div>
               )}
             </div>
           )}
 
-          {canSeeCollections && (
-            <div className="card" style={{ marginBottom: '1rem' }}>
-              <h3 style={{ color: 'var(--accent)', marginBottom: '0.75rem' }}>
-                Collections Summary — {report.dateFrom && report.dateFrom !== report.dateTo
-                  ? `${formatDate(report.dateFrom)} – ${formatDate(report.dateTo)}`
-                  : formatDate(report.date ?? date)}
-              </h3>
-              <table className="data-table">
-                <thead><tr><th>{report.dateFrom !== report.dateTo ? 'Date/Time' : 'Time'}</th><th>Category</th><th>Amount</th><th>Mode</th></tr></thead>
-                <tbody>
-                  {(report.transactions ?? []).map(t => (
-                    <tr key={t.id}>
-                      <td className="mono">
-                        {report.dateFrom !== report.dateTo ? `${formatDate(t.created_at)} ` : ''}
-                        {new Date(t.created_at).toLocaleTimeString('en-IN')}
-                      </td>
-                      <td className="cap">{t.category}</td>
-                      <td className="mono">{formatCurrency(t.amount)}</td>
-                      <td>{paymentModeLabel(t.payment_mode)}</td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          )}
         </>
       )}
 
@@ -361,6 +349,27 @@ export default function ReportsPage() {
           )}
         </div>
       )}
+
+      <div className="card" style={{ marginTop: '1rem' }}>
+        <h3 style={{ color: 'var(--accent)', marginBottom: '0.75rem' }}>Recent Activity</h3>
+        {recentActivity.length === 0 ? (
+          <p style={{ color: 'var(--text-muted)', fontSize: '0.85rem' }}>No recent activity.</p>
+        ) : (
+          <table className="data-table">
+            <thead><tr><th>Date</th><th>Student</th><th>Type</th><th>Status</th></tr></thead>
+            <tbody>
+              {recentActivity.map(a => (
+                <tr key={a.id}>
+                  <td className="mono">{formatDateTime(a.time)}</td>
+                  <td>{a.studentName ?? '-'} {a.studentPhone && <span className="mono" style={{ color: 'var(--text-muted)' }}>({a.studentPhone})</span>}</td>
+                  <td className="cap">{a.type}</td>
+                  <td className="cap">{a.status}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        )}
+      </div>
     </>
   )
 }

@@ -37,7 +37,9 @@ export default function FoodMenuPage() {
   }, [branchId, billFilter])
 
   useEffect(() => { load() }, [load])
-  useEffect(() => { if (tab === 'history') loadBills() }, [tab, loadBills])
+  // Staff see menu + history combined on one screen (no tabs), so history always needs
+  // to be loaded; owners still only load it lazily when they switch to the History tab.
+  useEffect(() => { if (!isOwner || tab === 'history') loadBills() }, [isOwner, tab, loadBills])
 
   const handleAddMenuItem = async (e) => {
     e.preventDefault()
@@ -68,12 +70,14 @@ export default function FoodMenuPage() {
   return (
     <>
       <div className="page-header"><h1>Food Menu</h1></div>
-      <div className="tabs">
-        <button type="button" className={tab === 'menu' ? 'active' : ''} onClick={() => setTab('menu')}>Manage Menu</button>
-        <button type="button" className={tab === 'history' ? 'active' : ''} onClick={() => setTab('history')}>History</button>
-      </div>
+      {isOwner && (
+        <div className="tabs">
+          <button type="button" className={tab === 'menu' ? 'active' : ''} onClick={() => setTab('menu')}>Manage Menu</button>
+          <button type="button" className={tab === 'history' ? 'active' : ''} onClick={() => setTab('history')}>History</button>
+        </div>
+      )}
 
-      {tab === 'menu' && (
+      {(!isOwner || tab === 'menu') && (
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(280px, 1fr))', gap: '1rem' }}>
           {isOwner && (
             <div className="card">
@@ -120,8 +124,8 @@ export default function FoodMenuPage() {
         </div>
       )}
 
-      {tab === 'history' && (
-        <div className="card">
+      {(!isOwner || tab === 'history') && (
+        <div className="card" style={{ marginTop: !isOwner ? '1rem' : 0 }}>
           <div className="period-toggle" style={{ marginBottom: '1rem' }}>
             {['today', 'week', 'month'].map(f => (
               <button key={f} type="button" className={billFilter === f ? 'active' : ''} onClick={() => setBillFilter(f)}>

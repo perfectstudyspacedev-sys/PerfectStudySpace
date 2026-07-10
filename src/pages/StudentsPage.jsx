@@ -27,7 +27,7 @@ export default function StudentsPage() {
   const [search, setSearch] = useState('')
   const [statusFilter, setStatusFilter] = useState('')
   const [courseFilter, setCourseFilter] = useState('')
-  const [tab, setTab] = useState('list')
+  const [tab, setTab] = useState(isOwner ? 'list' : 'loyalty')
   const [cashbackTarget, setCashbackTarget] = useState(null)
   const [cashbackType, setCashbackType] = useState('percent')
   const [cashbackValue, setCashbackValue] = useState('')
@@ -149,12 +149,14 @@ export default function StudentsPage() {
       </div>
 
       <div className="tabs">
-        <button type="button" className={tab === 'list' ? 'active' : ''} onClick={() => setTab('list')}>Spreadsheet View</button>
+        {isOwner && (
+          <button type="button" className={tab === 'list' ? 'active' : ''} onClick={() => setTab('list')}>Spreadsheet View</button>
+        )}
         <button type="button" className={tab === 'loyalty' ? 'active' : ''} onClick={() => setTab('loyalty')}>Top Students</button>
         <button type="button" className={tab === 'cashbacks' ? 'active' : ''} onClick={() => setTab('cashbacks')}>Cashback</button>
       </div>
 
-      {tab === 'list' && (
+      {isOwner && tab === 'list' && (
         <>
           <div className="filters">
             <input placeholder="Search name, phone, cabin…" value={search} onChange={(e) => setSearch(e.target.value)} />
@@ -241,14 +243,13 @@ export default function StudentsPage() {
           </div>
           <table className="data-table">
             <thead>
-              <tr><th>Rank</th><th>Name</th><th>Phone</th><th>Visits</th><th>Hours</th><th>Course</th><th></th></tr>
+              <tr><th>Rank</th><th>Name</th><th>Visits</th><th>Hours</th><th>Course</th><th></th></tr>
             </thead>
             <tbody>
               {topStudents.map((s, i) => (
                 <tr key={s.id}>
                   <td>{i + 1}</td>
                   <td><Link to={`/students/${s.id}`} style={{ color: 'var(--accent)' }}>{s.name}</Link></td>
-                  <td className="mono">{s.phone}</td>
                   <td className="mono">{s.total_visits}</td>
                   <td className="mono">{s.total_hours_studied}</td>
                   <td>{s.course ?? '-'}</td>
@@ -283,13 +284,12 @@ export default function StudentsPage() {
           {cashbacksLoading ? <p>Loading…</p> : (
             <table className="data-table">
               <thead>
-                <tr><th>Name</th><th>Phone</th><th>Month</th><th>Cashback</th><th>Status</th><th>Redeemed</th><th>Notes</th></tr>
+                <tr><th>Name</th><th>Month</th><th>Cashback</th><th>Status</th><th>Redeemed</th><th>Notes</th></tr>
               </thead>
               <tbody>
                 {filteredCashbacks.map(c => (
                   <tr key={c.id}>
                     <td><Link to={`/students/${c.studentId}`} style={{ color: 'var(--accent)' }}>{c.studentName}</Link></td>
-                    <td className="mono">{c.studentPhone}</td>
                     <td>{c.monthLabel ?? '-'}</td>
                     <td className="mono">
                       {c.cashbackType === 'percent'
@@ -308,7 +308,7 @@ export default function StudentsPage() {
                   </tr>
                 ))}
                 {!filteredCashbacks.length && (
-                  <tr><td colSpan={7} style={{ textAlign: 'center', color: 'var(--text-muted)' }}>No cashback records found.</td></tr>
+                  <tr><td colSpan={6} style={{ textAlign: 'center', color: 'var(--text-muted)' }}>No cashback records found.</td></tr>
                 )}
               </tbody>
             </table>
@@ -331,7 +331,7 @@ export default function StudentsPage() {
                   style={{
                     flex: 1, padding: '0.55rem',
                     border: `1px solid ${cashbackType === 'percent' ? 'var(--accent)' : '#333'}`,
-                    borderRadius: 4, background: cashbackType === 'percent' ? 'var(--accent)' : '#141414',
+                    borderRadius: 999, background: cashbackType === 'percent' ? 'var(--accent)' : '#141414',
                     color: cashbackType === 'percent' ? '#000' : 'var(--text-muted)',
                     cursor: 'pointer', fontWeight: 700, fontSize: '0.85rem',
                   }}
@@ -341,7 +341,7 @@ export default function StudentsPage() {
                   style={{
                     flex: 1, padding: '0.55rem',
                     border: `1px solid ${cashbackType === 'fixed' ? 'var(--accent)' : '#333'}`,
-                    borderRadius: 4, background: cashbackType === 'fixed' ? 'var(--accent)' : '#141414',
+                    borderRadius: 999, background: cashbackType === 'fixed' ? 'var(--accent)' : '#141414',
                     color: cashbackType === 'fixed' ? '#000' : 'var(--text-muted)',
                     cursor: 'pointer', fontWeight: 700, fontSize: '0.85rem',
                   }}
