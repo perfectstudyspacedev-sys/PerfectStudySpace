@@ -3,6 +3,7 @@ import { Link } from 'react-router-dom'
 import { useAuth } from '../context/AuthContext'
 import { api } from '../lib/api'
 import { formatCurrency, formatDate, todayISO } from '../lib/utils'
+import WalkInModal from '../components/WalkInModal'
 
 function getTimeStatus(endIso, totalPauseMs = 0) {
   const ms = new Date(endIso).getTime() + totalPauseMs - Date.now()
@@ -506,6 +507,7 @@ export default function BookingsPage() {
   const [foodOrderBooking, setFoodOrderBooking] = useState(null)
   const [editBooking, setEditBooking] = useState(null)
   const [typeFilter, setTypeFilter] = useState('all')
+  const [showWalkIn, setShowWalkIn] = useState(false)
   const notifiedIds = useRef(new Set())
 
   const load = useCallback(async () => {
@@ -628,9 +630,13 @@ export default function BookingsPage() {
       {loading ? <p>Loading…</p> : bookings.length === 0 ? (
         <div className="card">
           <p style={{ color: 'var(--text-muted)' }}>No students currently present.</p>
-          <Link to="/" className="btn btn-primary" style={{ marginTop: '0.75rem', display: 'inline-block' }}>
-            + New Walk-in (from Dashboard)
-          </Link>
+          <button
+            type="button" className="btn btn-primary"
+            style={{ marginTop: '0.75rem', padding: '0.4rem 0.85rem', fontSize: '0.82rem' }}
+            onClick={() => setShowWalkIn(true)}
+          >
+            + New Walk-in
+          </button>
         </div>
       ) : filteredBookings.length === 0 ? (
         <div className="card">
@@ -810,6 +816,14 @@ export default function BookingsPage() {
           booking={foodOrderBooking}
           onClose={() => setFoodOrderBooking(null)}
           onDone={() => { setFoodOrderBooking(null); load() }}
+        />
+      )}
+
+      {showWalkIn && (
+        <WalkInModal
+          branchId={branchId}
+          onClose={() => setShowWalkIn(false)}
+          onDone={() => { setShowWalkIn(false); load() }}
         />
       )}
     </>

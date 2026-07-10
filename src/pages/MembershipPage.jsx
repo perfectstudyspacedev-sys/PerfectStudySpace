@@ -1199,7 +1199,15 @@ export default function MembershipPage() {
       <div className="tabs">
         <button type="button" className={tab === 'active' ? 'active' : ''} onClick={() => setTab('active')}>Active Members</button>
         <button type="button" className={tab === 'new' ? 'active' : ''} onClick={() => setTab('new')}>New Registration</button>
-        <button type="button" className={tab === 'waitlist' ? 'active' : ''} onClick={() => setTab('waitlist')} style={{ marginLeft: 'auto' }}>Waitlist</button>
+        <button
+          type="button"
+          className="btn btn-primary"
+          onClick={() => setTab('waitlist')}
+          style={{
+            marginLeft: 'auto', padding: '0.6rem 1.4rem', fontSize: '1rem',
+            background: 'var(--accent)', color: 'var(--bg)', border: 'none',
+          }}
+        >Waitlist</button>
       </div>
 
       {tab === 'active' && <ActiveMembersTab branchId={branchId} tempPackages={tempPackages} permPackages={permPackages} />}

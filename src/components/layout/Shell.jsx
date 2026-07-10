@@ -198,55 +198,60 @@ export default function Shell() {
     <div className="app-shell">
       <BackgroundSketches />
       <header className="topbar">
-        <div className="topbar-left">
+        <div className="topbar-left" role="button" tabIndex={0} onClick={() => navigate('/')} style={{ cursor: 'pointer' }}>
           <img src="/pss-logo.png" alt="" className="topbar-brand-logo-mobile" />
           <span className="nav-brand topbar-brand-text-mobile">Perfect Study Space</span>
-          {isOwner && branches.length > 1 && (
-            <div className="branch-switcher">
-              <select
-                value={onCombinedHall ? '__combined_hall__' : (branchId || '')}
-                onChange={(e) => {
-                  if (e.target.value === '__combined_hall__') {
-                    navigate('/combined-hall')
-                  } else {
-                    selectBranch(e.target.value)
-                    if (onCombinedHall) navigate('/')
-                  }
-                }}
-              >
-                {branches.map(b => (
-                  <option key={b.id} value={b.id}>{b.name}</option>
-                ))}
-                <option value="__combined_hall__">🏢 Combined Hall</option>
-              </select>
-            </div>
-          )}
-          {!isOwner && activeBranch && (
-            <span className="mono" style={{ fontSize: '1.1rem', color: 'var(--accent)' }}>{activeBranch.name}</span>
-          )}
         </div>
 
-        <div className="topbar-brand">
+        <div className="topbar-brand" role="button" tabIndex={0} onClick={() => navigate('/')} style={{ cursor: 'pointer', pointerEvents: 'auto' }}>
           <img src="/pss-logo.png" alt="" className="topbar-brand-logo" />
           <span className="nav-brand" style={{ margin: 0 }}>Perfect Study Space</span>
         </div>
 
-        <div className="topbar-right">
-          <NotificationBell toasts={toasts} dismiss={dismiss} dismissAll={dismissAll} />
+        <div className="topbar-info-row">
+          <div className="topbar-branch-label">
+            {isOwner && branches.length > 1 && (
+              <div className="branch-switcher">
+                <select
+                  value={onCombinedHall ? '__combined_hall__' : (branchId || '')}
+                  onChange={(e) => {
+                    if (e.target.value === '__combined_hall__') {
+                      navigate('/combined-hall')
+                    } else {
+                      selectBranch(e.target.value)
+                      if (onCombinedHall) navigate('/')
+                    }
+                  }}
+                >
+                  {branches.map(b => (
+                    <option key={b.id} value={b.id}>{b.name}</option>
+                  ))}
+                  <option value="__combined_hall__">🏢 Combined Hall</option>
+                </select>
+              </div>
+            )}
+            {!isOwner && activeBranch && (
+              <span className="mono" style={{ fontSize: '1.1rem', color: 'var(--accent)' }}>{activeBranch.name}</span>
+            )}
+          </div>
 
-          <span style={{
-            display: 'inline-block',
-            padding: '0.55rem 1.4rem', borderRadius: 30,
-            background: 'rgba(255,215,0,0.1)', border: '1px solid rgba(255,215,0,0.35)',
-          }}>
-            <span className="mono" style={{ fontSize: '1rem', fontWeight: 700, color: 'var(--accent)', display: 'block', lineHeight: 1.2, whiteSpace: 'nowrap' }}>
-              {staff?.displayName || staff?.username}
+          <div className="topbar-right">
+            <NotificationBell toasts={toasts} dismiss={dismiss} dismissAll={dismissAll} />
+
+            <span style={{
+              display: 'inline-block',
+              padding: '0.55rem 1.4rem', borderRadius: 30,
+              background: 'rgba(255,215,0,0.1)', border: '1px solid rgba(255,215,0,0.35)',
+            }}>
+              <span className="mono" style={{ fontSize: '1rem', fontWeight: 700, color: 'var(--accent)', display: 'block', lineHeight: 1.2, whiteSpace: 'nowrap' }}>
+                {staff?.displayName || staff?.username}
+              </span>
+              <span style={{ fontSize: '0.72rem', color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
+                {staff?.role}
+              </span>
             </span>
-            <span style={{ fontSize: '0.72rem', color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
-              {staff?.role}
-            </span>
-          </span>
-          <button type="button" className="btn btn-ghost" onClick={handleLogout}>Logout</button>
+            <button type="button" className="btn btn-ghost" onClick={handleLogout}>Logout</button>
+          </div>
         </div>
       </header>
 
