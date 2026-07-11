@@ -3,7 +3,7 @@ import { useAuth } from '../context/AuthContext'
 import { api } from '../lib/api'
 import { todayISO, formatDate } from '../lib/utils'
 
-function TaskTable({ tasks, allBranches, onToggle, currentStaffId }) {
+function TaskTable({ tasks, allBranches, onToggle, currentStaffId, isOwner }) {
   if (tasks.length === 0) return <p style={{ color: 'var(--text-muted)' }}>No tasks found.</p>
   return (
     <table className="data-table">
@@ -47,7 +47,7 @@ function TaskTable({ tasks, allBranches, onToggle, currentStaffId }) {
               })()}
             </td>
             <td>
-              {t.assigned_to_staff_id === currentStaffId ? (
+              {t.assigned_to_staff_id === currentStaffId || isOwner ? (
                 <button
                   type="button"
                   className={t.completedToday ? 'btn btn-ghost' : 'btn btn-primary'}
@@ -325,7 +325,7 @@ export default function TasksPage() {
             <div className="card">
               <h3 style={{ color: 'var(--accent)', marginBottom: '0.75rem' }}>My Tasks (Owner)</h3>
               {loading ? <p>Loading…</p> : (
-                <TaskTable tasks={filteredOwnerTasks} allBranches={allBranches} onToggle={toggleDone} currentStaffId={staff?.id} />
+                <TaskTable tasks={filteredOwnerTasks} allBranches={allBranches} onToggle={toggleDone} currentStaffId={staff?.id} isOwner={isOwner} />
               )}
             </div>
           )}
@@ -345,7 +345,7 @@ export default function TasksPage() {
             </div>
 
             {loading ? <p>Loading…</p> : (
-              <TaskTable tasks={filteredTasks} allBranches={allBranches} onToggle={toggleDone} currentStaffId={staff?.id} />
+              <TaskTable tasks={filteredTasks} allBranches={allBranches} onToggle={toggleDone} currentStaffId={staff?.id} isOwner={isOwner} />
             )}
           </div>
 

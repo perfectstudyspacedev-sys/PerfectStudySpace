@@ -303,8 +303,17 @@ export default function Shell() {
           <NavLink to="/enquiries">Enquiries</NavLink>
           <NavLink to="/food-menu">Food Menu</NavLink>
           {isOwner && <NavLink to="/revenue">Revenue</NavLink>}
-          <NavLink to="/messages">Messages</NavLink>
-          <NavLink to="/reports">Reports</NavLink>
+          {isOwner ? (
+            <>
+              <NavLink to="/reports">Reports</NavLink>
+              <NavLink to="/messages">Messages</NavLink>
+            </>
+          ) : (
+            <>
+              <NavLink to="/messages">Messages</NavLink>
+              <NavLink to="/reports">Reports</NavLink>
+            </>
+          )}
           <NavLink to="/actions">Actions</NavLink>
           {isOwner && (
             <>

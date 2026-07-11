@@ -502,14 +502,38 @@ Deno.serve(async (req) => {
       const fromTs = range.from + "T00:00:00Z";
       const toTs = range.to + "T23:59:59Z";
 
-      const [{ data: recentBookings }, { data: recentMemberships }, { data: recentTxns }] = await Promise.all([
+      const [{ data: recentBookings }, { data: recentMemberships }, { data: recentTxns }, { data: recentCashbacks }] = await Promise.all([
         db.from("bookings").select("id, booking_type, status, created_at, students(name, phone)")
           .eq("branch_id", branchId).gte("created_at", fromTs).lte("created_at", toTs),
         db.from("memberships").select("id, category, total_paid, created_at, students(name, phone)")
           .eq("branch_id", branchId).gte("created_at", fromTs).lte("created_at", toTs),
         db.from("transactions").select("id, category, amount, payment_mode, created_at, students(name, phone)")
           .eq("branch_id", branchId).gte("created_at", fromTs).lte("created_at", toTs),
+        // Granted and redeemed/settled can each fall in range independently of one
+        // another, so fetch anything touched (created OR redeemed) within the window.
+        db.from("cashbacks").select("id, cashback_type, cashback_value, status, redeemed_amount, created_at, redeemed_at, students(name, phone)")
+          .eq("branch_id", branchId)
+          .or(`and(created_at.gte.${fromTs},created_at.lte.${toTs}),and(redeemed_at.gte.${fromTs},redeemed_at.lte.${toTs})`),
       ]);
+
+      const cashbackFeed: Record<string, unknown>[] = [];
+      for (const c of recentCashbacks ?? []) {
+        const valueLabel = c.cashback_type === "percent" ? `${c.cashback_value}%` : `₹${Number(c.cashback_value)}`;
+        if (c.created_at >= fromTs && c.created_at <= toTs) {
+          cashbackFeed.push({
+            id: `cashback-grant-${c.id}`, kind: "cashback", label: `Cashback granted (${valueLabel})`,
+            studentName: c.students?.name, studentPhone: c.students?.phone,
+            time: c.created_at, status: "pending", amount: c.cashback_type === "fixed" ? Number(c.cashback_value) : null,
+          });
+        }
+        if (c.redeemed_at && c.status !== "pending" && c.redeemed_at >= fromTs && c.redeemed_at <= toTs) {
+          cashbackFeed.push({
+            id: `cashback-${c.status}-${c.id}`, kind: "cashback", label: `Cashback ${c.status}`,
+            studentName: c.students?.name, studentPhone: c.students?.phone,
+            time: c.redeemed_at, status: c.status, amount: c.redeemed_amount != null ? Number(c.redeemed_amount) : null,
+          });
+        }
+      }
 
       const feed = [
         ...(recentBookings ?? []).map(b => ({
@@ -527,7 +551,8 @@ Deno.serve(async (req) => {
           studentName: t.students?.name, studentPhone: t.students?.phone,
           time: t.created_at, status: t.payment_mode, amount: Number(t.amount),
         })),
-      ].sort((a, b) => b.time.localeCompare(a.time));
+        ...cashbackFeed,
+      ].sort((a: { time: string }, b: { time: string }) => b.time.localeCompare(a.time));
 
       return json({ recentActivity: feed });
     }
@@ -1320,13 +1345,32 @@ Deno.serve(async (req) => {
       const { data: overtimeSessions } = await db.from("overtime_sessions").select("*").eq("student_id", studentId).order("session_date", { ascending: false }).limit(50);
       const { data: holds } = await db.from("membership_holds").select("*").eq("student_id", studentId).order("paused_at", { ascending: false }).limit(50);
       const { data: discounts } = await db.from("membership_discounts").select("*, staff(display_name, username)").eq("student_id", studentId).order("created_at", { ascending: false }).limit(50);
-      const { data: cashbacks } = await db.from("cashbacks").select("*, staff:granted_by_staff_id(display_name, username)").eq("student_id", studentId).order("created_at", { ascending: false }).limit(50);
+      const { data: cashbacksRaw } = await db.from("cashbacks").select("*, staff:granted_by_staff_id(display_name, username)").eq("student_id", studentId).order("created_at", { ascending: false }).limit(50);
       const { data: planChanges } = await db.from("membership_plan_changes").select("*, staff:changed_by_staff_id(display_name, username)").eq("student_id", studentId).order("created_at", { ascending: false }).limit(50);
+
+      // Percent-type cashbacks that are still pending have no fixed rupee value yet — same
+      // estimate as the Students page Cashback tab, off this student's current active
+      // membership (monthly_fee * months_paid), so the Value column can show it alongside
+      // the raw percentage instead of just "5%" with no sense of what that's actually worth.
+      const activeMemForCashback = (memberships ?? []).find((m: { is_active: boolean }) => m.is_active);
+      const cashbacks = (cashbacksRaw ?? []).map((c: Record<string, unknown>) => {
+        let estimatedAmount = null;
+        if (c.cashback_type === "fixed") {
+          estimatedAmount = Number(c.cashback_value);
+        } else if (c.status === "pending") {
+          if (activeMemForCashback) {
+            estimatedAmount = Number(activeMemForCashback.monthly_fee) * Number(activeMemForCashback.months_paid) * (Number(c.cashback_value) / 100);
+          }
+        } else {
+          estimatedAmount = c.redeemed_amount != null ? Number(c.redeemed_amount) : null;
+        }
+        return { ...c, estimatedAmount };
+      });
 
       return json({
         student, memberships, bookings, transactions, locker,
         overtimeSessions: overtimeSessions ?? [], holds: holds ?? [], discounts: discounts ?? [],
-        cashbacks: cashbacks ?? [], planChanges: planChanges ?? [],
+        cashbacks, planChanges: planChanges ?? [],
       });
     }
 
@@ -1836,19 +1880,54 @@ Deno.serve(async (req) => {
       const range = dateRange(period ?? "month", dateFrom, dateTo);
       const bid = branchId ?? staff.branch_id;
       if (!bid || !requireBranch(staff, bid)) return err("Branch access denied", 403);
+      const fromTs = range.from + "T00:00:00Z";
+      const toTs = range.to + "T23:59:59Z";
+
+      const wantCashbacks = !category || category === "cashback";
+      const wantTxns = !category || category !== "cashback";
 
       let q = db.from("transactions").select("*, students(name, phone), branches(name)")
-        .eq("branch_id", bid)
-        .gte("created_at", range.from + "T00:00:00Z")
-        .lte("created_at", range.to + "T23:59:59Z")
+        .eq("branch_id", bid).gte("created_at", fromTs).lte("created_at", toTs)
         .order("created_at", { ascending: false });
-      if (category) q = q.eq("category", category);
+      if (category && wantTxns) q = q.eq("category", category);
 
-      const { data } = await q;
-      let rows = data ?? [];
+      const [{ data }, { data: cashbackRows }] = await Promise.all([
+        wantTxns ? q : Promise.resolve({ data: [] as unknown[] }),
+        wantCashbacks
+          ? db.from("cashbacks").select("id, cashback_type, cashback_value, status, redeemed_amount, created_at, redeemed_at, students(name, phone), branches(name)")
+            .eq("branch_id", bid)
+            .or(`and(created_at.gte.${fromTs},created_at.lte.${toTs}),and(redeemed_at.gte.${fromTs},redeemed_at.lte.${toTs})`)
+          : Promise.resolve({ data: [] as unknown[] }),
+      ]);
+
+      // Shaped to match a normal transaction row (category/amount/payment_mode/created_at,
+      // same students/branches joins) so the existing table/CSV export doesn't need two
+      // different row shapes — "category" is a readable label since these aren't real rows
+      // in the transactions table with a fixed category value to translate.
+      type CbRow = { id: string; cashback_type: string; cashback_value: number; status: string; redeemed_amount: number | null; created_at: string; redeemed_at: string | null; students?: unknown; branches?: unknown };
+      const cashbackFeed: Record<string, unknown>[] = [];
+      for (const c of (cashbackRows as CbRow[] ?? [])) {
+        const valueLabel = c.cashback_type === "percent" ? `${c.cashback_value}%` : `₹${Number(c.cashback_value)}`;
+        if (c.created_at >= fromTs && c.created_at <= toTs) {
+          cashbackFeed.push({
+            id: `cashback-grant-${c.id}`, category: `Cashback granted (${valueLabel})`,
+            amount: c.cashback_type === "fixed" ? Number(c.cashback_value) : null,
+            payment_mode: null, created_at: c.created_at, students: c.students, branches: c.branches,
+          });
+        }
+        if (c.redeemed_at && c.status !== "pending" && c.redeemed_at >= fromTs && c.redeemed_at <= toTs) {
+          cashbackFeed.push({
+            id: `cashback-${c.status}-${c.id}`, category: `Cashback ${c.status}`,
+            amount: c.redeemed_amount != null ? Number(c.redeemed_amount) : null,
+            payment_mode: null, created_at: c.redeemed_at, students: c.students, branches: c.branches,
+          });
+        }
+      }
+
+      let rows = [...(data ?? []), ...cashbackFeed].sort((a: { created_at: string }, b: { created_at: string }) => b.created_at.localeCompare(a.created_at));
       if (search) {
         const s = search.toLowerCase();
-        rows = rows.filter(r => r.students?.name?.toLowerCase().includes(s) || r.students?.phone?.includes(s));
+        rows = rows.filter((r: { students?: { name?: string; phone?: string } }) => r.students?.name?.toLowerCase().includes(s) || r.students?.phone?.includes(s));
       }
       return json({ transactions: rows });
     }
@@ -2042,7 +2121,7 @@ Deno.serve(async (req) => {
     if (action === "list_tasks") {
       const { branchId, allBranches, date } = payload;
       const targetDate = date || todayISO();
-      let q = db.from("tasks").select("*, assigned_to:assigned_to_staff_id(display_name, username), assigned_by:assigned_by_staff_id(display_name, username), branches(name)")
+      let q = db.from("tasks").select("*, assigned_to:assigned_to_staff_id(display_name, username, is_active), assigned_by:assigned_by_staff_id(display_name, username), branches(name)")
         .order("created_at", { ascending: false });
       if (isOwner(staff)) {
         if (!allBranches && branchId) q = q.eq("branch_id", branchId);
@@ -2064,7 +2143,7 @@ Deno.serve(async (req) => {
 
       const tasks = (data ?? []).map(t => ({
         ...t,
-        dueToday: isTaskDueOn(t, targetDate),
+        dueToday: isTaskDueOn(t, targetDate) && (t.assigned_to?.is_active !== false || targetDate < todayISO()),
         completedToday: t.repeat_interval === "none" ? t.status === "done" : completedSet.has(t.id),
       }));
 
@@ -2116,7 +2195,7 @@ Deno.serve(async (req) => {
     if (action === "get_task_completion_report") {
       const { branchId, allBranches, date } = payload;
       const targetDate = date || todayISO();
-      let q = db.from("tasks").select("*, assigned_to:assigned_to_staff_id(display_name, username), branches(name)");
+      let q = db.from("tasks").select("*, assigned_to:assigned_to_staff_id(display_name, username, is_active), branches(name)");
       if (isOwner(staff)) {
         if (!allBranches && branchId) q = q.eq("branch_id", branchId);
       } else {
@@ -2129,7 +2208,7 @@ Deno.serve(async (req) => {
       const { data, error: rErr } = await q;
       if (rErr) return err(rErr.message);
 
-      const dueTasks = (data ?? []).filter(t => isTaskDueOn(t, targetDate));
+      const dueTasks = (data ?? []).filter(t => isTaskDueOn(t, targetDate) && (t.assigned_to?.is_active !== false || targetDate < todayISO()));
       const recurringIds = dueTasks.filter(t => t.repeat_interval !== "none").map(t => t.id);
       const { data: completions } = recurringIds.length
         ? await db.from("task_completions").select("task_id").eq("completion_date", targetDate).in("task_id", recurringIds)

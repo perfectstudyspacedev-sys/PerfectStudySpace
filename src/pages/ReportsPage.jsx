@@ -15,7 +15,7 @@ const ACTIVITY_BOOKING_LABELS = { walkin: 'Walk-in Booking', temporary: 'Tempora
 
 function describeActivity(a) {
   if (a.kind === 'booking') return ACTIVITY_BOOKING_LABELS[a.label] ?? a.label
-  if (a.kind === 'membership') return a.label
+  if (a.kind === 'membership' || a.kind === 'cashback') return a.label
   return `Payment — ${ACTIVITY_CAT_LABELS[a.label] ?? a.label}`
 }
 

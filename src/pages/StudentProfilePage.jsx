@@ -620,7 +620,18 @@ export default function StudentProfilePage() {
             <button type="button" className="btn btn-ghost btn-glass" style={{ width: '100%', flex: 1, maxHeight: 60 }} onClick={() => setOpenPanel('cashback')}>🎁 Cashback</button>
           )}
           {activeMem && (
-            <button type="button" className="btn btn-ghost btn-glass" style={{ width: '100%', flex: 1, maxHeight: 60 }} onClick={() => setOpenPanel('foodpass')}>🎫 Food Pass</button>
+            <button
+              type="button" className="btn btn-ghost btn-glass"
+              style={{ width: '100%', flex: 1, maxHeight: 60, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '0.5rem' }}
+              onClick={() => setOpenPanel('foodpass')}
+            >
+              <span>🎫 Food Pass</span>
+              {foodPass && (
+                <span className="mono" style={{ fontSize: '0.78rem', fontWeight: 700, color: Number(foodPass.balance) < 0 ? '#ff8888' : '#4ade80' }}>
+                  ({formatCurrency(Number(foodPass.balance))})
+                </span>
+              )}
+            </button>
           )}
           <button type="button" className="btn btn-ghost btn-glass" style={{ width: '100%', flex: 1, maxHeight: 60 }} onClick={() => setOpenPanel('locker')}>🔑 Locker</button>
         </div>
@@ -1098,7 +1109,11 @@ export default function StudentProfilePage() {
                 <tr key={c.id}>
                   <td className="mono">{formatDate(c.created_at)}</td>
                   <td className="cap">{c.cashback_type}</td>
-                  <td className="mono">{c.cashback_type === 'percent' ? `${c.cashback_value}%` : formatCurrency(c.cashback_value)}</td>
+                  <td className="mono">
+                    {c.cashback_type === 'percent'
+                      ? `${c.cashback_value}%${c.estimatedAmount != null ? ` (${c.status === 'pending' ? '~' : ''}${formatCurrency(c.estimatedAmount)})` : ''}`
+                      : formatCurrency(c.cashback_value)}
+                  </td>
                   <td>
                     <span className={`badge ${c.status === 'pending' ? 'badge-pending' : c.status === 'redeemed' ? 'badge-active' : 'badge-trial'} cap`}>
                       {c.status === 'redeemed' ? 'Redeemed at Renewal' : c.status === 'settled' ? 'Paid Out at Closure' : 'Pending'}

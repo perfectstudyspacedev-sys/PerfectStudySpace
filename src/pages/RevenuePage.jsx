@@ -365,6 +365,7 @@ export default function RevenuePage() {
             <select value={categoryFilter} onChange={(e) => setCategoryFilter(e.target.value)}>
               <option value="">All Categories</option>
               {Object.entries(CAT_LABELS).map(([k, v]) => <option key={k} value={k}>{v}</option>)}
+              <option value="cashback">Cashback</option>
             </select>
             <button type="button" className="btn btn-ghost" onClick={handleExportTx}>Export CSV</button>
           </div>
@@ -376,8 +377,8 @@ export default function RevenuePage() {
                   <td className="mono">{formatDateTime(t.created_at)}</td>
                   <td>{t.students?.name ?? '-'} {t.students?.phone && <span className="mono" style={{ color: 'var(--text-muted)' }}>({t.students.phone})</span>}</td>
                   <td className={CAT_LABELS[t.category] ? undefined : 'cap'}>{CAT_LABELS[t.category] ?? t.category}</td>
-                  <td className="mono">{formatCurrency(t.amount)}</td>
-                  <td>{paymentModeLabel(t.payment_mode)}</td>
+                  <td className="mono">{t.amount != null ? formatCurrency(t.amount) : '-'}</td>
+                  <td>{t.payment_mode ? paymentModeLabel(t.payment_mode) : '-'}</td>
                   <td>{t.branches?.name ?? '-'}</td>
                 </tr>
               ))}
