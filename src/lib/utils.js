@@ -88,6 +88,29 @@ export function paymentModeLabel(mode) {
   return mode
 }
 
+// Fires a device-level notification for a toast raised anywhere in the app (session
+// alerts, chat messages, etc.) — used so an alert is visible even if the app isn't the
+// foreground/focused tab or screen. Two paths:
+//  1. The Android app wraps the site in a plain WebView, which doesn't support the Web
+//     Notification API at all — MainActivity.kt exposes window.PSSNotifications.show() as
+//     a bridge to a real Android system-tray notification, so that's tried first.
+//  2. A normal desktop/mobile browser falls back to the standard Notification API.
+export function fireNativeNotification(title, body) {
+  if (window.PSSNotifications?.show) {
+    try {
+      window.PSSNotifications.show(title, body)
+      return
+    } catch { /* fall through to the web Notification API below */ }
+  }
+  if (!('Notification' in window)) return
+  const send = () => new Notification(title, { body, icon: '/pss-logo.png' })
+  if (Notification.permission === 'granted') {
+    send()
+  } else if (Notification.permission !== 'denied') {
+    Notification.requestPermission().then(p => { if (p === 'granted') send() })
+  }
+}
+
 // Opens a WhatsApp chat pre-filled with a message — same wa.me pattern used
 // throughout the app's WhatsApp buttons.
 export function openWhatsApp(phone, message) {

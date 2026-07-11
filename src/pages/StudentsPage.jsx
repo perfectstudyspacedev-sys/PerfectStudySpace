@@ -89,8 +89,8 @@ export default function StudentsPage() {
   }
 
   const [topStudents, setTopStudents] = useState([])
-  const [topPeriod, setTopPeriod] = useState('all')
-  const [topSortBy, setTopSortBy] = useState('visits')
+  const [topPeriod, setTopPeriod] = useState('month')
+  const [topSortBy, setTopSortBy] = useState('hours')
   useEffect(() => {
     if (tab !== 'loyalty' || !branchId) return
     api('get_top_students', { branchId, sortBy: topSortBy, period: topPeriod }).then(d => setTopStudents(d.students ?? []))

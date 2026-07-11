@@ -1,20 +1,11 @@
 import { useEffect, useRef, useCallback, useState } from 'react'
 import { api } from '../lib/api'
+import { fireNativeNotification } from '../lib/utils'
 
 const POLL_INTERVAL = 60_000       // check every 60 s
 const WARN_BEFORE_MS = 5 * 60_000  // warn 5 min before end
 const FIRED_KEY = 'pss_session_alerts_fired'
 const FIRED_CAP = 500
-
-function fireBrowserNotification(title, body) {
-  if (!('Notification' in window)) return
-  const send = () => new Notification(title, { body, icon: '/pss-logo.png' })
-  if (Notification.permission === 'granted') {
-    send()
-  } else if (Notification.permission !== 'denied') {
-    Notification.requestPermission().then(p => { if (p === 'granted') send() })
-  }
-}
 
 function loadFired() {
   try {
@@ -25,6 +16,10 @@ function loadFired() {
 
 function saveFired(set) {
   try { localStorage.setItem(FIRED_KEY, JSON.stringify([...set].slice(-FIRED_CAP))) } catch { /* ignore */ }
+}
+
+function isToday(ts) {
+  return new Date(ts).toDateString() === new Date().toDateString()
 }
 
 export function useSessionAlerts(branchId) {
@@ -55,8 +50,8 @@ export function useSessionAlerts(branchId) {
         if (!fired.current.has(warnKey) && now >= endMs - WARN_BEFORE_MS && now < endMs) {
           fired.current.add(warnKey)
           const msg = `${studentName} — session ends in 5 minutes`
-          newToasts.push({ id: warnKey, level: 'warn', message: msg, studentName })
-          fireBrowserNotification('⏰ Time Almost Up', msg)
+          newToasts.push({ id: warnKey, level: 'warn', message: msg, studentName, createdAt: now })
+          fireNativeNotification('⏰ Time Almost Up', msg)
         }
 
         // Session ended
@@ -64,15 +59,19 @@ export function useSessionAlerts(branchId) {
         if (!fired.current.has(endKey) && now >= endMs) {
           fired.current.add(endKey)
           const msg = `${studentName} — session has ended`
-          newToasts.push({ id: endKey, level: 'end', message: msg, studentName })
-          fireBrowserNotification('🔔 Session Ended', msg)
+          newToasts.push({ id: endKey, level: 'end', message: msg, studentName, createdAt: now })
+          fireNativeNotification('🔔 Session Ended', msg)
         }
       }
 
-      if (newToasts.length) {
-        setToasts(prev => [...prev, ...newToasts])
-        saveFired(fired.current)
-      }
+      // Drop any toast left over from a previous day (e.g. the tab was left open across
+      // midnight) whenever this poll finds something new to add or prune.
+      setToasts(prev => {
+        const kept = prev.filter(t => isToday(t.createdAt))
+        if (!newToasts.length && kept.length === prev.length) return prev
+        return [...kept, ...newToasts]
+      })
+      if (newToasts.length) saveFired(fired.current)
     } catch { /* ignore network errors */ }
   }, [branchId])
 

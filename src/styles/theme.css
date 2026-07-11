@@ -324,11 +324,10 @@ h1, h2, h3 {
   max-width: 1600px;
   margin: 0 auto;
   width: 100%;
-  /* Deliberately no overflow-x here — letting the whole page scroll sideways caused a
-     confusing double-scrollbar glitch on top of tables' own horizontal scroll (content
-     from surrounding cards/nav would shift and get cut off at the edges). Wide content
-     scrolls within its own scoped wrapper instead: .data-table, .grid-wrap, and a few
-     inline overflowX:'auto' containers (Branch Assignment Board, spreadsheet views). */
+  /* Every page can scroll horizontally on its own when content is wider than the
+     viewport (narrow screens, wide tables/grids), instead of relying solely on each
+     .card/.data-table's own scoped scroll — those still work fine nested inside this. */
+  overflow-x: auto;
 }
 
 .card {
@@ -657,6 +656,24 @@ input[type="week"]::-webkit-calendar-picker-indicator {
 
 @media (max-width: 900px) {
   .profile-summary-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
+/* Actions/Tasks page — "Assign a Task" form beside the task tables. On a narrow phone
+   (especially landscape inside the Android app's WebView) the fixed 280–380px first
+   column plus the tables column overflowed the viewport with no scoped scroll container
+   to catch it, so the whole layout just got clipped invisibly. Below 900px it stacks into
+   one column instead — the form on top, tables below, each full width. */
+.tasks-layout-grid {
+  display: grid;
+  grid-template-columns: minmax(280px, 380px) 1fr;
+  gap: 1rem;
+  align-items: start;
+}
+
+@media (max-width: 900px) {
+  .tasks-layout-grid {
     grid-template-columns: 1fr;
   }
 }

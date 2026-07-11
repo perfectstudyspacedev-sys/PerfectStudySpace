@@ -231,7 +231,7 @@ export default function TasksPage() {
         )}
       </div>
 
-      <div style={{ display: 'grid', gridTemplateColumns: 'minmax(280px, 380px) 1fr', gap: '1rem', alignItems: 'start' }}>
+      <div className="tasks-layout-grid">
         <div className="card">
           <h3 style={{ color: 'var(--accent)', marginBottom: '0.75rem' }}>Assign a Task</h3>
           <form onSubmit={handleCreate}>

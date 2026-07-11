@@ -130,6 +130,24 @@ function addMonths(dateStr: string, months: number): string {
   return d.toISOString().slice(0, 10);
 }
 
+// Hopes branch lockers aren't numbered 1..capacity — the physical units are labeled
+// 1-10, then 25-46, then 63-75 (45 lockers total), so the assignable numbers must
+// follow those gaps instead of a plain sequential range.
+const HOPES_LOCKER_RANGES: [number, number][] = [[1, 10], [25, 46], [63, 75]];
+
+function lockerNumberSequence(branchName: string | undefined | null, capacity: number): string[] {
+  if (branchName === "Hopes") {
+    const numbers: string[] = [];
+    for (const [start, end] of HOPES_LOCKER_RANGES) {
+      for (let i = start; i <= end; i++) numbers.push(String(i));
+    }
+    return numbers.slice(0, capacity);
+  }
+  const numbers: string[] = [];
+  for (let i = 1; i <= capacity; i++) numbers.push(String(i));
+  return numbers;
+}
+
 function addDays(dateStr: string, days: number): string {
   const d = new Date(dateStr + "T12:00:00");
   d.setDate(d.getDate() + days);
@@ -819,16 +837,13 @@ Deno.serve(async (req) => {
     if (action === "get_locker_status") {
       const { branchId } = payload;
       if (!requireBranch(staff, branchId)) return err("Branch access denied", 403);
-      const { data: branchRow } = await db.from("branches").select("locker_capacity").eq("id", branchId).single();
+      const { data: branchRow } = await db.from("branches").select("name, locker_capacity").eq("id", branchId).single();
       const capacity = branchRow?.locker_capacity ?? 0;
       const { data: activeLockers } = await db.from("lockers").select("locker_no").eq("branch_id", branchId).eq("is_active", true);
       const used = activeLockers?.map(l => l.locker_no) ?? [];
       const usedSet = new Set(used);
-      const availableNumbers: string[] = [];
-      for (let i = 1; i <= capacity; i++) {
-        const label = String(i);
-        if (!usedSet.has(label)) availableNumbers.push(label);
-      }
+      const allNumbers = lockerNumberSequence(branchRow?.name, capacity);
+      const availableNumbers = allNumbers.filter(label => !usedSet.has(label));
       return json({ capacity, used: used.length, available: capacity - used.length, availableNumbers });
     }
 

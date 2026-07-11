@@ -21,9 +21,7 @@ export default function MessagesPage() {
   const { branchId, staff, activeBranch } = useAuth()
   const [channel, setChannel] = useState('branch')
   const [messages, setMessages] = useState([])
-  const [alerts, setAlerts] = useState([])
   const [content, setContent] = useState('')
-  const [tab, setTab] = useState('chat')
   const [sending, setSending] = useState(false)
   const [error, setError] = useState('')
   const scrollRef = useRef(null)
@@ -31,12 +29,8 @@ export default function MessagesPage() {
   const load = useCallback(async () => {
     if (!branchId) return
     try {
-      const [msgData, alertData] = await Promise.all([
-        api('list_messages', { branchId, channel }),
-        api('list_alerts', { branchId }),
-      ])
+      const msgData = await api('list_messages', { branchId, channel })
       setMessages(msgData.messages ?? [])
-      setAlerts(alertData.alerts ?? [])
     } catch { /* ignore */ }
   }, [branchId, channel])
 
@@ -67,26 +61,11 @@ export default function MessagesPage() {
     }
   }
 
-  const resolveAlert = async (alertId) => {
-    await api('resolve_alert', { alertId })
-    load()
-  }
-
   return (
     <>
-      <div className="page-header"><h1>Staff Chat & Alerts</h1></div>
+      <div className="page-header"><h1>Staff Chat</h1></div>
 
-      <div className="tabs">
-        <button type="button" className={tab === 'chat' ? 'active' : ''} onClick={() => setTab('chat')}>
-          Chat ({messages.length})
-        </button>
-        <button type="button" className={tab === 'alerts' ? 'active' : ''} onClick={() => setTab('alerts')}>
-          Alerts ({alerts.filter(a => !a.resolved_at).length})
-        </button>
-      </div>
-
-      {tab === 'chat' && (
-        <div className="card" style={{
+      <div className="card" style={{
           padding: 0, overflow: 'hidden', display: 'flex', flexDirection: 'column',
           // On short viewports (phone landscape especially, where the stacked mobile
           // header eats a bigger share of the little vertical space there is) a plain
@@ -173,26 +152,7 @@ export default function MessagesPage() {
             </button>
           </form>
           {error && <p className="error-msg" style={{ margin: '0 1rem 0.75rem' }}>{error}</p>}
-        </div>
-      )}
-
-      {tab === 'alerts' && (
-        <div className="card">
-          {alerts.filter(a => !a.resolved_at).length === 0 && (
-            <p style={{ color: 'var(--text-muted)' }}>No pending alerts.</p>
-          )}
-          {alerts.filter(a => !a.resolved_at).map(a => (
-            <div key={a.id} className="activity-item" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-              <div>
-                <strong>{a.students?.name}</strong> — {a.alert_type.replace('_', ' ')}
-                {a.due_date && <span className="mono"> · Due {formatDate(a.due_date)}</span>}
-                {a.message && <p style={{ fontSize: '0.85rem', marginTop: '0.25rem' }}>{a.message}</p>}
-              </div>
-              <button type="button" className="btn btn-ghost" onClick={() => resolveAlert(a.id)}>Resolve</button>
-            </div>
-          ))}
-        </div>
-      )}
+      </div>
     </>
   )
 }
