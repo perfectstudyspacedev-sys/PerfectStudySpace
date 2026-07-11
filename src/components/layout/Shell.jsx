@@ -190,19 +190,37 @@ export default function Shell() {
   const dismiss = (id) => { session.dismiss(id); messages.dismiss(id) }
   const dismissAll = () => { session.dismissAll(); messages.dismissAll() }
   const [sessionEnded, setSessionEnded] = useState(false)
+  const [endSessionModal, setEndSessionModal] = useState(false)
+  const [endSessionPassword, setEndSessionPassword] = useState('')
+  const [endSessionError, setEndSessionError] = useState('')
+  const [endSessionLoading, setEndSessionLoading] = useState(false)
 
   const handleLogout = () => {
     logout()
     navigate('/login')
   }
 
-  const handleEndSession = async () => {
+  const openEndSessionModal = () => {
+    setEndSessionPassword('')
+    setEndSessionError('')
+    setEndSessionModal(true)
+  }
+
+  const confirmEndSession = async (e) => {
+    e.preventDefault()
+    setEndSessionLoading(true)
+    setEndSessionError('')
     try {
-      await api('end_staff_session')
+      await api('end_staff_session', { password: endSessionPassword })
       setSessionEnded(true)
+      setEndSessionModal(false)
       logout()
       navigate('/login')
-    } catch { /* ignore */ }
+    } catch (err) {
+      setEndSessionError(err.message)
+    } finally {
+      setEndSessionLoading(false)
+    }
   }
 
   return (
@@ -234,7 +252,7 @@ export default function Shell() {
                     }
                   }}
                 >
-                  {branches.map(b => (
+                  {[...branches].sort((a, b) => (a.name === 'Ram Nagar' ? -1 : b.name === 'Ram Nagar' ? 1 : 0)).map(b => (
                     <option key={b.id} value={b.id}>{b.name}</option>
                   ))}
                   <option value="__combined_hall__">🏢 Combined Hall</option>
@@ -264,7 +282,7 @@ export default function Shell() {
             {!isOwner && (
               <button
                 type="button" className="btn btn-ghost"
-                onClick={handleEndSession}
+                onClick={openEndSessionModal}
                 disabled={sessionEnded}
                 title="Mark that you're ending your session for the day"
               >
@@ -301,6 +319,34 @@ export default function Shell() {
       </main>
 
       <SessionToasts toasts={toasts} dismiss={dismiss} dismissAll={dismissAll} />
+
+      {endSessionModal && (
+        <div className="modal-overlay" onClick={() => setEndSessionModal(false)}>
+          <div className="modal" style={{ maxWidth: 380 }} onClick={(e) => e.stopPropagation()}>
+            <h2>End Session</h2>
+            <p style={{ color: 'var(--text-muted)', fontSize: '0.9rem', marginBottom: '1rem' }}>
+              This logs you out immediately and locks your account for the rest of today — enter your password to confirm.
+            </p>
+            <form onSubmit={confirmEndSession}>
+              <div className="form-group">
+                <label>Password</label>
+                <input
+                  type="password" value={endSessionPassword}
+                  onChange={(e) => setEndSessionPassword(e.target.value)}
+                  autoFocus required
+                />
+              </div>
+              {endSessionError && <p className="error-msg">{endSessionError}</p>}
+              <div className="modal-actions">
+                <button type="button" className="btn btn-ghost" onClick={() => setEndSessionModal(false)}>Cancel</button>
+                <button type="submit" className="btn btn-danger" disabled={endSessionLoading}>
+                  {endSessionLoading ? 'Ending…' : 'End Session'}
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
     </div>
   )
 }

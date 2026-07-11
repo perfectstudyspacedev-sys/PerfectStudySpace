@@ -86,7 +86,14 @@ export default function MessagesPage() {
       </div>
 
       {tab === 'chat' && (
-        <div className="card" style={{ padding: 0, overflow: 'hidden', display: 'flex', flexDirection: 'column', height: 'calc(100vh - 260px)' }}>
+        <div className="card" style={{
+          padding: 0, overflow: 'hidden', display: 'flex', flexDirection: 'column',
+          // On short viewports (phone landscape especially, where the stacked mobile
+          // header eats a bigger share of the little vertical space there is) a plain
+          // `100vh - 260px` could go to zero or negative, making the whole chat area
+          // vanish. minHeight guarantees it's always usable — the page scrolls instead.
+          height: 'calc(100vh - 220px)', minHeight: 320,
+        }}>
           <div style={{ padding: '0.85rem 1rem', borderBottom: '1px solid #262626' }}>
             <div className="period-toggle">
               <button type="button" className={channel === 'branch' ? 'active' : ''} onClick={() => setChannel('branch')}>

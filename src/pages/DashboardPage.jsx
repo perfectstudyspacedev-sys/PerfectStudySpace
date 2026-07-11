@@ -192,7 +192,7 @@ function CheckInModal({ branchId, onClose, onDone }) {
 }
 
 export default function DashboardPage() {
-  const { branchId, activeBranch } = useAuth()
+  const { branchId, activeBranch, isOwner } = useAuth()
   const navigate = useNavigate()
   const [data, setData] = useState(null)
   const [seatMap, setSeatMap] = useState(null)
@@ -262,6 +262,71 @@ export default function DashboardPage() {
         <button type="button" className="btn btn-primary" onClick={() => setShowCheckIn(true)}>
           ✓ Attendance
         </button>
+      </div>
+
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(300px, 1fr))', gap: '1rem', marginBottom: '1.5rem' }}>
+        <div className="card">
+          <h3 style={{ color: 'var(--accent)', marginBottom: '0.75rem' }}>Today&apos;s Action Items</h3>
+          {(data?.actionable?.expiredToday?.length ?? 0) === 0 ? (
+            <p style={{ color: 'var(--text-muted)', fontSize: '0.85rem' }}>No urgent items today.</p>
+          ) : (
+            <div className="activity-feed">
+              {data?.actionable?.expiredToday?.map(m => (
+                <div key={m.id} className="activity-item" style={{ borderColor: '#ff6b6b' }}>
+                  <strong>{m.students?.name}</strong>
+                  <span className="mono" style={{ color: 'var(--text-muted)' }}> · expired {formatDate(m.end_date)}</span>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+        <div className="card">
+          <h3 style={{ color: 'var(--accent)', marginBottom: '0.75rem' }}>My Tasks Today</h3>
+          {myTasks.length === 0 && enquiryFollowupCount === 0 ? (
+            <p style={{ color: 'var(--text-muted)', fontSize: '0.85rem' }}>No tasks assigned to you today.</p>
+          ) : (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '0.4rem' }}>
+              {enquiryFollowupCount > 0 && (
+                <div
+                  onClick={() => navigate('/enquiries')}
+                  style={{
+                    display: 'flex', justifyContent: 'space-between', alignItems: 'center', cursor: 'pointer',
+                    padding: '0.5rem 0.6rem', background: 'rgba(255,215,0,0.06)', border: '1px solid rgba(255,215,0,0.3)', borderRadius: 4,
+                  }}
+                >
+                  <strong style={{ fontSize: '0.85rem', color: 'var(--accent)' }}>Enquiry follow ups</strong>
+                  <span className="mono" style={{ fontSize: '0.72rem', color: 'var(--accent)', fontWeight: 700 }}>{enquiryFollowupCount}</span>
+                </div>
+              )}
+              {myTasks.map(t => (
+                <div key={t.id} style={{
+                  display: 'flex', justifyContent: 'space-between', alignItems: 'center',
+                  padding: '0.5rem 0.6rem', background: '#141414', border: '1px solid #333', borderRadius: 4,
+                }}>
+                  <div>
+                    <strong style={{ fontSize: '0.85rem', textDecoration: t.completedToday ? 'line-through' : 'none', color: t.completedToday ? 'var(--text-muted)' : undefined }}>
+                      {t.title}
+                    </strong>
+                    {t.repeat_interval !== 'none' && (
+                      <span style={{ marginLeft: 6, fontSize: '0.7rem', color: 'var(--text-muted)', textTransform: 'capitalize' }}>({t.repeat_interval})</span>
+                    )}
+                    {isOwner && t.branches?.name && (
+                      <span style={{ marginLeft: 6, fontSize: '0.7rem', color: 'var(--accent)' }}>· {t.branches.name}</span>
+                    )}
+                  </div>
+                  <button
+                    type="button"
+                    className={t.completedToday ? 'btn btn-ghost' : 'btn btn-primary'}
+                    style={{ padding: '0.2rem 0.5rem', fontSize: '0.72rem' }}
+                    onClick={() => toggleMyTask(t)}
+                  >
+                    {t.completedToday ? 'Undo' : 'Complete'}
+                  </button>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
       </div>
 
       {data && (
@@ -364,68 +429,6 @@ export default function DashboardPage() {
           </div>
         </div>
       )}
-
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(300px, 1fr))', gap: '1rem', marginTop: '1.5rem' }}>
-        <div className="card">
-          <h3 style={{ color: 'var(--accent)', marginBottom: '0.75rem' }}>Today&apos;s Action Items</h3>
-          {(data?.actionable?.expiredToday?.length ?? 0) === 0 ? (
-            <p style={{ color: 'var(--text-muted)', fontSize: '0.85rem' }}>No urgent items today.</p>
-          ) : (
-            <div className="activity-feed">
-              {data?.actionable?.expiredToday?.map(m => (
-                <div key={m.id} className="activity-item" style={{ borderColor: '#ff6b6b' }}>
-                  <strong>{m.students?.name}</strong>
-                  <span className="mono" style={{ color: 'var(--text-muted)' }}> · expired {formatDate(m.end_date)}</span>
-                </div>
-              ))}
-            </div>
-          )}
-        </div>
-        <div className="card">
-          <h3 style={{ color: 'var(--accent)', marginBottom: '0.75rem' }}>My Tasks Today</h3>
-          {myTasks.length === 0 && enquiryFollowupCount === 0 ? (
-            <p style={{ color: 'var(--text-muted)', fontSize: '0.85rem' }}>No tasks assigned to you today.</p>
-          ) : (
-            <div style={{ display: 'flex', flexDirection: 'column', gap: '0.4rem' }}>
-              {enquiryFollowupCount > 0 && (
-                <div
-                  onClick={() => navigate('/enquiries')}
-                  style={{
-                    display: 'flex', justifyContent: 'space-between', alignItems: 'center', cursor: 'pointer',
-                    padding: '0.5rem 0.6rem', background: 'rgba(255,215,0,0.06)', border: '1px solid rgba(255,215,0,0.3)', borderRadius: 4,
-                  }}
-                >
-                  <strong style={{ fontSize: '0.85rem', color: 'var(--accent)' }}>Enquiry follow ups</strong>
-                  <span className="mono" style={{ fontSize: '0.72rem', color: 'var(--accent)', fontWeight: 700 }}>{enquiryFollowupCount}</span>
-                </div>
-              )}
-              {myTasks.map(t => (
-                <div key={t.id} style={{
-                  display: 'flex', justifyContent: 'space-between', alignItems: 'center',
-                  padding: '0.5rem 0.6rem', background: '#141414', border: '1px solid #333', borderRadius: 4,
-                }}>
-                  <div>
-                    <strong style={{ fontSize: '0.85rem', textDecoration: t.completedToday ? 'line-through' : 'none', color: t.completedToday ? 'var(--text-muted)' : undefined }}>
-                      {t.title}
-                    </strong>
-                    {t.repeat_interval !== 'none' && (
-                      <span style={{ marginLeft: 6, fontSize: '0.7rem', color: 'var(--text-muted)', textTransform: 'capitalize' }}>({t.repeat_interval})</span>
-                    )}
-                  </div>
-                  <button
-                    type="button"
-                    className={t.completedToday ? 'btn btn-ghost' : 'btn btn-primary'}
-                    style={{ padding: '0.2rem 0.5rem', fontSize: '0.72rem' }}
-                    onClick={() => toggleMyTask(t)}
-                  >
-                    {t.completedToday ? 'Undo' : 'Complete'}
-                  </button>
-                </div>
-              ))}
-            </div>
-          )}
-        </div>
-      </div>
 
       {showCheckIn && (
         <CheckInModal

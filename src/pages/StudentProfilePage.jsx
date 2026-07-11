@@ -265,6 +265,9 @@ export default function StudentProfilePage() {
   const [discountError, setDiscountError] = useState('')
   const [discountSuccess, setDiscountSuccess] = useState('')
   const [cashbackNotice, setCashbackNotice] = useState(null)
+  const [redeemCashbackLoading, setRedeemCashbackLoading] = useState(false)
+  const [redeemCashbackError, setRedeemCashbackError] = useState('')
+  const [redeemCashbackNotice, setRedeemCashbackNotice] = useState(null)
   const [foodPass, setFoodPass] = useState(null)
   const [foodPassTopup, setFoodPassTopup] = useState('')
   const [foodPassPayMode, setFoodPassPayMode] = useState('cash')
@@ -420,6 +423,21 @@ export default function StudentProfilePage() {
       setDiscountError(err.message)
     } finally {
       setDiscountLoading(false)
+    }
+  }
+
+  const handleRedeemCashbackNow = async () => {
+    setRedeemCashbackLoading(true)
+    setRedeemCashbackError('')
+    try {
+      const res = await api('redeem_cashback_now', { studentId: student.id })
+      setOpenPanel(null)
+      setRedeemCashbackNotice(res.cashbackAmount)
+      refresh()
+    } catch (err) {
+      setRedeemCashbackError(err.message)
+    } finally {
+      setRedeemCashbackLoading(false)
     }
   }
 
@@ -590,21 +608,21 @@ export default function StudentProfilePage() {
         {/* The rest of these were full cards — shrunk to buttons that open the same content in a modal */}
         <div style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem' }}>
           {activeMem && (
-            <button type="button" className="btn btn-ghost btn-glass" style={{ width: '100%', flex: 1 }} onClick={() => setOpenPanel('membership')}>⚙ Membership Control</button>
+            <button type="button" className="btn btn-ghost btn-glass" style={{ width: '100%', flex: 1, maxHeight: 60 }} onClick={() => setOpenPanel('membership')}>⚙ Membership Control</button>
           )}
           {activeMem?.fee_due > 0 && (
-            <button type="button" className="btn btn-ghost btn-glass" style={{ width: '100%', flex: 1 }} onClick={() => setOpenPanel('payment')}>💳 Record Payment</button>
+            <button type="button" className="btn btn-ghost btn-glass" style={{ width: '100%', flex: 1, maxHeight: 60 }} onClick={() => setOpenPanel('payment')}>💳 Record Payment</button>
           )}
           {isOwner && activeMem && (
-            <button type="button" className="btn btn-ghost btn-glass" style={{ width: '100%', flex: 1 }} onClick={() => setOpenPanel('discount')}>🏷️ Discount</button>
+            <button type="button" className="btn btn-ghost btn-glass" style={{ width: '100%', flex: 1, maxHeight: 60 }} onClick={() => setOpenPanel('discount')}>🏷️ Discount</button>
           )}
           {activeMem && pendingCashback && (
-            <button type="button" className="btn btn-ghost btn-glass" style={{ width: '100%', flex: 1 }} onClick={() => setOpenPanel('cashback')}>🎁 Cashback</button>
+            <button type="button" className="btn btn-ghost btn-glass" style={{ width: '100%', flex: 1, maxHeight: 60 }} onClick={() => setOpenPanel('cashback')}>🎁 Cashback</button>
           )}
           {activeMem && (
-            <button type="button" className="btn btn-ghost btn-glass" style={{ width: '100%', flex: 1 }} onClick={() => setOpenPanel('foodpass')}>🎫 Food Pass</button>
+            <button type="button" className="btn btn-ghost btn-glass" style={{ width: '100%', flex: 1, maxHeight: 60 }} onClick={() => setOpenPanel('foodpass')}>🎫 Food Pass</button>
           )}
-          <button type="button" className="btn btn-ghost btn-glass" style={{ width: '100%', flex: 1 }} onClick={() => setOpenPanel('locker')}>🔑 Locker</button>
+          <button type="button" className="btn btn-ghost btn-glass" style={{ width: '100%', flex: 1, maxHeight: 60 }} onClick={() => setOpenPanel('locker')}>🔑 Locker</button>
         </div>
       </div>
 
@@ -810,8 +828,16 @@ export default function StudentProfilePage() {
             {pendingCashback.notes && (
               <p style={{ fontSize: '0.78rem', color: 'var(--text-muted)', marginTop: '0.4rem', fontStyle: 'italic' }}>{pendingCashback.notes}</p>
             )}
+            {redeemCashbackError && <p className="error-msg">{redeemCashbackError}</p>}
             <div className="modal-actions">
               <button type="button" className="btn btn-ghost" onClick={() => setOpenPanel(null)}>Close</button>
+              <button
+                type="button" className="btn btn-primary"
+                onClick={handleRedeemCashbackNow}
+                disabled={redeemCashbackLoading}
+              >
+                {redeemCashbackLoading ? 'Redeeming…' : '💵 Redeem Now'}
+              </button>
             </div>
           </div>
           </div>
@@ -1363,6 +1389,25 @@ export default function StudentProfilePage() {
             )}
             <div className="modal-actions">
               <button type="button" className="btn btn-primary" onClick={() => setCashbackNotice(null)}>Got it</button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {redeemCashbackNotice != null && (
+        <div className="modal-overlay" onClick={() => setRedeemCashbackNotice(null)}>
+          <div className="modal" style={{ maxWidth: 380 }} onClick={(e) => e.stopPropagation()}>
+            <h2>🎁 Cashback Redeemed</h2>
+            <div className="card" style={{ margin: '1rem 0', background: 'rgba(74,222,128,0.06)' }}>
+              <p className="mono" style={{ color: '#4ade80', fontSize: '1.2rem', fontWeight: 700 }}>
+                {formatCurrency(redeemCashbackNotice)}
+              </p>
+              <p style={{ fontSize: '0.85rem', color: 'var(--text-muted)', marginTop: '0.3rem' }}>
+                Handed to the student as cash.
+              </p>
+            </div>
+            <div className="modal-actions">
+              <button type="button" className="btn btn-primary" onClick={() => setRedeemCashbackNotice(null)}>Got it</button>
             </div>
           </div>
         </div>

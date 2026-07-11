@@ -20,25 +20,39 @@ export default function CombinedHallPage() {
   const [pending, setPending] = useState(null)
   const [pendingDate, setPendingDate] = useState(todayISO())
   const [loading, setLoading] = useState(true)
+  const [error, setError] = useState('')
 
   const loadOverview = useCallback(async () => {
     setLoading(true)
+    setError('')
     try {
       const data = await api('get_combined_hall')
       setHall(data)
+    } catch (err) {
+      setError(err.message)
     } finally {
       setLoading(false)
     }
   }, [])
 
   const loadSeatMap = useCallback(async () => {
-    const data = await api('get_combined_seatmap')
-    setSeatMap(data)
+    setError('')
+    try {
+      const data = await api('get_combined_seatmap')
+      setSeatMap(data)
+    } catch (err) {
+      setError(err.message)
+    }
   }, [])
 
   const loadPending = useCallback(async () => {
-    const data = await api('get_combined_pending', { date: pendingDate })
-    setPending(data)
+    setError('')
+    try {
+      const data = await api('get_combined_pending', { date: pendingDate })
+      setPending(data)
+    } catch (err) {
+      setError(err.message)
+    }
   }, [pendingDate])
 
   useEffect(() => { loadOverview() }, [loadOverview])
@@ -53,6 +67,8 @@ export default function CombinedHallPage() {
         <button type="button" className={tab === 'seatmap' ? 'active' : ''} onClick={() => setTab('seatmap')}>Seat Map</button>
         <button type="button" className={tab === 'pending' ? 'active' : ''} onClick={() => setTab('pending')}>Pending Tracking</button>
       </div>
+
+      {error && <p className="error-msg" style={{ marginBottom: '1rem' }}>{error}</p>}
 
       {tab === 'overview' && (
         loading ? <p>Loading…</p> : hall && (

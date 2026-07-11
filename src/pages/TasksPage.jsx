@@ -30,13 +30,21 @@ function TaskTable({ tasks, allBranches, onToggle, currentStaffId }) {
             <td style={{ fontSize: '0.85rem' }}>{t.assigned_by?.display_name || t.assigned_by?.username}</td>
             <td style={{ fontSize: '0.8rem', textTransform: 'capitalize' }}>{t.repeat_interval === 'none' ? '—' : t.repeat_interval}</td>
             <td>
-              <span style={{
-                padding: '2px 8px', borderRadius: 4, fontSize: '0.75rem', fontWeight: 700,
-                background: t.completedToday ? 'rgba(74,222,128,0.1)' : 'rgba(255,150,0,0.1)',
-                color: t.completedToday ? '#4ade80' : '#ffaa44',
-              }}>
-                {t.completedToday ? 'Done' : 'Pending'}
-              </span>
+              {(() => {
+                // Pending = due today and simply not finished yet. Incomplete = this task's
+                // due date (or, for recurring tasks, when it first started) is from a day
+                // before today — it's been carried forward, not just freshly due.
+                const anchor = t.due_date ?? t.created_at?.slice(0, 10)
+                const isFromPast = anchor && anchor < todayISO()
+                const label = t.completedToday ? 'Done' : (isFromPast ? 'Incomplete' : 'Pending')
+                const color = t.completedToday ? '#4ade80' : (isFromPast ? '#ff8888' : '#ffaa44')
+                const bg = t.completedToday ? 'rgba(74,222,128,0.1)' : (isFromPast ? 'rgba(255,60,60,0.1)' : 'rgba(255,150,0,0.1)')
+                return (
+                  <span style={{ padding: '2px 8px', borderRadius: 4, fontSize: '0.75rem', fontWeight: 700, background: bg, color }}>
+                    {label}
+                  </span>
+                )
+              })()}
             </td>
             <td>
               {t.assigned_to_staff_id === currentStaffId ? (
@@ -126,7 +134,7 @@ export default function TasksPage() {
   const [assignBranchId, setAssignBranchId] = useState(isOwner ? '' : branchId)
   const [title, setTitle] = useState('')
   const [description, setDescription] = useState('')
-  const [assignedTo, setAssignedTo] = useState('')
+  const [assignedTo, setAssignedTo] = useState([]) // array of staff IDs — multiple can be assigned the same task at once
   const [dueDate, setDueDate] = useState(todayISO())
   const [repeatInterval, setRepeatInterval] = useState('none')
   const [error, setError] = useState('')
@@ -155,23 +163,28 @@ export default function TasksPage() {
   }, [isOwner, assignBranchId, branchId])
 
   useEffect(() => {
-    setAssignedTo('')
+    setAssignedTo([])
   }, [assignBranchId])
+
+  const toggleAssignee = (id) => {
+    setAssignedTo(prev => prev.includes(id) ? prev.filter(x => x !== id) : [...prev, id])
+  }
 
   const handleCreate = async (e) => {
     e.preventDefault()
     const targetBranch = isOwner ? assignBranchId : branchId
     if (isOwner && !targetBranch) return setError('Please select a branch first')
     if (!title.trim()) return setError('Title is required')
-    if (!assignedTo) return setError('Please select an assignee')
+    if (!assignedTo.length) return setError('Please select at least one assignee')
+    if (!isOwner && dueDate && dueDate < todayISO()) return setError('Cannot assign a task on a past date')
     setSaving(true)
     setError('')
     try {
       await api('create_task', {
-        branchId: targetBranch, assignedToStaffId: assignedTo, title: title.trim(),
+        branchId: targetBranch, assignedToStaffIds: assignedTo, title: title.trim(),
         description: description.trim() || null, dueDate: dueDate || null, repeatInterval,
       })
-      setTitle(''); setDescription(''); setDueDate(todayISO()); setRepeatInterval('none')
+      setTitle(''); setDescription(''); setDueDate(todayISO()); setRepeatInterval('none'); setAssignedTo([])
       load()
     } catch (err) {
       setError(err.message)
@@ -232,15 +245,40 @@ export default function TasksPage() {
               </div>
             )}
             <div className="form-group">
-              <label>Assign To</label>
-              <select value={assignedTo} onChange={(e) => setAssignedTo(e.target.value)} disabled={isOwner && !assignBranchId} required>
-                <option value="">{isOwner && !assignBranchId ? 'Select a branch first' : 'Select staff'}</option>
-                {staffOptions.map(s => (
-                  <option key={s.id} value={s.id}>
-                    {s.display_name || s.username}{s.id === staff?.id ? ' (Myself)' : ''}
-                  </option>
-                ))}
-              </select>
+              <label>Assign To {isOwner && assignedTo.length > 1 && <span style={{ color: 'var(--text-muted)', fontWeight: 400 }}>({assignedTo.length} selected)</span>}</label>
+              {isOwner ? (
+                !assignBranchId ? (
+                  <p style={{ color: 'var(--text-muted)', fontSize: '0.85rem' }}>Select a branch first</p>
+                ) : staffOptions.length === 0 ? (
+                  <p style={{ color: 'var(--text-muted)', fontSize: '0.85rem' }}>No staff in this branch.</p>
+                ) : (
+                  <div style={{
+                    display: 'flex', flexDirection: 'column', gap: '0.4rem', maxHeight: 180, overflowY: 'auto',
+                    border: '1px solid #333', borderRadius: 4, padding: '0.5rem 0.6rem',
+                  }}>
+                    {staffOptions.map(s => (
+                      <label key={s.id} style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', fontSize: '0.85rem', cursor: 'pointer' }}>
+                        <input type="checkbox" checked={assignedTo.includes(s.id)} onChange={() => toggleAssignee(s.id)} />
+                        {s.display_name || s.username}{s.id === staff?.id ? ' (Myself)' : ''}
+                      </label>
+                    ))}
+                  </div>
+                )
+              ) : (
+                // Staff can only assign to one person at a time — multi-select is owner-only.
+                <select
+                  value={assignedTo[0] ?? ''}
+                  onChange={(e) => setAssignedTo(e.target.value ? [e.target.value] : [])}
+                  required
+                >
+                  <option value="">Select staff</option>
+                  {staffOptions.map(s => (
+                    <option key={s.id} value={s.id}>
+                      {s.display_name || s.username}{s.id === staff?.id ? ' (Myself)' : ''}
+                    </option>
+                  ))}
+                </select>
+              )}
             </div>
             <div className="form-group">
               <label>Title</label>
@@ -268,7 +306,7 @@ export default function TasksPage() {
             </div>
             <div className="form-group">
               <label>{repeatInterval === 'none' ? 'Due Date' : 'Starts On'}</label>
-              <input type="date" value={dueDate} onChange={(e) => setDueDate(e.target.value)} />
+              <input type="date" value={dueDate} onChange={(e) => setDueDate(e.target.value)} min={!isOwner ? todayISO() : undefined} />
               {repeatInterval !== 'none' && (
                 <p style={{ fontSize: '0.75rem', color: 'var(--text-muted)', marginTop: '0.3rem' }}>
                   {repeatInterval === 'weekly' && 'Repeats every week on this date’s weekday.'}
@@ -295,13 +333,15 @@ export default function TasksPage() {
           <div className="card">
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.75rem' }}>
               <h3 style={{ color: 'var(--accent)' }}>Staff Tasks Today</h3>
-              <div className="period-toggle">
-                {['', 'pending', 'done'].map(s => (
-                  <button key={s || 'all'} type="button" className={statusFilter === s ? 'active' : ''} onClick={() => setStatusFilter(s)}>
-                    {s ? s.charAt(0).toUpperCase() + s.slice(1) : 'All'}
-                  </button>
-                ))}
-              </div>
+              {isOwner && (
+                <div className="period-toggle">
+                  {[{ value: '', label: 'All' }, { value: 'pending', label: 'Incomplete' }, { value: 'done', label: 'Done' }].map(({ value, label }) => (
+                    <button key={value || 'all'} type="button" className={statusFilter === value ? 'active' : ''} onClick={() => setStatusFilter(value)}>
+                      {label}
+                    </button>
+                  ))}
+                </div>
+              )}
             </div>
 
             {loading ? <p>Loading…</p> : (

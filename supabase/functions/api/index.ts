@@ -366,7 +366,7 @@ Deno.serve(async (req) => {
 
     // ─── BRANCHES ───
     if (action === "list_branches") {
-      let q = db.from("branches").select("id, name, desk_count, shift_config").eq("is_active", true).order("name");
+      let q = db.from("branches").select("id, name, desk_count, shift_config, locker_capacity").eq("is_active", true).order("name");
       if (!isOwner(staff)) q = q.eq("id", staff.branch_id!);
       const { data } = await q;
       return json({ branches: data ?? [] });
@@ -374,10 +374,16 @@ Deno.serve(async (req) => {
 
     if (action === "update_branch") {
       if (!isOwner(staff)) return err("Owner only", 403);
-      const { branchId, deskCount, shiftConfig } = payload;
-      await db.from("branches").update({
-        desk_count: deskCount, shift_config: shiftConfig,
-      }).eq("id", branchId);
+      const { branchId, deskCount, shiftConfig, lockerCapacity } = payload;
+      const updates: Record<string, unknown> = {};
+      if (deskCount !== undefined) updates.desk_count = deskCount;
+      if (shiftConfig !== undefined) updates.shift_config = shiftConfig;
+      if (lockerCapacity !== undefined) {
+        const cap = Number(lockerCapacity);
+        if (!Number.isFinite(cap) || cap < 0) return err("Locker capacity must be a non-negative number");
+        updates.locker_capacity = cap;
+      }
+      await db.from("branches").update(updates).eq("id", branchId);
       return json({ ok: true });
     }
 
@@ -464,20 +470,48 @@ Deno.serve(async (req) => {
       });
     }
 
-    // Last 5 bookings branch-wide, newest first — moved off the Dashboard onto the
+    // Full activity feed branch-wide, newest first — every new booking/check-in, every new
+    // membership, and every payment-related transaction (walk-in fee, membership payment,
+    // food, locker, overtime), merged into one timeline. Moved off the Dashboard onto the
     // Reports page as its own lightweight action so Reports doesn't need the full
     // get_dashboard payload just to show this feed.
     if (action === "get_recent_activity") {
-      const { branchId } = payload;
+      const { branchId, date, period, dateFrom, dateTo } = payload;
       if (!requireBranch(staff, branchId)) return err("Branch access denied", 403);
-      const { data: recentBookings } = await db.from("bookings").select("*, students(name, phone)")
-        .eq("branch_id", branchId).order("created_at", { ascending: false });
-      return json({
-        recentActivity: (recentBookings ?? []).map(b => ({
-          id: b.id, type: b.booking_type, studentName: b.students?.name, studentPhone: b.students?.phone,
-          time: b.created_at, status: b.status,
+      // Same range logic as get_daily_report — staff only ever see a single day; the
+      // owner's Day/Week/Month/Custom picker at the top of Reports scopes this too.
+      const range = period && isOwner(staff) ? dateRange(period, dateFrom, dateTo) : { from: date ?? todayISO(), to: date ?? todayISO() };
+      const fromTs = range.from + "T00:00:00Z";
+      const toTs = range.to + "T23:59:59Z";
+
+      const [{ data: recentBookings }, { data: recentMemberships }, { data: recentTxns }] = await Promise.all([
+        db.from("bookings").select("id, booking_type, status, created_at, students(name, phone)")
+          .eq("branch_id", branchId).gte("created_at", fromTs).lte("created_at", toTs),
+        db.from("memberships").select("id, category, total_paid, created_at, students(name, phone)")
+          .eq("branch_id", branchId).gte("created_at", fromTs).lte("created_at", toTs),
+        db.from("transactions").select("id, category, amount, payment_mode, created_at, students(name, phone)")
+          .eq("branch_id", branchId).gte("created_at", fromTs).lte("created_at", toTs),
+      ]);
+
+      const feed = [
+        ...(recentBookings ?? []).map(b => ({
+          id: `booking-${b.id}`, kind: "booking", label: b.booking_type,
+          studentName: b.students?.name, studentPhone: b.students?.phone,
+          time: b.created_at, status: b.status, amount: null,
         })),
-      });
+        ...(recentMemberships ?? []).map(m => ({
+          id: `membership-${m.id}`, kind: "membership", label: `New ${m.category} membership`,
+          studentName: m.students?.name, studentPhone: m.students?.phone,
+          time: m.created_at, status: null, amount: Number(m.total_paid),
+        })),
+        ...(recentTxns ?? []).map(t => ({
+          id: `transaction-${t.id}`, kind: "transaction", label: t.category,
+          studentName: t.students?.name, studentPhone: t.students?.phone,
+          time: t.created_at, status: t.payment_mode, amount: Number(t.amount),
+        })),
+      ].sort((a, b) => b.time.localeCompare(a.time));
+
+      return json({ recentActivity: feed });
     }
 
     // ─── SEAT MAP ───
@@ -1425,6 +1459,35 @@ Deno.serve(async (req) => {
       return json({ ok: true });
     }
 
+    // Pays out a student's pending cashback(s) in cash right away, without waiting for a
+    // renewal (discount) or closure (payout) — e.g. the student wants it now instead.
+    // Same base and settlement convention as membership closure: current active
+    // membership's monthly_fee * months_paid, marked "settled", logged as a payout.
+    if (action === "redeem_cashback_now") {
+      const { studentId } = payload;
+      const { data: mem } = await db.from("memberships").select("*")
+        .eq("student_id", studentId).eq("is_active", true).maybeSingle();
+      if (!mem) return err("This student doesn't have an active membership");
+      if (!requireBranch(staff, mem.branch_id)) return err("Branch access denied", 403);
+
+      const cashbackBase = Number(mem.monthly_fee) * Number(mem.months_paid);
+      const { cashbackAmount, contribs } = await settlePendingCashbacks(db, studentId, cashbackBase);
+      if (cashbackAmount <= 0) return err("No pending cashback to redeem");
+
+      for (const c of contribs) {
+        await db.from("cashbacks").update({
+          status: "settled", redeemed_amount: c.amount, redeemed_at: new Date().toISOString(),
+        }).eq("id", c.id);
+      }
+      await db.from("payouts").insert({
+        student_id: studentId, branch_id: mem.branch_id, payout_type: "cashback",
+        amount: cashbackAmount, notes: "Cashback redeemed immediately as cash, outside a renewal/closure",
+        created_by_staff_id: staff.id,
+      });
+
+      return json({ ok: true, cashbackAmount });
+    }
+
     // All cashback grants for a branch, newest first — lets staff/owner see who still has
     // a cashback pending (yet to avail) vs. already redeemed or settled at closure.
     if (action === "list_cashbacks") {
@@ -1676,7 +1739,7 @@ Deno.serve(async (req) => {
         .gte("created_at", range.from + "T00:00:00Z")
         .lte("created_at", range.to + "T23:59:59Z");
 
-      const cats = { desk: 0, membership: 0, food: 0, locker: 0, fine: 0 };
+      const cats = { desk: 0, membership: 0, food: 0, locker: 0, overtime: 0, fine: 0 };
       const modes = { cash: 0, upi: 0, other: 0 };
       for (const t of txns ?? []) {
         cats[t.category as keyof typeof cats] = (cats[t.category as keyof typeof cats] ?? 0) + Number(t.amount);
@@ -1934,25 +1997,31 @@ Deno.serve(async (req) => {
     }
 
     if (action === "create_task") {
-      const { branchId, assignedToStaffId, title, description, dueDate, repeatInterval } = payload;
+      const { branchId, assignedToStaffId, assignedToStaffIds, title, description, dueDate, repeatInterval } = payload;
+      // Accepts either the older single assignedToStaffId, or a list to assign the same
+      // task to several staff members at once — each gets their own independent task row
+      // (own completion status), just created together in one go.
+      const staffIds: string[] = assignedToStaffIds?.length ? assignedToStaffIds : (assignedToStaffId ? [assignedToStaffId] : []);
       if (!title) return err("Title is required");
-      if (!assignedToStaffId) return err("Please select who to assign this task to");
+      if (!staffIds.length) return err("Please select at least one person to assign this task to");
       if (repeatInterval && !["none", "daily", "weekly", "monthly"].includes(repeatInterval)) return err("Invalid repeat interval");
       const targetBranchId = branchId ?? staff.branch_id;
       if (!isOwner(staff)) {
         if (!targetBranchId || targetBranchId !== staff.branch_id) return err("Branch access denied", 403);
-        const { data: assignee } = await db.from("staff").select("branch_id, role").eq("id", assignedToStaffId).single();
-        if (!assignee || (assignee.role !== "owner" && assignee.branch_id !== staff.branch_id)) {
-          return err("Can only assign tasks to staff in your branch, or the owner");
-        }
+        if (dueDate && dueDate < todayISO()) return err("Cannot assign a task on a past date");
+        const { data: assignees } = await db.from("staff").select("id, branch_id, role").in("id", staffIds);
+        const allValid = assignees?.length === staffIds.length
+          && assignees.every(a => a.role === "owner" || a.branch_id === staff.branch_id);
+        if (!allValid) return err("Can only assign tasks to staff in your branch, or the owner");
       }
-      const { data: task, error: tErr } = await db.from("tasks").insert({
-        branch_id: targetBranchId, assigned_by_staff_id: staff.id, assigned_to_staff_id: assignedToStaffId,
+      const rows = staffIds.map(sid => ({
+        branch_id: targetBranchId, assigned_by_staff_id: staff.id, assigned_to_staff_id: sid,
         title, description: description ?? null, due_date: dueDate ?? null,
         repeat_interval: repeatInterval ?? "none",
-      }).select("*").single();
+      }));
+      const { data: tasks, error: tErr } = await db.from("tasks").insert(rows).select("*");
       if (tErr) return err(tErr.message);
-      return json({ ok: true, task });
+      return json({ ok: true, tasks });
     }
 
     if (action === "list_tasks") {
@@ -2014,7 +2083,7 @@ Deno.serve(async (req) => {
     }
 
     if (action === "get_my_tasks_today") {
-      const { data } = await db.from("tasks").select("*").eq("assigned_to_staff_id", staff.id);
+      const { data } = await db.from("tasks").select("*, branches(name)").eq("assigned_to_staff_id", staff.id);
       const today = todayISO();
       const dueTasks = (data ?? []).filter(t => isTaskDueOn(t, today));
       const recurringIds = dueTasks.filter(t => t.repeat_interval !== "none").map(t => t.id);
@@ -2141,6 +2210,14 @@ Deno.serve(async (req) => {
     // Self-service: any staff (including owner) can mark when they end their session for
     // the day. No-op if they never logged in today (nothing to end).
     if (action === "end_staff_session") {
+      const { password } = payload;
+      if (!password) return err("Password required");
+      // Confirms it's really this staff member ending their own day, not someone else
+      // grabbing an unlocked, unattended computer — re-verifies their password the same
+      // way login does, without issuing a new token.
+      const { data: check } = await db.rpc("verify_staff_login", { p_username: staff.username, p_password: password });
+      if (!check?.length || check[0].id !== staff.id) return err("Incorrect password", 401);
+
       const today = todayISO();
       await db.from("staff_attendance").update({ last_logout_at: new Date().toISOString() })
         .eq("staff_id", staff.id).eq("attendance_date", today);

@@ -10,6 +10,15 @@ function formatDateTick(dateStr) {
   return d.toLocaleDateString('en-IN', { day: 'numeric', month: 'short' })
 }
 
+const ACTIVITY_CAT_LABELS = { desk: 'Walk-in Fee', membership: 'Membership Payment', food: 'Food', locker: 'Locker', overtime: 'Overtime' }
+const ACTIVITY_BOOKING_LABELS = { walkin: 'Walk-in Booking', temporary: 'Temporary Check-in', permanent: 'Permanent Check-in' }
+
+function describeActivity(a) {
+  if (a.kind === 'booking') return ACTIVITY_BOOKING_LABELS[a.label] ?? a.label
+  if (a.kind === 'membership') return a.label
+  return `Payment — ${ACTIVITY_CAT_LABELS[a.label] ?? a.label}`
+}
+
 export default function ReportsPage() {
   const { branchId, isOwner } = useAuth()
   const [date, setDate] = useState(todayISO())
@@ -52,12 +61,13 @@ export default function ReportsPage() {
   }, [branchId, date, isOwner, taskAllBranches])
 
   const loadRecentActivity = useCallback(async () => {
-    if (!branchId) return
+    // Only shown for the Day view — skip fetching entirely for Week/Month/Custom.
+    if (!branchId || (isOwner && period !== 'day')) return
     try {
-      const data = await api('get_recent_activity', { branchId })
+      const data = await api('get_recent_activity', { branchId, date })
       setRecentActivity(data.recentActivity ?? [])
     } catch (e) { console.error(e) }
-  }, [branchId])
+  }, [branchId, date, isOwner, period])
 
   useEffect(() => { load() }, [load])
   useEffect(() => { loadTaskReport() }, [loadTaskReport])
@@ -350,26 +360,31 @@ export default function ReportsPage() {
         </div>
       )}
 
-      <div className="card" style={{ marginTop: '1rem' }}>
-        <h3 style={{ color: 'var(--accent)', marginBottom: '0.75rem' }}>Recent Activity</h3>
-        {recentActivity.length === 0 ? (
-          <p style={{ color: 'var(--text-muted)', fontSize: '0.85rem' }}>No recent activity.</p>
-        ) : (
-          <table className="data-table">
-            <thead><tr><th>Date</th><th>Student</th><th>Type</th><th>Status</th></tr></thead>
-            <tbody>
-              {recentActivity.map(a => (
-                <tr key={a.id}>
-                  <td className="mono">{formatDateTime(a.time)}</td>
-                  <td>{a.studentName ?? '-'} {a.studentPhone && <span className="mono" style={{ color: 'var(--text-muted)' }}>({a.studentPhone})</span>}</td>
-                  <td className="cap">{a.type}</td>
-                  <td className="cap">{a.status}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        )}
-      </div>
+      {(!isOwner || period === 'day') && (
+        <div className="card" style={{ marginTop: '1rem' }}>
+          <h3 style={{ color: 'var(--accent)', marginBottom: '0.75rem' }}>
+            Recent Activity — {formatDate(date)}
+          </h3>
+          {recentActivity.length === 0 ? (
+            <p style={{ color: 'var(--text-muted)', fontSize: '0.85rem' }}>No recent activity.</p>
+          ) : (
+            <table className="data-table">
+              <thead><tr><th>Date</th><th>Student</th><th>Activity</th><th>Status / Mode</th><th>Amount</th></tr></thead>
+              <tbody>
+                {recentActivity.map(a => (
+                  <tr key={a.id}>
+                    <td className="mono">{formatDateTime(a.time)}</td>
+                    <td>{a.studentName ?? '-'} {a.studentPhone && <span className="mono" style={{ color: 'var(--text-muted)' }}>({a.studentPhone})</span>}</td>
+                    <td className="cap">{describeActivity(a)}</td>
+                    <td className="cap">{a.status ?? '-'}</td>
+                    <td className="mono">{a.amount != null ? formatCurrency(a.amount) : '-'}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          )}
+        </div>
+      )}
     </>
   )
 }

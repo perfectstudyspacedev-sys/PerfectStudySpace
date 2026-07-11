@@ -10,7 +10,7 @@ import { formatCurrency, todayISO, exportToCSV, paymentModeLabel, formatDateTime
 import { chartTooltip } from '../components/ChartTooltip'
 
 const COLORS = ['#FFD700', '#22d3ee', '#a78bfa', '#4ade80', '#f97316', '#77aef8', '#f472b6']
-const CAT_LABELS = { desk: 'Walk-in', membership: 'Membership', food: 'Food', locker: 'Locker', fine: 'Fine' }
+const CAT_LABELS = { desk: 'Walk-in', membership: 'Membership', food: 'Food', locker: 'Locker', overtime: 'Overtime', fine: 'Fine' }
 const REFERRAL_LABELS = {
   google_search: 'Google Search', instagram: 'Social Media', word_of_mouth: 'Word of Mouth',
   flex: 'Flex (Banner/Hoarding)', ai_platform: 'Claude/ChatGPT/AI Platforms', unknown: 'Not Recorded',

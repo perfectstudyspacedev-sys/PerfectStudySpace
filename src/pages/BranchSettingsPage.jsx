@@ -12,6 +12,8 @@ export default function BranchSettingsPage() {
   const [feeConfig, setFeeConfig] = useState([])
   const [feeEdits, setFeeEdits] = useState({})
   const [savingFees, setSavingFees] = useState(false)
+  const [lockerCapacity, setLockerCapacity] = useState('')
+  const [savingLockers, setSavingLockers] = useState(false)
   const [msg, setMsg] = useState('')
 
   const load = useCallback(async () => {
@@ -36,6 +38,11 @@ export default function BranchSettingsPage() {
     setFeeEdits(map)
   }, [feeConfig])
 
+  useEffect(() => {
+    const b = branches.find(b => b.id === selectedBranch)
+    setLockerCapacity(b?.locker_capacity != null ? String(b.locker_capacity) : '')
+  }, [branches, selectedBranch])
+
   if (!isOwner) return <Navigate to="/" replace />
 
   const handleAddDesk = async () => {
@@ -53,6 +60,19 @@ export default function BranchSettingsPage() {
       setMsg('Desk removed')
     } catch (e) {
       setMsg(e.message)
+    }
+  }
+
+  const saveLockerCapacity = async () => {
+    setSavingLockers(true)
+    setMsg('')
+    try {
+      await api('update_branch', { branchId: selectedBranch, lockerCapacity: Number(lockerCapacity) })
+      setMsg('Locker capacity updated')
+    } catch (e) {
+      setMsg(e.message)
+    } finally {
+      setSavingLockers(false)
     }
   }
 
@@ -113,6 +133,19 @@ export default function BranchSettingsPage() {
             ))}
           </div>
         )}
+      </div>
+
+      <div className="card" style={{ marginBottom: '1.5rem', maxWidth: 320 }}>
+        <h3 style={{ color: 'var(--accent)', marginBottom: '1rem' }}>Locker Capacity</h3>
+        <p style={{ color: 'var(--text-muted)', fontSize: '0.82rem', marginBottom: '0.75rem' }}>
+          Total number of lockers available to assign at this branch.
+        </p>
+        <div style={{ display: 'flex', gap: '0.5rem' }}>
+          <input type="number" min="0" value={lockerCapacity} onChange={(e) => setLockerCapacity(e.target.value)} />
+          <button type="button" className="btn btn-primary" disabled={savingLockers} onClick={saveLockerCapacity}>
+            {savingLockers ? 'Saving…' : 'Save'}
+          </button>
+        </div>
       </div>
 
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(320px, 1fr))', gap: '1rem' }}>
