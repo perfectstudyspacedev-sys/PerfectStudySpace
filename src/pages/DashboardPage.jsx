@@ -245,6 +245,22 @@ export default function DashboardPage() {
   useEffect(() => { loadMyTasks() }, [loadMyTasks])
   useEffect(() => { loadEnquiryFollowups() }, [loadEnquiryFollowups])
 
+  // The seat map is shared across every staff member at the branch — another tab/device
+  // reassigning a desk (e.g. resuming a paused permanent membership onto a new cabin)
+  // wouldn't otherwise show up here until this tab happened to remount. Poll it, and also
+  // refetch the moment this tab regains focus so it's never more than a glance stale.
+  useEffect(() => {
+    const interval = setInterval(load, 45_000)
+    const onVisible = () => { if (document.visibilityState === 'visible') load() }
+    document.addEventListener('visibilitychange', onVisible)
+    window.addEventListener('focus', onVisible)
+    return () => {
+      clearInterval(interval)
+      document.removeEventListener('visibilitychange', onVisible)
+      window.removeEventListener('focus', onVisible)
+    }
+  }, [load])
+
   const toggleMyTask = async (task) => {
     try {
       await api('update_task_status', { taskId: task.id, done: !task.completedToday })

@@ -1180,6 +1180,9 @@ input[type="week"]::-webkit-calendar-picker-indicator {
 .row-overdue td { background: rgba(255, 70, 70, 0.15) !important; }
 .row-overdue td:first-child { border-left: 3px solid #ff6b6b; }
 
+.row-expiring-soon td { background: rgba(255, 150, 0, 0.12) !important; }
+.row-expiring-soon td:first-child { border-left: 3px solid #ffaa44; }
+
 .branch-switcher select {
   padding: 0.4rem 0.75rem;
   background: #141414;

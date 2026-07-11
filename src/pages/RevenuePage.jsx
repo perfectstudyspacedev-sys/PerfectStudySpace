@@ -186,6 +186,9 @@ export default function RevenuePage() {
                 {revenue.payouts.food_pass_refund > 0 && (
                   <p className="mono" style={{ fontSize: '1.02rem' }}>🎫 Food Pass Refunds: <strong style={{ color: '#ff8888' }}>{formatCurrency(revenue.payouts.food_pass_refund)}</strong></p>
                 )}
+                {revenue.payouts.membership_refund > 0 && (
+                  <p className="mono" style={{ fontSize: '1.02rem' }}>🗑️ Membership Refunds: <strong style={{ color: '#ff8888' }}>{formatCurrency(revenue.payouts.membership_refund)}</strong></p>
+                )}
               </div>
             </div>
           )}
@@ -366,6 +369,7 @@ export default function RevenuePage() {
               <option value="">All Categories</option>
               {Object.entries(CAT_LABELS).map(([k, v]) => <option key={k} value={k}>{v}</option>)}
               <option value="cashback">Cashback</option>
+              <option value="membership_refund">Membership Refunds</option>
             </select>
             <button type="button" className="btn btn-ghost" onClick={handleExportTx}>Export CSV</button>
           </div>
@@ -377,7 +381,7 @@ export default function RevenuePage() {
                   <td className="mono">{formatDateTime(t.created_at)}</td>
                   <td>{t.students?.name ?? '-'} {t.students?.phone && <span className="mono" style={{ color: 'var(--text-muted)' }}>({t.students.phone})</span>}</td>
                   <td className={CAT_LABELS[t.category] ? undefined : 'cap'}>{CAT_LABELS[t.category] ?? t.category}</td>
-                  <td className="mono">{t.amount != null ? formatCurrency(t.amount) : '-'}</td>
+                  <td className="mono" style={t.amount < 0 ? { color: '#ff8888' } : undefined}>{t.amount != null ? formatCurrency(t.amount) : '-'}</td>
                   <td>{t.payment_mode ? paymentModeLabel(t.payment_mode) : '-'}</td>
                   <td>{t.branches?.name ?? '-'}</td>
                 </tr>

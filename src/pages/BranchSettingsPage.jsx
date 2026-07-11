@@ -15,6 +15,8 @@ export default function BranchSettingsPage() {
   const [lockerCapacity, setLockerCapacity] = useState('')
   const [savingLockers, setSavingLockers] = useState(false)
   const [msg, setMsg] = useState('')
+  const [fixingDates, setFixingDates] = useState(false)
+  const [fixDatesResult, setFixDatesResult] = useState('')
 
   const load = useCallback(async () => {
     if (!selectedBranch) return
@@ -44,6 +46,20 @@ export default function BranchSettingsPage() {
   }, [branches, selectedBranch])
 
   if (!isOwner) return <Navigate to="/" replace />
+
+  const handleFixMembershipDates = async () => {
+    if (!window.confirm('Recompute end/due dates for every membership from its start date? This corrects drift from a past timezone bug and is safe to run more than once.')) return
+    setFixingDates(true)
+    setFixDatesResult('')
+    try {
+      const res = await api('fix_membership_dates')
+      setFixDatesResult(`Checked ${res.checked} memberships, corrected ${res.fixed}.`)
+    } catch (err) {
+      setFixDatesResult(`Error: ${err.message}`)
+    } finally {
+      setFixingDates(false)
+    }
+  }
 
   const handleAddDesk = async () => {
     if (!newDeskLabel.trim()) return
@@ -114,6 +130,17 @@ export default function BranchSettingsPage() {
       </div>
 
       {msg && <p style={{ color: 'var(--accent)', marginBottom: '1rem' }}>{msg}</p>}
+
+      <div className="card" style={{ marginBottom: '1.5rem' }}>
+        <h3 style={{ color: 'var(--accent)', marginBottom: '0.5rem' }}>Data Repair</h3>
+        <p style={{ color: 'var(--text-muted)', fontSize: '0.82rem', marginBottom: '0.75rem' }}>
+          Recomputes every membership's end/due date from its start date — fixes drift left over from a past timezone bug. Safe to run more than once.
+        </p>
+        <button type="button" className="btn btn-ghost" onClick={handleFixMembershipDates} disabled={fixingDates}>
+          {fixingDates ? 'Fixing…' : 'Fix Membership Dates'}
+        </button>
+        {fixDatesResult && <p style={{ marginTop: '0.5rem', fontSize: '0.85rem', color: 'var(--accent)' }}>{fixDatesResult}</p>}
+      </div>
 
       <div className="card" style={{ marginBottom: '1.5rem' }}>
         <h3 style={{ color: 'var(--accent)', marginBottom: '1rem' }}>Manage Desks</h3>

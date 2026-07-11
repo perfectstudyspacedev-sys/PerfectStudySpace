@@ -96,9 +96,10 @@ function AttendanceModal({ studentId, branchId, booking, onClose, onDone }) {
 
 // Mid-cycle plan change (temp <-> permanent, or hours/day) on the current active
 // membership — prorates the difference over the days remaining, doesn't touch expiry.
-function ChangePlanModal({ membership, tempPackages, permPackages, onClose, onDone }) {
+function ChangePlanModal({ membership, tempPackages, permPackages, isOwner, onClose, onDone }) {
   const [category, setCategory] = useState(membership.category)
   const [hoursPerDay, setHoursPerDay] = useState(membership.hours_per_day)
+  const [endDate, setEndDate] = useState(membership.end_date)
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState('')
 
@@ -108,14 +109,17 @@ function ChangePlanModal({ membership, tempPackages, permPackages, onClose, onDo
   const oldDailyRate = Number(membership.monthly_fee) / 30
   const newDailyRate = pkg ? pkg.fee / 30 : 0
   const proratedPreview = Math.round((newDailyRate - oldDailyRate) * remainingDays)
-  const noChange = category === membership.category && hoursPerDay === membership.hours_per_day
+  const noChange = category === membership.category && hoursPerDay === membership.hours_per_day && endDate === membership.end_date
 
   const handleSubmit = async () => {
     if (!pkg) return setError('Select a valid plan')
     setLoading(true)
     setError('')
     try {
-      await api('change_membership_plan', { membershipId: membership.id, newCategory: category, newHoursPerDay: pkg.hours })
+      await api('change_membership_plan', {
+        membershipId: membership.id, newCategory: category, newHoursPerDay: pkg.hours,
+        newEndDate: isOwner && endDate !== membership.end_date ? endDate : undefined,
+      })
       onDone()
     } catch (err) {
       setError(err.message)
@@ -155,7 +159,13 @@ function ChangePlanModal({ membership, tempPackages, permPackages, onClose, onDo
             {packages.map(p => <option key={p.hours} value={p.hours}>{p.hours}h/day — {formatCurrency(p.fee)}/mo</option>)}
           </select>
         </div>
-        {!noChange && (
+        {isOwner && (
+          <div className="form-group">
+            <label>End Date</label>
+            <input type="date" value={endDate} onChange={(e) => setEndDate(e.target.value)} />
+          </div>
+        )}
+        {(category !== membership.category || hoursPerDay !== membership.hours_per_day) && (
           <p className="mono" style={{ marginBottom: '1rem', color: proratedPreview >= 0 ? '#ff8888' : '#4ade80' }}>
             {proratedPreview >= 0
               ? `Additional ₹${proratedPreview} will be added to fee due`
@@ -230,9 +240,60 @@ function ChangeCabinModal({ membership, branchId, onClose, onDone }) {
   )
 }
 
+// Shown when resuming a permanent membership whose cabin was released while on hold — a
+// new cabin (possibly a different one, if the old one was taken in the meantime) must be
+// picked before the membership can go active again, so two students never end up assigned
+// to the same seat.
+function ResumeCabinModal({ branchId, loading, error, onClose, onSubmit }) {
+  const [desks, setDesks] = useState(null)
+  const [selectedDesk, setSelectedDesk] = useState('')
+  const [localError, setLocalError] = useState('')
+
+  useEffect(() => {
+    api('get_seat_map', { branchId }).then(d => setDesks((d.desks ?? []).filter(x => x.status === 'free'))).catch(() => setDesks([]))
+  }, [branchId])
+
+  const handleSubmit = () => {
+    if (!selectedDesk) return setLocalError('Select a cabin')
+    setLocalError('')
+    onSubmit(selectedDesk)
+  }
+
+  return (
+    <div className="modal-overlay" onClick={onClose}>
+      <div className="modal" style={{ maxWidth: 380 }} onClick={(e) => e.stopPropagation()}>
+        <h2>Select Cabin & Resume</h2>
+        <p style={{ color: 'var(--text-muted)', fontSize: '0.85rem', marginBottom: '1rem' }}>
+          Their cabin was released for other students while on hold. Pick a cabin to resume this membership.
+        </p>
+        <div className="form-group">
+          <label>Cabin</label>
+          {desks === null ? (
+            <p style={{ color: 'var(--text-muted)' }}>Loading…</p>
+          ) : desks.length === 0 ? (
+            <p style={{ color: 'var(--text-muted)' }}>No free cabins available right now.</p>
+          ) : (
+            <select value={selectedDesk} onChange={(e) => setSelectedDesk(e.target.value)}>
+              <option value="">Select a cabin</option>
+              {desks.map(d => <option key={d.id} value={d.id}>{d.label}</option>)}
+            </select>
+          )}
+        </div>
+        {(localError || error) && <p className="error-msg">{localError || error}</p>}
+        <div className="modal-actions">
+          <button type="button" className="btn btn-ghost" onClick={onClose}>Cancel</button>
+          <button type="button" className="btn btn-primary" disabled={loading || !selectedDesk} onClick={handleSubmit}>
+            {loading ? 'Resuming…' : 'Confirm & Resume'}
+          </button>
+        </div>
+      </div>
+    </div>
+  )
+}
+
 export default function StudentProfilePage() {
   const { id } = useParams()
-  const { isOwner } = useAuth()
+  const { isOwner, branches } = useAuth()
   const [data, setData] = useState(null)
   const [loading, setLoading] = useState(true)
   const [openPanel, setOpenPanel] = useState(null) // which shrunk-to-a-button card is currently shown as a modal
@@ -276,6 +337,17 @@ export default function StudentProfilePage() {
   const [attendanceModal, setAttendanceModal] = useState(null) // { booking } to edit, or {} to add
   const [planChangeOpen, setPlanChangeOpen] = useState(false)
   const [cabinChangeOpen, setCabinChangeOpen] = useState(false)
+  const [transferOpen, setTransferOpen] = useState(false)
+  const [transferBranchId, setTransferBranchId] = useState('')
+  const [transferDeskId, setTransferDeskId] = useState('')
+  const [transferDesks, setTransferDesks] = useState(null)
+  const [transferLoading, setTransferLoading] = useState(false)
+  const [transferError, setTransferError] = useState('')
+  const [resumeCabinOpen, setResumeCabinOpen] = useState(false)
+  const [deleteMembershipOpen, setDeleteMembershipOpen] = useState(false)
+  const [deleteMembershipLoading, setDeleteMembershipLoading] = useState(false)
+  const [deleteMembershipError, setDeleteMembershipError] = useState('')
+  const [deleteMembershipNotice, setDeleteMembershipNotice] = useState(null)
 
   const refresh = useCallback(() => {
     setLoading(true)
@@ -307,6 +379,19 @@ export default function StudentProfilePage() {
     if (!branchId) return
     api('get_locker_status', { branchId }).then(setLockerStatus).catch(() => setLockerStatus(null))
   }, [data?.student?.branch_id])
+
+  // A permanent membership needs a specific free cabin picked at the destination branch
+  // before a transfer is allowed, so re-fetch its seat map whenever the chosen branch changes.
+  useEffect(() => {
+    setTransferDeskId('')
+    if (!transferOpen || !transferBranchId) { setTransferDesks(null); return }
+    const isPermanent = (data?.memberships ?? []).find(m => m.is_active)?.category === 'permanent'
+    if (!isPermanent) { setTransferDesks(null); return }
+    setTransferDesks(null)
+    api('get_seat_map', { branchId: transferBranchId })
+      .then(d => setTransferDesks((d.desks ?? []).filter(x => x.status === 'free')))
+      .catch(() => setTransferDesks([]))
+  }, [transferOpen, transferBranchId, data?.memberships])
 
   const loadFoodPass = useCallback(() => {
     api('get_food_pass', { studentId: id }).then(d => setFoodPass(d.pass)).catch(() => setFoodPass(null))
@@ -454,11 +539,12 @@ export default function StudentProfilePage() {
     }
   }
 
-  const handleResume = async (membershipId) => {
+  const handleResume = async (membershipId, deskId) => {
     setHoldLoading(true)
     setHoldError('')
     try {
-      await api('resume_membership', { membershipId })
+      await api('resume_membership', { membershipId, deskId })
+      setResumeCabinOpen(false)
       refresh()
     } catch (err) {
       setHoldError(err.message)
@@ -502,6 +588,37 @@ export default function StudentProfilePage() {
     }
   }
 
+  const handleDeleteMembership = async (membershipId) => {
+    setDeleteMembershipLoading(true)
+    setDeleteMembershipError('')
+    try {
+      const res = await api('delete_membership', { membershipId })
+      setDeleteMembershipOpen(false)
+      setOpenPanel(null)
+      setDeleteMembershipNotice(res.refundAmount)
+      refresh()
+    } catch (err) {
+      setDeleteMembershipError(err.message)
+    } finally {
+      setDeleteMembershipLoading(false)
+    }
+  }
+
+  const handleTransferBranch = async () => {
+    if (!transferBranchId) return
+    setTransferLoading(true)
+    setTransferError('')
+    try {
+      await api('transfer_student_branch', { studentId: id, newBranchId: transferBranchId, deskId: transferDeskId || undefined })
+      setTransferOpen(false)
+      refresh()
+    } catch (err) {
+      setTransferError(err.message)
+    } finally {
+      setTransferLoading(false)
+    }
+  }
+
   if (loading) return <p>Loading profile…</p>
   if (!data?.student) return <p>Student not found.</p>
 
@@ -512,6 +629,19 @@ export default function StudentProfilePage() {
   const daysLeft = activeMem
     ? Math.round((new Date(activeMem.end_date + 'T12:00:00').getTime() - new Date(todayISO() + 'T12:00:00').getTime()) / 86_400_000)
     : 0
+
+  // Preview only — delete_membership recomputes this authoritatively server-side.
+  // Refund = (gross fee / total days) * remaining days, capped at what was actually paid
+  // and netted against any outstanding fee_due.
+  const deleteMembershipPreview = (() => {
+    if (!activeMem) return null
+    const grossFee = Number(activeMem.monthly_fee) * Number(activeMem.months_paid)
+    const totalDays = Math.max(1, Math.round((new Date(activeMem.end_date + 'T00:00:00Z') - new Date(activeMem.start_date + 'T00:00:00Z')) / 86_400_000))
+    const remainingDays = Math.max(0, Math.round((new Date(activeMem.end_date + 'T00:00:00Z') - new Date(todayISO() + 'T00:00:00Z')) / 86_400_000))
+    const rawRefund = (grossFee / totalDays) * remainingDays
+    const refundAmount = Math.round(Math.max(0, Math.min(rawRefund, Number(activeMem.total_paid)) - Number(activeMem.fee_due ?? 0)))
+    return { refundAmount, remainingDays, totalDays }
+  })()
 
   const feeDueNum = Number(activeMem?.fee_due ?? 0)
   const discountValueNum = Number(discountValue) || 0
@@ -545,7 +675,17 @@ export default function StudentProfilePage() {
     <>
       <div className="page-header">
         <h1>{student.name}</h1>
-        <Link to="/students" className="btn btn-ghost">← Students</Link>
+        <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap' }}>
+          {isOwner && (memberships ?? []).length > 0 && (
+            <button
+              type="button" className="btn btn-ghost"
+              onClick={() => { setTransferBranchId(''); setTransferError(''); setTransferOpen(true) }}
+            >
+              🔀 Transfer Branch
+            </button>
+          )}
+          <Link to="/students" className="btn btn-ghost">← Students</Link>
+        </div>
       </div>
 
       <div className="profile-summary-grid">
@@ -563,7 +703,7 @@ export default function StudentProfilePage() {
                     {isPaused && <span style={{ marginLeft: 6, background: '#ff990020', color: '#ffaa44', padding: '1px 6px', borderRadius: 4, fontSize: '0.72rem', fontWeight: 700 }}>ON HOLD</span>}
                   </span>
                 )],
-                activeMem && ['Cabin', activeMem.cabin_no ?? 'Floating'],
+                activeMem && ['Cabin', activeMem.cabin_no ?? (isPaused && activeMem.category === 'permanent' ? 'Released (on hold)' : 'Floating')],
                 activeMem && ['Started', formatDate(activeMem.start_date)],
                 activeMem && ['Expires', formatDate(activeMem.end_date)],
                 activeMem && ['Days Left', (
@@ -664,14 +804,15 @@ export default function StudentProfilePage() {
               <>
                 <p style={{ color: 'var(--text-muted)', fontSize: '0.85rem', marginBottom: '0.75rem' }}>
                   Membership is on hold. Days paused will be added back when resumed.
+                  {activeMem.category === 'permanent' && !activeMem.desk_id && ' Their cabin was released while on hold and given up for other students — pick a cabin to resume.'}
                 </p>
                 <button
                   type="button" className="btn btn-primary"
                   style={{ width: '100%', marginBottom: '0.5rem' }}
-                  onClick={() => handleResume(activeMem.id)}
+                  onClick={() => activeMem.category === 'permanent' && !activeMem.desk_id ? setResumeCabinOpen(true) : handleResume(activeMem.id)}
                   disabled={holdLoading}
                 >
-                  {holdLoading ? 'Resuming…' : '▶ Resume Membership'}
+                  {holdLoading ? 'Resuming…' : activeMem.category === 'permanent' && !activeMem.desk_id ? '🪑 Select Cabin & Resume' : '▶ Resume Membership'}
                 </button>
               </>
             ) : (
@@ -705,6 +846,19 @@ export default function StudentProfilePage() {
                   </button>
                 )}
               </div>
+            )}
+            {isOwner && (
+              <button
+                type="button"
+                style={{
+                  width: '100%', padding: '0.6rem', fontWeight: 700, cursor: 'pointer', marginTop: '0.5rem',
+                  background: 'rgba(255,60,60,0.08)', border: '1px solid rgba(255,60,60,0.4)',
+                  color: '#ff8888', borderRadius: 999,
+                }}
+                onClick={() => { setDeleteMembershipError(''); setDeleteMembershipOpen(true) }}
+              >
+                🗑️ Delete Membership
+              </button>
             )}
             <div className="modal-actions">
               <button type="button" className="btn btn-ghost" onClick={() => setOpenPanel(null)}>Close</button>
@@ -1214,6 +1368,7 @@ export default function StudentProfilePage() {
           membership={activeMem}
           tempPackages={tempPackages}
           permPackages={permPackages}
+          isOwner={isOwner}
           onClose={() => setPlanChangeOpen(false)}
           onDone={() => { setPlanChangeOpen(false); refresh() }}
         />
@@ -1225,6 +1380,16 @@ export default function StudentProfilePage() {
           branchId={student.branch_id}
           onClose={() => setCabinChangeOpen(false)}
           onDone={() => { setCabinChangeOpen(false); refresh() }}
+        />
+      )}
+
+      {resumeCabinOpen && activeMem && (
+        <ResumeCabinModal
+          branchId={student.branch_id}
+          loading={holdLoading}
+          error={holdError}
+          onClose={() => setResumeCabinOpen(false)}
+          onSubmit={(deskId) => handleResume(activeMem.id, deskId)}
         />
       )}
 
@@ -1404,6 +1569,113 @@ export default function StudentProfilePage() {
             )}
             <div className="modal-actions">
               <button type="button" className="btn btn-primary" onClick={() => setCashbackNotice(null)}>Got it</button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {transferOpen && (
+        <div className="modal-overlay" onClick={() => setTransferOpen(false)}>
+          <div className="modal" style={{ maxWidth: 420 }} onClick={(e) => e.stopPropagation()}>
+            <h2 style={{ color: 'var(--accent)', marginBottom: '0.5rem' }}>🔀 Transfer Branch</h2>
+            <p style={{ color: 'var(--text-muted)', fontSize: '0.82rem', marginBottom: '0.75rem' }}>
+              Permanently moves {student.name} to another branch.
+              {activeMem?.category === 'permanent'
+                ? ' Their current cabin will be released here; a cabin at the destination branch must be picked below.'
+                : ' An active locker will be released.'}
+            </p>
+            <div className="form-group">
+              <label>Destination Branch</label>
+              <select value={transferBranchId} onChange={(e) => setTransferBranchId(e.target.value)}>
+                <option value="">Select branch…</option>
+                {branches.filter(b => b.id !== student.branch_id).map(b => (
+                  <option key={b.id} value={b.id}>{b.name}</option>
+                ))}
+              </select>
+            </div>
+            {activeMem?.category === 'permanent' && transferBranchId && (
+              <div className="form-group">
+                <label>Cabin at Destination Branch</label>
+                {transferDesks === null ? (
+                  <p style={{ color: 'var(--text-muted)' }}>Loading…</p>
+                ) : transferDesks.length === 0 ? (
+                  <p style={{ color: '#ff8888', fontSize: '0.82rem' }}>No free cabins at this branch — transfer isn't possible until one opens up.</p>
+                ) : (
+                  <select value={transferDeskId} onChange={(e) => setTransferDeskId(e.target.value)}>
+                    <option value="">Select a cabin</option>
+                    {transferDesks.map(d => <option key={d.id} value={d.id}>{d.label}</option>)}
+                  </select>
+                )}
+              </div>
+            )}
+            {transferError && <p className="error-msg">{transferError}</p>}
+            <div className="modal-actions">
+              <button type="button" className="btn btn-ghost" onClick={() => setTransferOpen(false)}>Cancel</button>
+              <button
+                type="button" className="btn btn-primary"
+                onClick={handleTransferBranch}
+                disabled={
+                  transferLoading || !transferBranchId ||
+                  (activeMem?.category === 'permanent' && (!transferDesks?.length || !transferDeskId))
+                }
+              >
+                {transferLoading ? 'Transferring…' : 'Confirm Transfer'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {deleteMembershipOpen && activeMem && (
+        <div className="modal-overlay" onClick={() => setDeleteMembershipOpen(false)}>
+          <div className="modal" style={{ maxWidth: 420 }} onClick={(e) => e.stopPropagation()}>
+            <h2 style={{ color: '#ff8888', marginBottom: '0.5rem' }}>🗑️ Delete Membership</h2>
+            <p style={{ color: 'var(--text-muted)', fontSize: '0.82rem', marginBottom: '0.75rem' }}>
+              Ends {student.name}'s membership immediately{activeMem.category === 'permanent' ? ' and releases their cabin' : ''}. This can't be undone.
+            </p>
+            {deleteMembershipPreview && (
+              <div className="card" style={{ marginBottom: '0.75rem', background: 'rgba(255,60,60,0.05)' }}>
+                <p className="mono" style={{ color: '#ff8888', fontSize: '1.15rem', fontWeight: 700 }}>
+                  Refund: {formatCurrency(deleteMembershipPreview.refundAmount)}
+                </p>
+                <p style={{ fontSize: '0.78rem', color: 'var(--text-muted)', marginTop: '0.3rem' }}>
+                  Prorated for {deleteMembershipPreview.remainingDays} of {deleteMembershipPreview.totalDays} unused day(s), capped at what was paid{feeDueNum > 0 ? `, minus ${formatCurrency(feeDueNum)} still due` : ''}.
+                </p>
+              </div>
+            )}
+            {deleteMembershipError && <p className="error-msg">{deleteMembershipError}</p>}
+            <div className="modal-actions">
+              <button type="button" className="btn btn-ghost" onClick={() => setDeleteMembershipOpen(false)}>Cancel</button>
+              <button
+                type="button"
+                style={{
+                  padding: '0.55rem 1.1rem', fontWeight: 700, cursor: 'pointer',
+                  background: '#ff8888', border: 'none', color: '#1a0000', borderRadius: 999,
+                }}
+                onClick={() => handleDeleteMembership(activeMem.id)}
+                disabled={deleteMembershipLoading}
+              >
+                {deleteMembershipLoading ? 'Deleting…' : 'Confirm Delete'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {deleteMembershipNotice != null && (
+        <div className="modal-overlay" onClick={() => setDeleteMembershipNotice(null)}>
+          <div className="modal" style={{ maxWidth: 380 }} onClick={(e) => e.stopPropagation()}>
+            <h2>🗑️ Membership Deleted</h2>
+            <div className="card" style={{ margin: '1rem 0', background: 'rgba(255,60,60,0.06)' }}>
+              <p className="mono" style={{ color: '#ff8888', fontSize: '1.2rem', fontWeight: 700 }}>
+                {formatCurrency(deleteMembershipNotice)}
+              </p>
+              <p style={{ fontSize: '0.85rem', color: 'var(--text-muted)', marginTop: '0.3rem' }}>
+                {deleteMembershipNotice > 0 ? 'Handed to the student as cash for their unused days.' : 'No refund was due.'}
+              </p>
+            </div>
+            <div className="modal-actions">
+              <button type="button" className="btn btn-primary" onClick={() => setDeleteMembershipNotice(null)}>Got it</button>
             </div>
           </div>
         </div>

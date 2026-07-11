@@ -69,12 +69,12 @@ export function useMessageAlerts(branchId, currentStaffId) {
         if (m.sender_staff_id === currentStaffId) continue
         // Don't surface messages that arrived on a previous day (e.g. staff was offline
         // for a while) — they're still marked seen above so they never resurface later.
-        if (!isToday(m.created_at)) continue
+        if (!isToday(m.sent_at)) continue
         const senderName = m.staff?.display_name || m.staff?.username || 'Staff'
         newToasts.push({
           id: `msg:${m.id}`, level: 'message',
           message: `${senderName}: ${m.content}`,
-          createdAt: Date.parse(m.created_at),
+          createdAt: Date.parse(m.sent_at),
         })
         fireNativeNotification(`💬 ${senderName}`, m.content)
       }

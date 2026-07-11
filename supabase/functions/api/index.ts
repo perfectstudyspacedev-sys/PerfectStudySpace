@@ -124,10 +124,18 @@ async function getOwnerStaffIds(db: ReturnType<typeof adminClient>): Promise<str
 const IST_OFFSET_MS = 5.5 * 60 * 60 * 1000;
 function todayISO() { return new Date(Date.now() + IST_OFFSET_MS).toISOString().slice(0, 10); }
 
+// Pure UTC calendar arithmetic — "dateStr + T12:00:00" (no timezone designator) is parsed
+// as *local* time by the JS Date constructor, and if the runtime's local timezone doesn't
+// happen to be UTC, that silently shifts the result by a day. Using Date.UTC directly and
+// getUTCDate/etc. sidesteps that ambiguity entirely, so a start date always advances by
+// exactly N months (clamped to the last day of the target month on overflow, e.g. Jan 31 +
+// 1 month -> Feb 28/29, not a roll into March).
 function addMonths(dateStr: string, months: number): string {
-  const d = new Date(dateStr + "T12:00:00");
-  d.setMonth(d.getMonth() + months);
-  return d.toISOString().slice(0, 10);
+  const [y, m, d] = dateStr.split("-").map(Number);
+  const date = new Date(Date.UTC(y, m - 1, d));
+  date.setUTCMonth(date.getUTCMonth() + months);
+  if (date.getUTCDate() !== d) date.setUTCDate(0);
+  return date.toISOString().slice(0, 10);
 }
 
 // Hopes branch lockers aren't numbered 1..capacity — the physical units are labeled
@@ -149,9 +157,19 @@ function lockerNumberSequence(branchName: string | undefined | null, capacity: n
 }
 
 function addDays(dateStr: string, days: number): string {
-  const d = new Date(dateStr + "T12:00:00");
-  d.setDate(d.getDate() + days);
-  return d.toISOString().slice(0, 10);
+  const [y, m, d] = dateStr.split("-").map(Number);
+  const date = new Date(Date.UTC(y, m - 1, d));
+  date.setUTCDate(date.getUTCDate() + days);
+  return date.toISOString().slice(0, 10);
+}
+
+// A membership's end date is billing-cycle style: one day short of the same day N months
+// out, so a period never spills into the day it would "restart" on (e.g. 1 month from the
+// 15th ends the 14th, not the 15th). Starting on the 1st is the case that makes this
+// legible — 1 month from the 1st ends the last day of that same month, not the 1st of the
+// next one.
+function endDateForMonths(startDate: string, months: number): string {
+  return addDays(addMonths(startDate, months), -1);
 }
 
 // A recurring task's "anchor" is its due_date (or, failing that, the day it was created).
@@ -502,7 +520,7 @@ Deno.serve(async (req) => {
       const fromTs = range.from + "T00:00:00Z";
       const toTs = range.to + "T23:59:59Z";
 
-      const [{ data: recentBookings }, { data: recentMemberships }, { data: recentTxns }, { data: recentCashbacks }] = await Promise.all([
+      const [{ data: recentBookings }, { data: recentMemberships }, { data: recentTxns }, { data: recentCashbacks }, { data: recentPayouts }] = await Promise.all([
         db.from("bookings").select("id, booking_type, status, created_at, students(name, phone)")
           .eq("branch_id", branchId).gte("created_at", fromTs).lte("created_at", toTs),
         db.from("memberships").select("id, category, total_paid, created_at, students(name, phone)")
@@ -514,6 +532,9 @@ Deno.serve(async (req) => {
         db.from("cashbacks").select("id, cashback_type, cashback_value, status, redeemed_amount, created_at, redeemed_at, students(name, phone)")
           .eq("branch_id", branchId)
           .or(`and(created_at.gte.${fromTs},created_at.lte.${toTs}),and(redeemed_at.gte.${fromTs},redeemed_at.lte.${toTs})`),
+        db.from("payouts").select("id, payout_type, amount, created_at, students(name, phone)")
+          .eq("branch_id", branchId).eq("payout_type", "membership_refund")
+          .gte("created_at", fromTs).lte("created_at", toTs),
       ]);
 
       const cashbackFeed: Record<string, unknown>[] = [];
@@ -552,6 +573,11 @@ Deno.serve(async (req) => {
           time: t.created_at, status: t.payment_mode, amount: Number(t.amount),
         })),
         ...cashbackFeed,
+        ...(recentPayouts ?? []).map(p => ({
+          id: `payout-${p.id}`, kind: "membership_refund", label: "Membership deleted — refund",
+          studentName: p.students?.name, studentPhone: p.students?.phone,
+          time: p.created_at, status: "refunded", amount: -Number(p.amount),
+        })),
       ].sort((a: { time: string }, b: { time: string }) => b.time.localeCompare(a.time));
 
       return json({ recentActivity: feed });
@@ -737,10 +763,11 @@ Deno.serve(async (req) => {
       const {
         branchId, name, phone, category, hoursPerDay, timings, monthsPaid,
         paymentMode, course, lockerNo, withLocker,
-        advanceAmount, emergencyContact, referralSource,
+        advanceAmount, emergencyContact, referralSource, startDate: customStartDate,
       } = payload;
       if (!requireBranch(staff, branchId)) return err("Branch access denied", 403);
       if (!emergencyContact) return err("Emergency contact is required");
+      if (phone === emergencyContact) return err("Emergency contact cannot be the same as the primary phone number");
       const validReferrals = ["google_search", "instagram", "word_of_mouth", "flex", "ai_platform"];
       if (!validReferrals.includes(referralSource)) return err("Please select how the student heard about us");
 
@@ -756,8 +783,8 @@ Deno.serve(async (req) => {
       const discount = multiMonthDiscount(months);
       const gross = monthlyFee * months;
       const totalPaid = gross * (1 - discount / 100);
-      const startDate = todayISO();
-      const endDate = addMonths(startDate, months);
+      const startDate = isOwner(staff) && customStartDate ? customStartDate : todayISO();
+      const endDate = endDateForMonths(startDate, months);
       const dueDate = addMonths(startDate, 1);
       const seatType = category === "permanent" ? "fixed" : "floating";
       let deskId = null;
@@ -1136,38 +1163,63 @@ Deno.serve(async (req) => {
       if (!requireBranch(staff, mem.branch_id)) return err("Branch access denied", 403);
       if (mem.is_paused) return err("Membership is already on hold");
       const pausedAtNow = new Date().toISOString();
+
+      // A permanent member's cabin sits idle while they're on hold — free it up so it can
+      // be assigned to someone else in the meantime, rather than reserving a seat nobody's
+      // using. Resuming will require picking a cabin again (possibly a different one).
+      const releasingDesk = mem.category === "permanent" && !!mem.desk_id;
+      if (releasingDesk) {
+        const { error: deskErr } = await db.from("desks").update({ status: "free", seat_type: "floating", assigned_student_id: null }).eq("id", mem.desk_id);
+        if (deskErr) return err(deskErr.message);
+      }
+
       await db.from("memberships").update({
         is_paused: true, paused_at: pausedAtNow,
+        ...(releasingDesk ? { desk_id: null, cabin_no: null } : {}),
       }).eq("id", membershipId);
       await db.from("membership_holds").insert({
         membership_id: membershipId, student_id: mem.student_id, branch_id: mem.branch_id,
         paused_at: pausedAtNow,
       });
-      return json({ ok: true });
+      return json({ ok: true, deskReleased: releasingDesk });
     }
 
     if (action === "resume_membership") {
-      const { membershipId } = payload;
+      const { membershipId, deskId } = payload;
       const { data: mem } = await db.from("memberships").select("*").eq("id", membershipId).single();
       if (!mem) return err("Membership not found");
       if (!requireBranch(staff, mem.branch_id)) return err("Branch access denied", 403);
       if (!mem.is_paused) return err("Membership is not on hold");
 
+      // Their old cabin was freed for reuse when they paused, so a permanent membership
+      // needs a (possibly new) cabin picked before it can resume, to avoid two students
+      // colliding on the same seat.
+      let newDeskId = mem.desk_id;
+      let newCabinNo = mem.cabin_no;
+      if (mem.category === "permanent" && !mem.desk_id) {
+        if (!deskId) return err("Select a cabin to resume this permanent membership");
+        const { data: desk } = await db.from("desks").select("*").eq("id", deskId).eq("branch_id", mem.branch_id).single();
+        if (!desk) return err("Cabin not found");
+        if (desk.status !== "free") return err("Selected cabin is not available");
+        const { error: deskErr } = await db.from("desks").update({ status: "reserved", seat_type: "fixed", assigned_student_id: mem.student_id }).eq("id", deskId);
+        if (deskErr) return err(deskErr.message);
+        newDeskId = deskId;
+        newCabinNo = desk.label;
+      }
+
       const pausedAt = new Date(mem.paused_at);
       const daysPaused = Math.max(1, Math.ceil((Date.now() - pausedAt.getTime()) / 86_400_000));
-      const newEnd = new Date(mem.end_date + "T12:00:00");
-      newEnd.setDate(newEnd.getDate() + daysPaused);
-      const newEndDate = newEnd.toISOString().slice(0, 10);
+      const newEndDate = addDays(mem.end_date, daysPaused);
 
       await db.from("memberships").update({
         is_paused: false, paused_at: null,
         hold_days: (mem.hold_days ?? 0) + daysPaused,
-        end_date: newEndDate,
+        end_date: newEndDate, desk_id: newDeskId, cabin_no: newCabinNo,
       }).eq("id", membershipId);
       await db.from("membership_holds")
         .update({ resumed_at: new Date().toISOString(), days_paused: daysPaused })
         .eq("membership_id", membershipId).is("resumed_at", null);
-      return json({ ok: true, daysPaused, newEndDate });
+      return json({ ok: true, daysPaused, newEndDate, cabinNo: newCabinNo });
     }
 
     // ─── CHECKOUT ───
@@ -1372,6 +1424,80 @@ Deno.serve(async (req) => {
         overtimeSessions: overtimeSessions ?? [], holds: holds ?? [], discounts: discounts ?? [],
         cashbacks, planChanges: planChanges ?? [],
       });
+    }
+
+    // Owner-only: permanently move a student (and their active membership) to a
+    // different branch. A permanent-cabin desk is physically tied to its old branch, so
+    // it's released there rather than dragged along — a permanent member must be handed
+    // a specific free desk at the destination branch instead, and the transfer is refused
+    // outright if none are available, rather than silently leaving them without a seat.
+    if (action === "transfer_student_branch") {
+      if (!isOwner(staff)) return err("Owner only", 403);
+      const { studentId, newBranchId, deskId } = payload;
+      if (!studentId || !newBranchId) return err("Student and destination branch are required");
+
+      const { data: student } = await db.from("students").select("id, branch_id").eq("id", studentId).single();
+      if (!student) return err("Student not found");
+      if (student.branch_id === newBranchId) return err("Student is already at this branch");
+
+      const { data: newBranch } = await db.from("branches").select("id").eq("id", newBranchId).eq("is_active", true).maybeSingle();
+      if (!newBranch) return err("Destination branch not found");
+
+      const { data: activeMem } = await db.from("memberships").select("id, desk_id, category").eq("student_id", studentId).eq("is_active", true).maybeSingle();
+
+      let newDesk: { id: string; label: string } | null = null;
+      if (activeMem?.category === "permanent") {
+        if (!deskId) return err("Select a cabin at the destination branch");
+        const { data: desk } = await db.from("desks").select("id, label, status").eq("id", deskId).eq("branch_id", newBranchId).maybeSingle();
+        if (!desk) return err("Cabin not found at the destination branch");
+        if (desk.status !== "free") return err("Selected cabin is no longer available — pick another one");
+        newDesk = desk;
+      }
+
+      if (activeMem?.desk_id) {
+        const { error: releaseErr } = await db.from("desks").update({ status: "free", seat_type: "floating", assigned_student_id: null }).eq("id", activeMem.desk_id);
+        if (releaseErr) return err(releaseErr.message);
+      }
+      if (newDesk) {
+        const { error: reserveErr } = await db.from("desks").update({ status: "reserved", seat_type: "fixed", assigned_student_id: studentId }).eq("id", newDesk.id);
+        if (reserveErr) return err(reserveErr.message);
+      }
+      if (activeMem) {
+        const { error: memErr } = await db.from("memberships").update({
+          branch_id: newBranchId,
+          desk_id: newDesk?.id ?? null, cabin_no: newDesk?.label ?? null,
+          seat_type: newDesk ? "fixed" : activeMem.category === "permanent" ? "floating" : undefined,
+        }).eq("id", activeMem.id);
+        if (memErr) return err(memErr.message);
+      }
+
+      await db.from("lockers").update({ is_active: false, deposit_returned: true }).eq("student_id", studentId).eq("is_active", true);
+
+      const { error } = await db.from("students").update({ branch_id: newBranchId }).eq("id", studentId);
+      if (error) return err(error.message);
+
+      return json({ ok: true });
+    }
+
+    // One-off owner-triggered repair for rows written before the addMonths/addDays
+    // timezone fix and the switch to an inclusive-end billing convention — recomputes
+    // end_date/due_date purely from each membership's own start_date, months_paid and
+    // accumulated hold_days (the source-of-truth fields, which were never wrong), so
+    // it's safe to run more than once and only touches rows that actually drifted.
+    if (action === "fix_membership_dates") {
+      if (!isOwner(staff)) return err("Owner only", 403);
+      const { data: memberships } = await db.from("memberships")
+        .select("id, start_date, months_paid, hold_days, end_date, due_date");
+      let fixed = 0;
+      for (const m of memberships ?? []) {
+        const correctEndDate = addDays(endDateForMonths(m.start_date, m.months_paid), m.hold_days ?? 0);
+        const correctDueDate = addMonths(m.start_date, 1);
+        if (correctEndDate !== m.end_date || correctDueDate !== m.due_date) {
+          await db.from("memberships").update({ end_date: correctEndDate, due_date: correctDueDate }).eq("id", m.id);
+          fixed++;
+        }
+      }
+      return json({ ok: true, checked: (memberships ?? []).length, fixed });
     }
 
     if (action === "get_top_students") {
@@ -1834,7 +1960,7 @@ Deno.serve(async (req) => {
         .in("branch_id", branchFilter)
         .gte("created_at", range.from + "T00:00:00Z")
         .lte("created_at", range.to + "T23:59:59Z");
-      const payoutTotals = { cashback: 0, locker_deposit: 0, food_pass_refund: 0 };
+      const payoutTotals = { cashback: 0, locker_deposit: 0, food_pass_refund: 0, membership_refund: 0 };
       for (const p of payouts ?? []) {
         payoutTotals[p.payout_type as keyof typeof payoutTotals] = (payoutTotals[p.payout_type as keyof typeof payoutTotals] ?? 0) + Number(p.amount);
       }
@@ -1884,19 +2010,25 @@ Deno.serve(async (req) => {
       const toTs = range.to + "T23:59:59Z";
 
       const wantCashbacks = !category || category === "cashback";
-      const wantTxns = !category || category !== "cashback";
+      const wantMembershipRefunds = !category || category === "membership_refund";
+      const wantTxns = !category || (category !== "cashback" && category !== "membership_refund");
 
       let q = db.from("transactions").select("*, students(name, phone), branches(name)")
         .eq("branch_id", bid).gte("created_at", fromTs).lte("created_at", toTs)
         .order("created_at", { ascending: false });
       if (category && wantTxns) q = q.eq("category", category);
 
-      const [{ data }, { data: cashbackRows }] = await Promise.all([
+      const [{ data }, { data: cashbackRows }, { data: refundRows }] = await Promise.all([
         wantTxns ? q : Promise.resolve({ data: [] as unknown[] }),
         wantCashbacks
           ? db.from("cashbacks").select("id, cashback_type, cashback_value, status, redeemed_amount, created_at, redeemed_at, students(name, phone), branches(name)")
             .eq("branch_id", bid)
             .or(`and(created_at.gte.${fromTs},created_at.lte.${toTs}),and(redeemed_at.gte.${fromTs},redeemed_at.lte.${toTs})`)
+          : Promise.resolve({ data: [] as unknown[] }),
+        wantMembershipRefunds
+          ? db.from("payouts").select("id, amount, created_at, students(name, phone), branches(name)")
+            .eq("branch_id", bid).eq("payout_type", "membership_refund")
+            .gte("created_at", fromTs).lte("created_at", toTs)
           : Promise.resolve({ data: [] as unknown[] }),
       ]);
 
@@ -1924,7 +2056,14 @@ Deno.serve(async (req) => {
         }
       }
 
-      let rows = [...(data ?? []), ...cashbackFeed].sort((a: { created_at: string }, b: { created_at: string }) => b.created_at.localeCompare(a.created_at));
+      type RefundRow = { id: string; amount: number; created_at: string; students?: unknown; branches?: unknown };
+      const refundFeed = (refundRows as RefundRow[] ?? []).map(r => ({
+        id: `membership-refund-${r.id}`, category: "Membership deleted — refund",
+        amount: -Number(r.amount), payment_mode: null, created_at: r.created_at,
+        students: r.students, branches: r.branches,
+      }));
+
+      let rows = [...(data ?? []), ...cashbackFeed, ...refundFeed].sort((a: { created_at: string }, b: { created_at: string }) => b.created_at.localeCompare(a.created_at));
       if (search) {
         const s = search.toLowerCase();
         rows = rows.filter((r: { students?: { name?: string; phone?: string } }) => r.students?.name?.toLowerCase().includes(s) || r.students?.phone?.includes(s));
@@ -2359,6 +2498,18 @@ Deno.serve(async (req) => {
 
       const { error } = await db.from("staff").update(updates).eq("id", staffId);
       if (error) return err(error.message);
+
+      // Deactivation removes the account permanently, so its tasks (recurring and
+      // one-time alike) are removed too rather than left dangling — new occurrences
+      // were already blocked by the is_active gate in list_tasks/get_task_completion_report,
+      // this clears out what already existed.
+      if (isActive === false) {
+        const { data: ownTasks } = await db.from("tasks").select("id").eq("assigned_to_staff_id", staffId);
+        const taskIds = (ownTasks ?? []).map(t => t.id);
+        if (taskIds.length) await db.from("task_completions").delete().in("task_id", taskIds);
+        await db.from("tasks").delete().eq("assigned_to_staff_id", staffId);
+      }
+
       return json({ ok: true });
     }
 
@@ -2584,7 +2735,7 @@ Deno.serve(async (req) => {
     // Logged to membership_plan_changes so the closure summary can show every plan a
     // student was on during this membership period.
     if (action === "change_membership_plan") {
-      const { membershipId, newCategory, newHoursPerDay } = payload;
+      const { membershipId, newCategory, newHoursPerDay, newEndDate } = payload;
       if (!["temporary", "permanent"].includes(newCategory)) return err("Invalid category");
       const { data: mem } = await db.from("memberships").select("*").eq("id", membershipId).single();
       if (!mem) return err("Membership not found");
@@ -2594,7 +2745,9 @@ Deno.serve(async (req) => {
       const newHours = Number(newHoursPerDay);
       const newMonthlyFee = await getMembershipPackage(db, newHours, newCategory);
       if (!newMonthlyFee) return err("Invalid membership package for that category/hours combination");
-      if (newCategory === mem.category && newHours === Number(mem.hours_per_day)) {
+      const planUnchanged = newCategory === mem.category && newHours === Number(mem.hours_per_day);
+      const wantsEndDateChange = isOwner(staff) && newEndDate && newEndDate !== mem.end_date;
+      if (planUnchanged && !wantsEndDateChange) {
         return err("That's already the current plan");
       }
 
@@ -2647,17 +2800,23 @@ Deno.serve(async (req) => {
         }
       }
 
+      // due_date is always the day right after end_date (the inclusive-end billing
+      // convention — see endDateForMonths) — a manual end-date edit must shift it in step
+      // so the two never drift apart.
       await db.from("memberships").update({
         category: newCategory, hours_per_day: newHours, monthly_fee: newMonthlyFee,
         seat_type: seatType, desk_id: deskId, cabin_no: cabinNo, fee_due: newFeeDue,
+        ...(wantsEndDateChange ? { end_date: newEndDate, due_date: addDays(newEndDate, 1) } : {}),
       }).eq("id", membershipId);
 
-      await db.from("membership_plan_changes").insert({
-        membership_id: membershipId, student_id: mem.student_id, branch_id: mem.branch_id,
-        old_category: mem.category, old_hours_per_day: mem.hours_per_day, old_monthly_fee: mem.monthly_fee,
-        new_category: newCategory, new_hours_per_day: newHours, new_monthly_fee: newMonthlyFee,
-        prorated_amount: proratedAmount, changed_by_staff_id: staff.id,
-      });
+      if (!planUnchanged) {
+        await db.from("membership_plan_changes").insert({
+          membership_id: membershipId, student_id: mem.student_id, branch_id: mem.branch_id,
+          old_category: mem.category, old_hours_per_day: mem.hours_per_day, old_monthly_fee: mem.monthly_fee,
+          new_category: newCategory, new_hours_per_day: newHours, new_monthly_fee: newMonthlyFee,
+          prorated_amount: proratedAmount, changed_by_staff_id: staff.id,
+        });
+      }
 
       await refreshStudentStatus(db, mem.student_id);
       return json({ ok: true, proratedAmount, newFeeDue, bankedAsCashback, remainingDays });
@@ -2730,8 +2889,11 @@ Deno.serve(async (req) => {
       const feeDue = Math.max(totalFee - feePaid, 0);
 
       const today = todayISO();
-      const startDate = mem.end_date < today ? today : mem.end_date;
-      const endDate = addMonths(startDate, months);
+      // A renewal made before the current period lapses picks up the very next day — the
+      // current end_date is already the last day the student is covered through under the
+      // inclusive-end convention above, so starting there again would double-count it.
+      const startDate = mem.end_date < today ? today : addDays(mem.end_date, 1);
+      const endDate = endDateForMonths(startDate, months);
       const dueDate = addMonths(startDate, 1);
       const monthLabel = new Date(startDate).toLocaleString("en-US", { month: "long", year: "numeric" });
 
@@ -2841,6 +3003,53 @@ Deno.serve(async (req) => {
         locker: locker ?? null,
         planChanges: planChanges ?? [],
       });
+    }
+
+    // Ends a membership immediately and refunds the prorated value of its unused days —
+    // distinct from close_membership (which settles locker/food pass/cashback/overtime for
+    // a normal end-of-term closure). "Membership amount paid" for this formula is the
+    // pre-multi-month-discount gross (monthly_fee * months_paid), per how it was specified;
+    // the raw result is capped at what was actually collected (total_paid) so a discounted
+    // or partially-paid membership never refunds more than the student actually paid, and
+    // any outstanding fee_due is netted out of the refund rather than separately collected.
+    if (action === "delete_membership") {
+      if (!isOwner(staff)) return err("Owner only", 403);
+      const { membershipId } = payload;
+      const { data: mem } = await db.from("memberships").select("*").eq("id", membershipId).single();
+      if (!mem) return err("Membership not found");
+      if (!requireBranch(staff, mem.branch_id)) return err("Branch access denied", 403);
+      if (!mem.is_active) return err("Membership is not active");
+
+      const today = todayISO();
+      const grossFee = Number(mem.monthly_fee) * Number(mem.months_paid);
+      const totalDays = Math.max(1, Math.round(
+        (new Date(mem.end_date + "T00:00:00Z").getTime() - new Date(mem.start_date + "T00:00:00Z").getTime()) / 86_400_000,
+      ));
+      const remainingDays = Math.max(0, Math.round(
+        (new Date(mem.end_date + "T00:00:00Z").getTime() - new Date(today + "T00:00:00Z").getTime()) / 86_400_000,
+      ));
+      const rawRefund = (grossFee / totalDays) * remainingDays;
+      const feeDue = Number(mem.fee_due ?? 0);
+      const refundAmount = Math.round(Math.max(0, Math.min(rawRefund, Number(mem.total_paid)) - feeDue));
+
+      await db.from("memberships").update({ is_active: false, fee_due: 0 }).eq("id", membershipId);
+
+      if (mem.desk_id) {
+        await db.from("desks").update({ status: "free", seat_type: "floating", assigned_student_id: null }).eq("id", mem.desk_id);
+      }
+
+      if (refundAmount > 0) {
+        await db.from("payouts").insert({
+          student_id: mem.student_id, branch_id: mem.branch_id, payout_type: "membership_refund",
+          amount: refundAmount, notes: `Prorated refund for ${remainingDays} unused of ${totalDays} day(s) — membership deleted`,
+          created_by_staff_id: staff.id,
+        });
+      }
+
+      await db.from("alerts").update({ status: "resolved" }).eq("student_id", mem.student_id).eq("alert_type", "expiry").eq("status", "pending");
+      await refreshStudentStatus(db, mem.student_id);
+
+      return json({ ok: true, refundAmount, remainingDays, totalDays, grossFee, feeDue });
     }
 
     if (action === "close_membership") {

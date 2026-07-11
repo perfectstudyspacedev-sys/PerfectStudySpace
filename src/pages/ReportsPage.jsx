@@ -15,7 +15,7 @@ const ACTIVITY_BOOKING_LABELS = { walkin: 'Walk-in Booking', temporary: 'Tempora
 
 function describeActivity(a) {
   if (a.kind === 'booking') return ACTIVITY_BOOKING_LABELS[a.label] ?? a.label
-  if (a.kind === 'membership' || a.kind === 'cashback') return a.label
+  if (a.kind === 'membership' || a.kind === 'cashback' || a.kind === 'membership_refund') return a.label
   return `Payment — ${ACTIVITY_CAT_LABELS[a.label] ?? a.label}`
 }
 
@@ -377,7 +377,7 @@ export default function ReportsPage() {
                     <td>{a.studentName ?? '-'} {a.studentPhone && <span className="mono" style={{ color: 'var(--text-muted)' }}>({a.studentPhone})</span>}</td>
                     <td className="cap">{describeActivity(a)}</td>
                     <td className="cap">{a.status ?? '-'}</td>
-                    <td className="mono">{a.amount != null ? formatCurrency(a.amount) : '-'}</td>
+                    <td className="mono" style={a.amount < 0 ? { color: '#ff8888' } : undefined}>{a.amount != null ? formatCurrency(a.amount) : '-'}</td>
                   </tr>
                 ))}
               </tbody>

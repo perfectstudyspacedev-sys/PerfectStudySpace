@@ -23,6 +23,7 @@ const REFERRAL_OPTIONS = [
 
 // ── Active Members tab ─────────────────────────────────────────────────────
 function ActiveMembersTab({ branchId, tempPackages, permPackages }) {
+  const navigate = useNavigate()
   const [members, setMembers] = useState([])
   const [loading, setLoading] = useState(true)
   const [actionLoading, setActionLoading] = useState(null)
@@ -130,12 +131,22 @@ function ActiveMembersTab({ branchId, tempPackages, permPackages }) {
     finally { setActionLoading(null) }
   }
 
-  const handleResume = async (membershipId) => {
+  const handleResume = async (membershipId, studentId) => {
     setActionLoading(membershipId + ':resume')
     try {
       await api('resume_membership', { membershipId })
       load()
-    } catch { /* ignore */ }
+    } catch (err) {
+      // A permanent membership whose cabin was released while on hold needs one picked —
+      // that picker only lives on the student's profile page, so send staff there instead
+      // of failing silently.
+      if (err.message?.toLowerCase().includes('cabin') && studentId) {
+        window.alert(`${err.message} — opening their profile to pick one.`)
+        navigate(`/students/${studentId}`)
+      } else {
+        window.alert(err.message)
+      }
+    }
     finally { setActionLoading(null) }
   }
 
@@ -319,7 +330,7 @@ function ActiveMembersTab({ branchId, tempPackages, permPackages }) {
               const daysLeft = Math.ceil((new Date(m.end_date) - new Date()) / 86_400_000)
               const expiringSoonRow = !isExpired && daysLeft <= 7
               return (
-                <tr key={m.membership_id} className={isExpired ? 'row-overdue' : ''}>
+                <tr key={m.membership_id} className={isExpired ? 'row-overdue' : expiringSoonRow ? 'row-expiring-soon' : ''}>
                   <td>
                     <Link to={`/students/${m.student_id}`} style={{ color: isExpired ? '#ff8888' : 'var(--accent)' }}>{m.student_name}</Link>
                     <div className="mono" style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>{m.student_phone}</div>
@@ -393,7 +404,7 @@ function ActiveMembersTab({ branchId, tempPackages, permPackages }) {
                               type="button" className="btn btn-primary"
                               style={{ padding: '0.3rem 0.7rem', fontSize: '0.8rem' }}
                               disabled={actionLoading === m.membership_id + ':resume'}
-                              onClick={() => handleResume(m.membership_id)}
+                              onClick={() => handleResume(m.membership_id, m.student_id)}
                             >▶ Resume</button>
                           ) : (
                             <button
@@ -676,6 +687,7 @@ function NewMembershipForm({ branchId, onCreated, tempPackages, permPackages }) 
   const [category, setCategory] = useState('temporary')
   const [hoursPerDay, setHoursPerDay] = useState(4)
   const [monthsPaid, setMonthsPaid] = useState(1)
+  const [startDate, setStartDate] = useState(todayISO())
   const [paymentMode, setPaymentMode] = useState('cash')
   const [paymentType, setPaymentType] = useState('full')
   const [advanceAmount, setAdvanceAmount] = useState('')
@@ -769,6 +781,7 @@ function NewMembershipForm({ branchId, onCreated, tempPackages, permPackages }) 
     if (!/^\d{10}$/.test(phone)) return setError('Phone must be 10 digits')
     if (name.trim().split(/\s+/).length < 2) return setError('Please enter the full name (first and last name)')
     if (!/^\d{10}$/.test(emergencyContact)) return setError('Emergency contact must be a 10 digit phone number')
+    if (phone === emergencyContact) return setError('Emergency contact cannot be the same as the primary phone number')
     if (!referralSource) return setError('Please select how the student heard about us')
     if (paymentType === 'partial' && (advanceNum <= 0 || advanceNum >= grandTotal)) {
       return setError('Partial payment must be more than ₹0 and less than the total — use Full Paid or Full Pending otherwise')
@@ -782,6 +795,7 @@ function NewMembershipForm({ branchId, onCreated, tempPackages, permPackages }) 
         emergencyContact, referralSource,
         withLocker, lockerNo: withLocker ? lockerNo : null,
         advanceAmount: paymentType === 'full' ? null : paymentType === 'partial' ? advanceNum : 0,
+        startDate: isOwner ? startDate : undefined,
       })
       setReceipt({ ...result, name, phone, total: grandTotal, amountPaid, amountRemaining })
       openWhatsApp(phone, waTemplate.replace(/\{name\}/gi, name))
@@ -915,6 +929,12 @@ function NewMembershipForm({ branchId, onCreated, tempPackages, permPackages }) 
             ))}
           </select>
         </div>
+        {isOwner && (
+          <div className="form-group">
+            <label>Start Date</label>
+            <input type="date" value={startDate} max={todayISO()} onChange={(e) => setStartDate(e.target.value)} />
+          </div>
+        )}
         <div className="form-group">
           <label>Locker</label>
           <div style={{ display: 'flex', gap: '0.5rem' }}>
