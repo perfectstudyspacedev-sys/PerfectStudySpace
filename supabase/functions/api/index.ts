@@ -123,6 +123,9 @@ async function getOwnerStaffIds(db: ReturnType<typeof adminClient>): Promise<str
 // today" checks, daily reports, and the End Session day-lockout.
 const IST_OFFSET_MS = 5.5 * 60 * 60 * 1000;
 function todayISO() { return new Date(Date.now() + IST_OFFSET_MS).toISOString().slice(0, 10); }
+// Same IST shift as todayISO(), but for an arbitrary timestamp (e.g. a stored paused_at)
+// instead of "now" — needed to compare calendar dates rather than raw elapsed hours.
+function toISTDateStr(isoTimestamp: string) { return new Date(new Date(isoTimestamp).getTime() + IST_OFFSET_MS).toISOString().slice(0, 10); }
 
 // Pure UTC calendar arithmetic — "dateStr + T12:00:00" (no timezone designator) is parsed
 // as *local* time by the JS Date constructor, and if the runtime's local timezone doesn't
@@ -168,8 +171,17 @@ function addDays(dateStr: string, days: number): string {
 // 15th ends the 14th, not the 15th). Starting on the 1st is the case that makes this
 // legible — 1 month from the 1st ends the last day of that same month, not the 1st of the
 // next one.
+//
+// Starting on the 29th/30th/31st needs special care: addMonths() clamps to the target
+// month's last day when that day-of-month doesn't exist there (e.g. Jan 31 + 1 month ->
+// Feb 28). That clamped value is already the correct end date — subtracting one more day
+// would double-truncate the period by a day it shouldn't lose. Only subtract when
+// addMonths preserved the exact day-of-month (i.e. no clamping happened).
 function endDateForMonths(startDate: string, months: number): string {
-  return addDays(addMonths(startDate, months), -1);
+  const startDay = Number(startDate.split("-")[2]);
+  const target = addMonths(startDate, months);
+  const targetDay = Number(target.split("-")[2]);
+  return targetDay === startDay ? addDays(target, -1) : target;
 }
 
 // A recurring task's "anchor" is its due_date (or, failing that, the day it was created).
@@ -785,7 +797,10 @@ Deno.serve(async (req) => {
       const totalPaid = gross * (1 - discount / 100);
       const startDate = isOwner(staff) && customStartDate ? customStartDate : todayISO();
       const endDate = endDateForMonths(startDate, months);
-      const dueDate = addMonths(startDate, 1);
+      // Derived the same clamp-aware way as endDate (not a raw addMonths) so a start date
+      // on the 29th/30th/31st can't make dueDate collide with a 1-month endDate instead of
+      // landing the day after it.
+      const dueDate = addDays(endDateForMonths(startDate, 1), 1);
       const seatType = category === "permanent" ? "fixed" : "floating";
       let deskId = null;
       let cabinNo = null;
@@ -1053,11 +1068,14 @@ Deno.serve(async (req) => {
       }).eq("id", studentId);
 
       // Intimate the student's home branch that they attended a different branch today.
+      // The [cross_branch] tag lets the frontend's notification hook (useMessageAlerts)
+      // recognize this as a distinct alert type — its own icon/title — instead of showing
+      // up as an indistinguishable generic chat message.
       if (isCrossBranchVisit) {
         const { data: currentBranch } = await db.from("branches").select("name").eq("id", branchId).single();
         await db.from("messages").insert({
           branch_id: student.branch_id, sender_staff_id: staff.id, recipient_type: "staff",
-          content: `${student.name} (home branch) checked in at ${currentBranch?.name ?? "another branch"} today.`,
+          content: `[cross_branch] ${student.name} (home branch) checked in at ${currentBranch?.name ?? "another branch"} today.`,
         });
       }
 
@@ -1207,8 +1225,14 @@ Deno.serve(async (req) => {
         newCabinNo = desk.label;
       }
 
-      const pausedAt = new Date(mem.paused_at);
-      const daysPaused = Math.max(1, Math.ceil((Date.now() - pausedAt.getTime()) / 86_400_000));
+      // Calendar-day difference (IST), not raw elapsed hours — pausing and resuming on the
+      // same IST calendar day is 0 days paused, not a floored-up 1. Using millisecond
+      // elapsed time here previously rounded any same-day hold up to a full day, extending
+      // the membership by a day it never actually lost.
+      const pausedDateStr = toISTDateStr(mem.paused_at);
+      const daysPaused = Math.max(0, Math.round(
+        (new Date(todayISO() + "T00:00:00Z").getTime() - new Date(pausedDateStr + "T00:00:00Z").getTime()) / 86_400_000,
+      ));
       const newEndDate = addDays(mem.end_date, daysPaused);
 
       await db.from("memberships").update({
@@ -1224,7 +1248,7 @@ Deno.serve(async (req) => {
 
     // ─── CHECKOUT ───
     if (action === "checkout_booking") {
-      const { bookingId, overtimeMinutes, overtimePaymentMode, settleFoodNow } = payload;
+      const { bookingId, overtimeMinutes, overtimePaymentMode, settleFoodNow, foodPassPaymentMode } = payload;
       const { data: booking } = await db.from("bookings").select("*").eq("id", bookingId).single();
       if (!booking) return err("Booking not found");
       if (!requireBranch(staff, booking.branch_id)) return err("Branch access denied", 403);
@@ -1237,6 +1261,32 @@ Deno.serve(async (req) => {
       const { data: foodPass } = isMember
         ? await db.from("food_passes").select("*").eq("student_id", booking.student_id).maybeSingle()
         : { data: null };
+
+      // A Food Pass balance is never allowed to end a session negative — ordering food
+      // against an insufficient balance gets one grace window (skippable at order time),
+      // but by checkout the shortfall must be collected, no skip option this time. Checked
+      // before any mutation below so a "needs collection" response leaves nothing half-done.
+      let passUnpaidBillIds: string[] = [];
+      let foodPassNewBalance = 0;
+      let foodPassShortfall = 0;
+      if (foodPass) {
+        const { data: passUnpaidBills } = await db.from("food_bills").select("id, total")
+          .eq("student_id", booking.student_id).eq("paid", false);
+        passUnpaidBillIds = (passUnpaidBills ?? []).map((b: { id: string }) => b.id);
+        const passTotal = (passUnpaidBills ?? []).reduce((s: number, b: { total: number }) => s + Number(b.total), 0);
+        const resultingBalance = Number(foodPass.balance) - passTotal;
+        if (resultingBalance < 0) {
+          foodPassShortfall = -resultingBalance;
+          if (!foodPassPaymentMode) {
+            return json({ needsFoodPassCollection: true, shortfall: foodPassShortfall });
+          }
+          // The shortfall is collected as cash/UPI below, so the pass itself settles at 0
+          // rather than carrying a negative balance forward.
+          foodPassNewBalance = 0;
+        } else {
+          foodPassNewBalance = resultingBalance;
+        }
+      }
 
       // Membership students without a pass can carry an unpaid food bill for up to 3 days
       // across sessions — check by student, not just this booking, since each day is a new booking.
@@ -1271,17 +1321,23 @@ Deno.serve(async (req) => {
 
       if (foodPass) {
         // Deduct straight from the pass — no cash prompt, no 3-day rule (that's only for
-        // students without a pass).
-        const { data: passUnpaidBills } = await db.from("food_bills").select("id, total")
-          .eq("student_id", booking.student_id).eq("paid", false);
-        if (passUnpaidBills?.length) {
-          const passTotal = passUnpaidBills.reduce((s: number, b: { total: number }) => s + Number(b.total), 0);
+        // students without a pass). Any shortfall was already gated above: if it would've
+        // gone negative, foodPassPaymentMode is guaranteed to be set here, so the balance
+        // is topped up by exactly that much in the same breath — it can never end negative.
+        if (passUnpaidBillIds.length) {
           await db.from("food_passes").update({
-            balance: Number(foodPass.balance) - passTotal, updated_at: new Date().toISOString(),
+            balance: foodPassNewBalance, updated_at: new Date().toISOString(),
           }).eq("id", foodPass.id);
-          for (const bill of passUnpaidBills) {
-            await db.from("food_bills").update({ paid: true, payment_mode: "other" }).eq("id", bill.id);
+          for (const billId of passUnpaidBillIds) {
+            await db.from("food_bills").update({ paid: true, payment_mode: "other" }).eq("id", billId);
           }
+        }
+        if (foodPassShortfall > 0) {
+          await db.from("transactions").insert({
+            student_id: booking.student_id, branch_id: booking.branch_id,
+            category: "food", amount: foodPassShortfall, payment_mode: foodPassPaymentMode,
+            notes: "Food Pass shortfall collected at checkout", created_by_staff_id: staff.id,
+          });
         }
       } else {
         // Walk-ins always settle unpaid food at checkout (no carry-forward concept — the
@@ -1399,6 +1455,7 @@ Deno.serve(async (req) => {
       const { data: discounts } = await db.from("membership_discounts").select("*, staff(display_name, username)").eq("student_id", studentId).order("created_at", { ascending: false }).limit(50);
       const { data: cashbacksRaw } = await db.from("cashbacks").select("*, staff:granted_by_staff_id(display_name, username)").eq("student_id", studentId).order("created_at", { ascending: false }).limit(50);
       const { data: planChanges } = await db.from("membership_plan_changes").select("*, staff:changed_by_staff_id(display_name, username)").eq("student_id", studentId).order("created_at", { ascending: false }).limit(50);
+      const { data: edits } = await db.from("membership_edits").select("*, staff:changed_by_staff_id(display_name, username)").eq("student_id", studentId).order("created_at", { ascending: false }).limit(50);
 
       // Percent-type cashbacks that are still pending have no fixed rupee value yet — same
       // estimate as the Students page Cashback tab, off this student's current active
@@ -1422,7 +1479,7 @@ Deno.serve(async (req) => {
       return json({
         student, memberships, bookings, transactions, locker,
         overtimeSessions: overtimeSessions ?? [], holds: holds ?? [], discounts: discounts ?? [],
-        cashbacks, planChanges: planChanges ?? [],
+        cashbacks, planChanges: planChanges ?? [], edits: edits ?? [],
       });
     }
 
@@ -1491,13 +1548,37 @@ Deno.serve(async (req) => {
       let fixed = 0;
       for (const m of memberships ?? []) {
         const correctEndDate = addDays(endDateForMonths(m.start_date, m.months_paid), m.hold_days ?? 0);
-        const correctDueDate = addMonths(m.start_date, 1);
+        const correctDueDate = addDays(endDateForMonths(m.start_date, 1), 1);
         if (correctEndDate !== m.end_date || correctDueDate !== m.due_date) {
           await db.from("memberships").update({ end_date: correctEndDate, due_date: correctDueDate }).eq("id", m.id);
           fixed++;
         }
       }
       return json({ ok: true, checked: (memberships ?? []).length, fixed });
+    }
+
+    // One-off owner-triggered repair for Food Pass balances left negative by orders placed
+    // before the "never go negative" fix was deployed — that fix only stops *new* orders
+    // from overdrawing the pass, it doesn't retroactively correct a balance a pre-fix order
+    // already pushed below zero. For each negative balance, the shortfall is converted into
+    // a proper unpaid food_bills row (so it's still owed and gets compulsorily collected at
+    // the student's next checkout, same as any other shortfall) and the balance is reset to
+    // 0. Safe to run more than once — it only touches rows still sitting below zero.
+    if (action === "fix_negative_food_pass_balances") {
+      if (!isOwner(staff)) return err("Owner only", 403);
+      const { data: passes } = await db.from("food_passes").select("*").lt("balance", 0);
+      let fixed = 0;
+      for (const p of passes ?? []) {
+        const shortfall = -Number(p.balance);
+        await db.from("food_bills").insert({
+          branch_id: p.branch_id, student_id: p.student_id,
+          subtotal: shortfall, total: shortfall, payment_mode: null, paid: false,
+          created_by_staff_id: staff.id,
+        });
+        await db.from("food_passes").update({ balance: 0, updated_at: new Date().toISOString() }).eq("id", p.id);
+        fixed++;
+      }
+      return json({ ok: true, checked: (passes ?? []).length, fixed });
     }
 
     if (action === "get_top_students") {
@@ -1789,6 +1870,27 @@ Deno.serve(async (req) => {
       return json({ ok: true, balance: newBalance });
     }
 
+    // Settles one specific unpaid food bill directly for cash/UPI right at order time — used
+    // when a Food Pass order exceeds the available balance and staff choose to collect the
+    // shortfall immediately instead of leaving it for compulsory collection at checkout.
+    // Deliberately does NOT touch food_passes.balance: the shortfall was never deducted from
+    // the pass (create_food_bill leaves it unpaid rather than overdrawing), so collecting cash
+    // for it now just settles the bill in place, exactly like a non-pass-holder's unpaid bill.
+    if (action === "collect_food_bill_shortfall") {
+      const { billId, paymentMode } = payload;
+      const { data: bill } = await db.from("food_bills").select("*").eq("id", billId).single();
+      if (!bill) return err("Food bill not found");
+      if (!requireBranch(staff, bill.branch_id)) return err("Branch access denied", 403);
+      if (bill.paid) return err("This bill is already settled");
+      await db.from("food_bills").update({ paid: true, payment_mode: paymentMode ?? "cash" }).eq("id", billId);
+      await db.from("transactions").insert({
+        student_id: bill.student_id, branch_id: bill.branch_id, food_bill_id: bill.id,
+        category: "food", amount: bill.total, payment_mode: paymentMode ?? "cash",
+        notes: "Food Pass shortfall collected at order time", created_by_staff_id: staff.id,
+      });
+      return json({ ok: true });
+    }
+
     // ─── FOOD ───
     if (action === "list_food_items") {
       const { branchId } = payload;
@@ -1802,7 +1904,7 @@ Deno.serve(async (req) => {
     }
 
     if (action === "create_food_bill") {
-      const { branchId, studentId, studentName, studentPhone, bookingId, items, paymentMode, discountType, discountValue, discountAmount } = payload;
+      const { branchId, studentId, studentName, studentPhone, bookingId, items, paymentMode, discountType, discountValue, discountAmount, skipFoodPass } = payload;
       if (!requireBranch(staff, branchId)) return err("Branch access denied", 403);
       if (studentId) {
         const { data: billStudent } = await db.from("students").select("branch_id").eq("id", studentId).single();
@@ -1824,33 +1926,44 @@ Deno.serve(async (req) => {
       const disc = Number(discountAmount) || 0;
       const total = Math.max(subtotal - disc, 0);
 
-      // A student with a Food Pass pays through it exclusively — not a choice, a rule.
-      // Balance can go negative (settled separately); the money for it was already
-      // collected at top-up time, so no new transaction gets recorded here.
+      // A student with a Food Pass pays through it exclusively — not a choice, a rule. The
+      // pass balance itself must never go negative: if this order exceeds what's available,
+      // the balance is left untouched and the bill is left unpaid, so it shows up in
+      // checkout_booking's unpaid-bills query — collection is compulsory there, not here.
+      // Exception: a pass with nothing left on it (skipFoodPass, set by the frontend when the
+      // balance is 0) isn't usable at all — treated exactly like the student has no pass, so
+      // staff get the normal Pay Now / Pay Later choice instead.
       let payFromPass = false;
       let newPassBalance = null;
       let pass = null;
-      if (studentId) {
+      let passCoversOrder = false;
+      if (studentId && !skipFoodPass) {
         const { data: p } = await db.from("food_passes").select("*").eq("student_id", studentId).maybeSingle();
         pass = p;
       }
       if (pass) {
         payFromPass = true;
-        newPassBalance = Number(pass.balance) - total;
-        await db.from("food_passes").update({
-          balance: newPassBalance, updated_at: new Date().toISOString(),
-        }).eq("id", pass.id);
+        passCoversOrder = Number(pass.balance) >= total;
+        if (passCoversOrder) {
+          newPassBalance = Number(pass.balance) - total;
+          await db.from("food_passes").update({
+            balance: newPassBalance, updated_at: new Date().toISOString(),
+          }).eq("id", pass.id);
+        } else {
+          newPassBalance = Number(pass.balance);
+        }
       }
 
       // Otherwise: no payment mode ⇒ bill is recorded unpaid, carried on the student's tab
       // (membership students get up to 3 days before it must be settled at checkout).
-      const isPaid = payFromPass || paymentMode != null;
+      const isPaid = (payFromPass && passCoversOrder) || (!payFromPass && paymentMode != null);
 
       const { data: bill, error } = await db.from("food_bills").insert({
         branch_id: branchId, student_id: studentId, booking_id: bookingId,
         student_name: studentName, student_phone: studentPhone,
         subtotal, discount_type: discountType, discount_value: discountValue ?? 0,
-        discount_amount: disc, total, payment_mode: payFromPass ? "other" : (isPaid ? paymentMode : null), paid: isPaid,
+        discount_amount: disc, total,
+        payment_mode: passCoversOrder ? "other" : (isPaid ? paymentMode : null), paid: isPaid,
         created_by_staff_id: staff.id,
       }).select("id").single();
       if (error) return err(error.message);
@@ -1870,6 +1983,7 @@ Deno.serve(async (req) => {
       return json({
         bill: { id: bill!.id, total, subtotal, discountAmount: disc, items: lineItems, paid: isPaid, paidFromPass: payFromPass },
         foodPassBalance: newPassBalance,
+        foodPassShortfall: payFromPass && !passCoversOrder ? Math.round((total - Number(newPassBalance)) * 100) / 100 : null,
       });
     }
 
@@ -2817,6 +2931,13 @@ Deno.serve(async (req) => {
           prorated_amount: proratedAmount, changed_by_staff_id: staff.id,
         });
       }
+      if (wantsEndDateChange) {
+        await db.from("membership_edits").insert({
+          membership_id: membershipId, student_id: mem.student_id, branch_id: mem.branch_id,
+          edit_type: "end_date", old_value: mem.end_date, new_value: newEndDate,
+          changed_by_staff_id: staff.id,
+        });
+      }
 
       await refreshStudentStatus(db, mem.student_id);
       return json({ ok: true, proratedAmount, newFeeDue, bankedAsCashback, remainingDays });
@@ -2841,6 +2962,11 @@ Deno.serve(async (req) => {
       }
       await db.from("desks").update({ status: "reserved", seat_type: "fixed", assigned_student_id: mem.student_id }).eq("id", newDesk.id);
       await db.from("memberships").update({ desk_id: newDesk.id, cabin_no: newDesk.label }).eq("id", membershipId);
+      await db.from("membership_edits").insert({
+        membership_id: membershipId, student_id: mem.student_id, branch_id: mem.branch_id,
+        edit_type: "cabin", old_value: mem.cabin_no, new_value: newDesk.label,
+        changed_by_staff_id: staff.id,
+      });
 
       // If they're currently mid-session in the old cabin, move the active booking's desk too.
       const { data: activeBooking } = await db.from("bookings").select("id, desk_id")
@@ -2894,7 +3020,7 @@ Deno.serve(async (req) => {
       // inclusive-end convention above, so starting there again would double-count it.
       const startDate = mem.end_date < today ? today : addDays(mem.end_date, 1);
       const endDate = endDateForMonths(startDate, months);
-      const dueDate = addMonths(startDate, 1);
+      const dueDate = addDays(endDateForMonths(startDate, 1), 1);
       const monthLabel = new Date(startDate).toLocaleString("en-US", { month: "long", year: "numeric" });
 
       // Plan can change on renewal — reassign the cabin/seat if the category changed
@@ -3005,20 +3131,34 @@ Deno.serve(async (req) => {
       });
     }
 
-    // Ends a membership immediately and refunds the prorated value of its unused days —
-    // distinct from close_membership (which settles locker/food pass/cashback/overtime for
-    // a normal end-of-term closure). "Membership amount paid" for this formula is the
+    // Shared by get_membership_delete_summary and delete_membership so the preview and
+    // the actual execution can never disagree — computes every owed/credit line close_membership
+    // does (locker, food pass, cashback, overtime), plus the prorated refund for unused days
+    // that's unique to a deletion. "Membership amount paid" for the prorated formula is the
     // pre-multi-month-discount gross (monthly_fee * months_paid), per how it was specified;
     // the raw result is capped at what was actually collected (total_paid) so a discounted
-    // or partially-paid membership never refunds more than the student actually paid, and
-    // any outstanding fee_due is netted out of the refund rather than separately collected.
-    if (action === "delete_membership") {
-      if (!isOwner(staff)) return err("Owner only", 403);
-      const { membershipId } = payload;
-      const { data: mem } = await db.from("memberships").select("*").eq("id", membershipId).single();
-      if (!mem) return err("Membership not found");
-      if (!requireBranch(staff, mem.branch_id)) return err("Branch access denied", 403);
-      if (!mem.is_active) return err("Membership is not active");
+    // or partially-paid membership never refunds more than the student actually paid.
+    async function computeDeleteSettlement(mem: Record<string, any>) {
+      const { data: locker } = await db.from("lockers").select("*")
+        .eq("student_id", mem.student_id).eq("is_active", true).maybeSingle();
+      const { data: foodPass } = await db.from("food_passes").select("*")
+        .eq("student_id", mem.student_id).maybeSingle();
+      const { data: unbilledOvertime } = await db.from("overtime_sessions").select("id, overtime_minutes")
+        .eq("student_id", mem.student_id).is("billed_at", null);
+      const { data: planChanges } = await db.from("membership_plan_changes").select("*")
+        .eq("membership_id", mem.id).order("created_at", { ascending: true });
+
+      const membershipDue = Number(mem.fee_due ?? 0);
+      const lockerDue = Number(locker?.fee_due ?? 0);
+      const lockerDepositRefund = locker && !locker.deposit_returned ? Number(locker.deposit_amount ?? 0) : 0;
+      const foodPassBalance = Number(foodPass?.balance ?? 0);
+      const foodPassRefund = Math.max(foodPassBalance, 0);
+      const foodPassOwed = Math.max(-foodPassBalance, 0);
+      const cashbackBase = Number(mem.monthly_fee) * Number(mem.months_paid);
+      const { cashbackAmount, contribs: cashbackContribs } = await settlePendingCashbacks(db, mem.student_id, cashbackBase);
+      const overtimeMinutes = (unbilledOvertime ?? []).reduce((s: number, o: { overtime_minutes: number }) => s + Number(o.overtime_minutes), 0);
+      const overtimeHourlyRate = Number(mem.monthly_fee) / (Number(mem.hours_per_day) * 30);
+      const overtimeDue = Math.round(overtimeMinutes * overtimeHourlyRate / 60);
 
       const today = todayISO();
       const grossFee = Number(mem.monthly_fee) * Number(mem.months_paid);
@@ -3028,9 +3168,56 @@ Deno.serve(async (req) => {
       const remainingDays = Math.max(0, Math.round(
         (new Date(mem.end_date + "T00:00:00Z").getTime() - new Date(today + "T00:00:00Z").getTime()) / 86_400_000,
       ));
-      const rawRefund = (grossFee / totalDays) * remainingDays;
-      const feeDue = Number(mem.fee_due ?? 0);
-      const refundAmount = Math.round(Math.max(0, Math.min(rawRefund, Number(mem.total_paid)) - feeDue));
+      const rawProratedRefund = (grossFee / totalDays) * remainingDays;
+      const proratedRefund = Math.round(Math.max(0, Math.min(rawProratedRefund, Number(mem.total_paid))));
+
+      const totalOwed = membershipDue + lockerDue + foodPassOwed + overtimeDue;
+      const totalCredit = lockerDepositRefund + foodPassRefund + cashbackAmount + proratedRefund;
+      const netAmount = totalOwed - totalCredit;
+
+      return {
+        membershipDue, lockerDue, lockerDepositRefund,
+        foodPassBalance, foodPassRefund, foodPassOwed,
+        cashbackAmount, cashbackContribs, overtimeMinutes, overtimeDue,
+        proratedRefund, remainingDays, totalDays, grossFee,
+        totalOwed, totalCredit, netAmount,
+        locker: locker ?? null, foodPass: foodPass ?? null, unbilledOvertime: unbilledOvertime ?? [],
+        planChanges: planChanges ?? [],
+      };
+    }
+
+    // Preview for the Delete Membership confirmation modal — same shape/checks as
+    // get_membership_closure_summary, plus the proratedRefund/remainingDays/totalDays lines.
+    if (action === "get_membership_delete_summary") {
+      if (!isOwner(staff)) return err("Owner only", 403);
+      const { membershipId } = payload;
+      const { data: mem } = await db.from("memberships").select("*").eq("id", membershipId).single();
+      if (!mem) return err("Membership not found");
+      if (!requireBranch(staff, mem.branch_id)) return err("Branch access denied", 403);
+      if (!mem.is_active) return err("Membership is not active");
+
+      const settlement = await computeDeleteSettlement(mem);
+      return json({ ...settlement, canDelete: true });
+    }
+
+    // Ends a membership immediately — runs every check/settlement close_membership does
+    // (locker deposit, Food Pass balance, pending cashback, unbilled overtime) plus the
+    // prorated refund for the membership's unused days, all netted into one final amount.
+    // A positive net still owed blocks the delete until a payment mode is chosen, exactly
+    // like close_membership; a negative net pays out each credit as its own ledger entry.
+    if (action === "delete_membership") {
+      if (!isOwner(staff)) return err("Owner only", 403);
+      const { membershipId, paymentMode } = payload;
+      const { data: mem } = await db.from("memberships").select("*").eq("id", membershipId).single();
+      if (!mem) return err("Membership not found");
+      if (!requireBranch(staff, mem.branch_id)) return err("Branch access denied", 403);
+      if (!mem.is_active) return err("Membership is not active");
+
+      const s = await computeDeleteSettlement(mem);
+
+      if (s.netAmount > 0 && !paymentMode) {
+        return err(`₹${s.netAmount.toFixed(2)} still needs to be collected before deleting — choose a payment mode.`);
+      }
 
       await db.from("memberships").update({ is_active: false, fee_due: 0 }).eq("id", membershipId);
 
@@ -3038,18 +3225,71 @@ Deno.serve(async (req) => {
         await db.from("desks").update({ status: "free", seat_type: "floating", assigned_student_id: null }).eq("id", mem.desk_id);
       }
 
-      if (refundAmount > 0) {
+      if (s.unbilledOvertime.length) {
+        await db.from("overtime_sessions").update({ billed_at: new Date().toISOString(), billed_amount: s.overtimeDue })
+          .in("id", s.unbilledOvertime.map((o: { id: string }) => o.id));
+      }
+
+      if (s.locker) {
+        await db.from("lockers").update({ is_active: false, fee_due: 0, deposit_returned: true }).eq("id", s.locker.id);
+        if (s.lockerDepositRefund > 0) {
+          await db.from("payouts").insert({
+            student_id: mem.student_id, branch_id: mem.branch_id, payout_type: "locker_deposit",
+            amount: s.lockerDepositRefund, notes: "Locker caution deposit returned — membership deleted",
+            created_by_staff_id: staff.id,
+          });
+        }
+      }
+      if (s.foodPass) {
+        await db.from("food_passes").update({ balance: 0, updated_at: new Date().toISOString() }).eq("id", s.foodPass.id);
+        if (s.foodPassRefund > 0) {
+          await db.from("payouts").insert({
+            student_id: mem.student_id, branch_id: mem.branch_id, payout_type: "food_pass_refund",
+            amount: s.foodPassRefund, notes: "Unused Food Pass balance returned — membership deleted",
+            created_by_staff_id: staff.id,
+          });
+        }
+      }
+      for (const c of s.cashbackContribs) {
+        await db.from("cashbacks").update({
+          status: "settled", redeemed_amount: c.amount, redeemed_at: new Date().toISOString(),
+        }).eq("id", c.id);
+      }
+      if (s.cashbackAmount > 0) {
+        await db.from("payouts").insert({
+          student_id: mem.student_id, branch_id: mem.branch_id, payout_type: "cashback",
+          amount: s.cashbackAmount, notes: "Cashback settled — membership deleted",
+          created_by_staff_id: staff.id,
+        });
+      }
+      if (s.proratedRefund > 0) {
         await db.from("payouts").insert({
           student_id: mem.student_id, branch_id: mem.branch_id, payout_type: "membership_refund",
-          amount: refundAmount, notes: `Prorated refund for ${remainingDays} unused of ${totalDays} day(s) — membership deleted`,
+          amount: s.proratedRefund, notes: `Prorated refund for ${s.remainingDays} unused of ${s.totalDays} day(s) — membership deleted`,
           created_by_staff_id: staff.id,
         });
       }
 
       await db.from("alerts").update({ status: "resolved" }).eq("student_id", mem.student_id).eq("alert_type", "expiry").eq("status", "pending");
-      await refreshStudentStatus(db, mem.student_id);
 
-      return json({ ok: true, refundAmount, remainingDays, totalDays, grossFee, feeDue });
+      // Only a positive net is real revenue collected — money flowing the other way is
+      // already logged per-type as payouts above, same convention as close_membership.
+      if (s.netAmount > 0) {
+        await db.from("transactions").insert({
+          student_id: mem.student_id, branch_id: mem.branch_id, membership_id: membershipId,
+          category: "membership", amount: s.netAmount, payment_mode: paymentMode,
+          notes: "Final settlement at membership deletion", created_by_staff_id: staff.id,
+        });
+      }
+
+      await refreshStudentStatus(db, mem.student_id);
+      return json({
+        ok: true, netAmount: s.netAmount,
+        collectedAmount: Math.max(s.netAmount, 0), refundAmount: Math.max(-s.netAmount, 0),
+        proratedRefund: s.proratedRefund, remainingDays: s.remainingDays, totalDays: s.totalDays,
+        lockerDepositRefund: s.lockerDepositRefund, foodPassRefund: s.foodPassRefund, cashbackAmount: s.cashbackAmount,
+        overtimeDue: s.overtimeDue,
+      });
     }
 
     if (action === "close_membership") {

@@ -17,6 +17,8 @@ export default function BranchSettingsPage() {
   const [msg, setMsg] = useState('')
   const [fixingDates, setFixingDates] = useState(false)
   const [fixDatesResult, setFixDatesResult] = useState('')
+  const [fixingFoodPasses, setFixingFoodPasses] = useState(false)
+  const [fixFoodPassesResult, setFixFoodPassesResult] = useState('')
 
   const load = useCallback(async () => {
     if (!selectedBranch) return
@@ -58,6 +60,20 @@ export default function BranchSettingsPage() {
       setFixDatesResult(`Error: ${err.message}`)
     } finally {
       setFixingDates(false)
+    }
+  }
+
+  const handleFixNegativeFoodPasses = async () => {
+    if (!window.confirm('Reset every negative Food Pass balance to 0 and record the shortfall as an unpaid food bill (collected at the student\'s next checkout)? Safe to run more than once.')) return
+    setFixingFoodPasses(true)
+    setFixFoodPassesResult('')
+    try {
+      const res = await api('fix_negative_food_pass_balances')
+      setFixFoodPassesResult(`Checked ${res.checked} Food Pass(es), corrected ${res.fixed}.`)
+    } catch (err) {
+      setFixFoodPassesResult(`Error: ${err.message}`)
+    } finally {
+      setFixingFoodPasses(false)
     }
   }
 
@@ -140,6 +156,14 @@ export default function BranchSettingsPage() {
           {fixingDates ? 'Fixing…' : 'Fix Membership Dates'}
         </button>
         {fixDatesResult && <p style={{ marginTop: '0.5rem', fontSize: '0.85rem', color: 'var(--accent)' }}>{fixDatesResult}</p>}
+
+        <p style={{ color: 'var(--text-muted)', fontSize: '0.82rem', margin: '1rem 0 0.75rem' }}>
+          Resets any Food Pass balance still negative from before the "never go negative" fix — the shortfall is preserved as an unpaid food bill so it's still collected at the student's next checkout. Safe to run more than once.
+        </p>
+        <button type="button" className="btn btn-ghost" onClick={handleFixNegativeFoodPasses} disabled={fixingFoodPasses}>
+          {fixingFoodPasses ? 'Fixing…' : 'Fix Negative Food Pass Balances'}
+        </button>
+        {fixFoodPassesResult && <p style={{ marginTop: '0.5rem', fontSize: '0.85rem', color: 'var(--accent)' }}>{fixFoodPassesResult}</p>}
       </div>
 
       <div className="card" style={{ marginBottom: '1.5rem' }}>

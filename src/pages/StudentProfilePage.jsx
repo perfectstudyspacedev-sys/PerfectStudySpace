@@ -348,6 +348,8 @@ export default function StudentProfilePage() {
   const [deleteMembershipLoading, setDeleteMembershipLoading] = useState(false)
   const [deleteMembershipError, setDeleteMembershipError] = useState('')
   const [deleteMembershipNotice, setDeleteMembershipNotice] = useState(null)
+  const [deleteSummary, setDeleteSummary] = useState(null)
+  const [deletePayMode, setDeletePayMode] = useState('cash')
 
   const refresh = useCallback(() => {
     setLoading(true)
@@ -588,14 +590,31 @@ export default function StudentProfilePage() {
     }
   }
 
+  const openDeleteMembership = async (membershipId) => {
+    setDeleteMembershipError('')
+    setDeleteSummary(null)
+    setDeletePayMode('cash')
+    setOpenPanel(null) // don't stack this modal on top of the still-open Membership Control one
+    setDeleteMembershipOpen(true)
+    try {
+      const summary = await api('get_membership_delete_summary', { membershipId })
+      setDeleteSummary(summary)
+    } catch (err) {
+      setDeleteMembershipError(err.message)
+    }
+  }
+
   const handleDeleteMembership = async (membershipId) => {
     setDeleteMembershipLoading(true)
     setDeleteMembershipError('')
     try {
-      const res = await api('delete_membership', { membershipId })
+      const res = await api('delete_membership', {
+        membershipId,
+        paymentMode: deleteSummary?.netAmount > 0 ? deletePayMode : undefined,
+      })
       setDeleteMembershipOpen(false)
       setOpenPanel(null)
-      setDeleteMembershipNotice(res.refundAmount)
+      setDeleteMembershipNotice(res)
       refresh()
     } catch (err) {
       setDeleteMembershipError(err.message)
@@ -622,7 +641,7 @@ export default function StudentProfilePage() {
   if (loading) return <p>Loading profile…</p>
   if (!data?.student) return <p>Student not found.</p>
 
-  const { student, memberships, bookings, transactions, locker, overtimeSessions, holds, discounts, cashbacks, planChanges } = data
+  const { student, memberships, bookings, transactions, locker, overtimeSessions, holds, discounts, cashbacks, planChanges, edits } = data
   const activeMem = memberships?.find(m => m.is_active)
   const isPaused = activeMem?.is_paused || activeMem?.status === 'paused'
   const isExpired = !!activeMem && activeMem.end_date < todayISO()
@@ -630,18 +649,6 @@ export default function StudentProfilePage() {
     ? Math.round((new Date(activeMem.end_date + 'T12:00:00').getTime() - new Date(todayISO() + 'T12:00:00').getTime()) / 86_400_000)
     : 0
 
-  // Preview only — delete_membership recomputes this authoritatively server-side.
-  // Refund = (gross fee / total days) * remaining days, capped at what was actually paid
-  // and netted against any outstanding fee_due.
-  const deleteMembershipPreview = (() => {
-    if (!activeMem) return null
-    const grossFee = Number(activeMem.monthly_fee) * Number(activeMem.months_paid)
-    const totalDays = Math.max(1, Math.round((new Date(activeMem.end_date + 'T00:00:00Z') - new Date(activeMem.start_date + 'T00:00:00Z')) / 86_400_000))
-    const remainingDays = Math.max(0, Math.round((new Date(activeMem.end_date + 'T00:00:00Z') - new Date(todayISO() + 'T00:00:00Z')) / 86_400_000))
-    const rawRefund = (grossFee / totalDays) * remainingDays
-    const refundAmount = Math.round(Math.max(0, Math.min(rawRefund, Number(activeMem.total_paid)) - Number(activeMem.fee_due ?? 0)))
-    return { refundAmount, remainingDays, totalDays }
-  })()
 
   const feeDueNum = Number(activeMem?.fee_due ?? 0)
   const discountValueNum = Number(discountValue) || 0
@@ -707,8 +714,12 @@ export default function StudentProfilePage() {
                 activeMem && ['Started', formatDate(activeMem.start_date)],
                 activeMem && ['Expires', formatDate(activeMem.end_date)],
                 activeMem && ['Days Left', (
-                  <span key="daysleft" style={{ color: daysLeft < 0 ? '#ff6b6b' : daysLeft <= 5 ? '#ffaa44' : undefined, fontWeight: 700 }}>
-                    {daysLeft < 0 ? `Expired ${Math.abs(daysLeft)}d ago` : `${daysLeft} day${daysLeft === 1 ? '' : 's'}`}
+                  // +1 on the non-expired side counts both today and the (inclusive) end
+                  // date as usable days — a membership starting and ending on the same day
+                  // is 1 day left, not 0. The "expired Xd ago" side is unaffected — it's
+                  // already counting full days elapsed since the last valid day.
+                  <span key="daysleft" style={{ color: daysLeft < 0 ? '#ff6b6b' : daysLeft + 1 <= 5 ? '#ffaa44' : undefined, fontWeight: 700 }}>
+                    {daysLeft < 0 ? `Expired ${Math.abs(daysLeft)}d ago` : `${daysLeft + 1} day${daysLeft + 1 === 1 ? '' : 's'}`}
                   </span>
                 )],
                 activeMem && ['Due Date', formatDate(activeMem.due_date)],
@@ -835,7 +846,7 @@ export default function StudentProfilePage() {
               </>
             )}
             {holdError && <p className="error-msg">{holdError}</p>}
-            {!isExpired && !isPaused && (
+            {!isPaused && (
               <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem', marginTop: '0.25rem' }}>
                 <button type="button" className="btn btn-ghost" style={{ width: '100%', fontSize: '0.85rem' }} onClick={() => setPlanChangeOpen(true)}>
                   ⇄ Change Plan
@@ -855,7 +866,7 @@ export default function StudentProfilePage() {
                   background: 'rgba(255,60,60,0.08)', border: '1px solid rgba(255,60,60,0.4)',
                   color: '#ff8888', borderRadius: 999,
                 }}
-                onClick={() => { setDeleteMembershipError(''); setDeleteMembershipOpen(true) }}
+                onClick={() => openDeleteMembership(activeMem.id)}
               >
                 🗑️ Delete Membership
               </button>
@@ -1307,6 +1318,32 @@ export default function StudentProfilePage() {
         </div>
       )}
 
+      {(edits ?? []).length > 0 && (
+        <div className="card" style={{ marginTop: '1rem' }}>
+          <h3 style={{ color: 'var(--accent)', marginBottom: '0.75rem' }}>✏️ Edit History</h3>
+          <table className="data-table">
+            <thead>
+              <tr><th>Date</th><th>Edit</th><th>From</th><th>To</th><th>Changed By</th></tr>
+            </thead>
+            <tbody>
+              {edits.map(e => (
+                <tr key={e.id}>
+                  <td className="mono">{formatDate(e.created_at)}</td>
+                  <td className="cap">{e.edit_type === 'cabin' ? 'Cabin' : 'End Date'}</td>
+                  <td className="mono" style={{ fontSize: '0.85rem' }}>
+                    {e.edit_type === 'end_date' ? formatDate(e.old_value) : (e.old_value ?? '—')}
+                  </td>
+                  <td className="mono" style={{ fontSize: '0.85rem' }}>
+                    {e.edit_type === 'end_date' ? formatDate(e.new_value) : (e.new_value ?? '—')}
+                  </td>
+                  <td>{e.staff?.display_name || e.staff?.username || '—'}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+
       <div className="card" style={{ marginTop: '1rem' }}>
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.75rem', flexWrap: 'wrap', gap: '0.5rem' }}>
           <h3 style={{ color: 'var(--accent)' }}>Attendance History</h3>
@@ -1628,22 +1665,76 @@ export default function StudentProfilePage() {
 
       {deleteMembershipOpen && activeMem && (
         <div className="modal-overlay" onClick={() => setDeleteMembershipOpen(false)}>
-          <div className="modal" style={{ maxWidth: 420 }} onClick={(e) => e.stopPropagation()}>
-            <h2 style={{ color: '#ff8888', marginBottom: '0.5rem' }}>🗑️ Delete Membership</h2>
+          <div className="modal" style={{ maxWidth: 440 }} onClick={(e) => e.stopPropagation()}>
+            <h2 style={{ color: '#ff8888', marginBottom: '0.5rem' }}>🗑️ Delete Membership — {student.name}</h2>
             <p style={{ color: 'var(--text-muted)', fontSize: '0.82rem', marginBottom: '0.75rem' }}>
-              Ends {student.name}'s membership immediately{activeMem.category === 'permanent' ? ' and releases their cabin' : ''}. This can't be undone.
+              Ends the membership immediately{activeMem.category === 'permanent' ? ' and releases their cabin' : ''} — runs the same locker/Food Pass/cashback/overtime settlement as Finish Membership, plus a prorated refund for unused days. This can't be undone.
             </p>
-            {deleteMembershipPreview && (
-              <div className="card" style={{ marginBottom: '0.75rem', background: 'rgba(255,60,60,0.05)' }}>
-                <p className="mono" style={{ color: '#ff8888', fontSize: '1.15rem', fontWeight: 700 }}>
-                  Refund: {formatCurrency(deleteMembershipPreview.refundAmount)}
-                </p>
-                <p style={{ fontSize: '0.78rem', color: 'var(--text-muted)', marginTop: '0.3rem' }}>
-                  Prorated for {deleteMembershipPreview.remainingDays} of {deleteMembershipPreview.totalDays} unused day(s), capped at what was paid{feeDueNum > 0 ? `, minus ${formatCurrency(feeDueNum)} still due` : ''}.
-                </p>
-              </div>
-            )}
+
             {deleteMembershipError && <p className="error-msg">{deleteMembershipError}</p>}
+
+            {!deleteSummary ? (
+              !deleteMembershipError && <p>Checking final settlement…</p>
+            ) : (
+              <>
+                <div className="card" style={{ marginBottom: '0.75rem', background: 'rgba(255,215,0,0.05)' }}>
+                  <h3 style={{ color: 'var(--accent)', fontSize: '0.9rem', marginBottom: '0.5rem' }}>Owed to the Business</h3>
+                  <p className="mono" style={{ fontSize: '0.85rem' }}>Membership: {formatCurrency(deleteSummary.membershipDue)}</p>
+                  {deleteSummary.locker && <p className="mono" style={{ fontSize: '0.85rem' }}>Locker rent: {formatCurrency(deleteSummary.lockerDue)}</p>}
+                  {deleteSummary.foodPassOwed > 0 && <p className="mono" style={{ fontSize: '0.85rem' }}>Food Pass shortfall: {formatCurrency(deleteSummary.foodPassOwed)}</p>}
+                  {deleteSummary.overtimeDue > 0 && <p className="mono" style={{ fontSize: '0.85rem' }}>Overtime ({deleteSummary.overtimeMinutes}m): {formatCurrency(deleteSummary.overtimeDue)}</p>}
+                  <p className="mono" style={{ fontWeight: 700, marginTop: '0.3rem' }}>Total: {formatCurrency(deleteSummary.totalOwed)}</p>
+                </div>
+
+                <div className="card" style={{ marginBottom: '0.75rem', background: 'rgba(74,222,128,0.05)' }}>
+                  <h3 style={{ color: '#4ade80', fontSize: '0.9rem', marginBottom: '0.5rem' }}>Owed Back to the Student</h3>
+                  {deleteSummary.lockerDepositRefund > 0 && <p className="mono" style={{ fontSize: '0.85rem' }}>Locker deposit: {formatCurrency(deleteSummary.lockerDepositRefund)}</p>}
+                  {deleteSummary.foodPassRefund > 0 && <p className="mono" style={{ fontSize: '0.85rem' }}>Food Pass balance: {formatCurrency(deleteSummary.foodPassRefund)}</p>}
+                  {deleteSummary.cashbackAmount > 0 && <p className="mono" style={{ fontSize: '0.85rem' }}>Unredeemed cashback: {formatCurrency(deleteSummary.cashbackAmount)}</p>}
+                  <p className="mono" style={{ fontSize: '0.85rem' }}>
+                    Unused days ({deleteSummary.remainingDays} of {deleteSummary.totalDays}): {formatCurrency(deleteSummary.proratedRefund)}
+                  </p>
+                  <p className="mono" style={{ fontWeight: 700, marginTop: '0.3rem' }}>Total: {formatCurrency(deleteSummary.totalCredit)}</p>
+                </div>
+
+                <div className="card" style={{ marginBottom: '0.75rem', background: 'rgba(255,255,255,0.03)' }}>
+                  {deleteSummary.netAmount > 0 ? (
+                    <p className="mono" style={{ fontWeight: 700, fontSize: '1.05rem', color: 'var(--accent)' }}>
+                      Collect {formatCurrency(deleteSummary.netAmount)} from the student
+                    </p>
+                  ) : deleteSummary.netAmount < 0 ? (
+                    <p className="mono" style={{ fontWeight: 700, fontSize: '1.05rem', color: '#4ade80' }}>
+                      Pay back {formatCurrency(-deleteSummary.netAmount)} to the student
+                    </p>
+                  ) : (
+                    <p className="mono" style={{ fontWeight: 700, fontSize: '1.05rem', color: '#4ade80' }}>
+                      Fully settled — nothing to collect or refund
+                    </p>
+                  )}
+                </div>
+
+                {deleteSummary.netAmount > 0 && (
+                  <div className="form-group">
+                    <label>Payment Mode</label>
+                    <div style={{ display: 'flex', gap: '0.5rem' }}>
+                      {PAYMENT_OPTIONS.map(({ value, label }) => (
+                        <button
+                          key={value} type="button" onClick={() => setDeletePayMode(value)}
+                          style={{
+                            flex: 1, padding: '0.5rem',
+                            border: `1px solid ${deletePayMode === value ? 'var(--accent)' : '#333'}`,
+                            borderRadius: 999, background: deletePayMode === value ? 'rgba(255,215,0,0.08)' : '#141414',
+                            color: deletePayMode === value ? 'var(--accent)' : 'var(--text-muted)',
+                            cursor: 'pointer', fontWeight: 600,
+                          }}
+                        >{label}</button>
+                      ))}
+                    </div>
+                  </div>
+                )}
+              </>
+            )}
+
             <div className="modal-actions">
               <button type="button" className="btn btn-ghost" onClick={() => setDeleteMembershipOpen(false)}>Cancel</button>
               <button
@@ -1653,9 +1744,12 @@ export default function StudentProfilePage() {
                   background: '#ff8888', border: 'none', color: '#1a0000', borderRadius: 999,
                 }}
                 onClick={() => handleDeleteMembership(activeMem.id)}
-                disabled={deleteMembershipLoading}
+                disabled={!deleteSummary || deleteMembershipLoading}
               >
-                {deleteMembershipLoading ? 'Deleting…' : 'Confirm Delete'}
+                {deleteMembershipLoading ? 'Deleting…'
+                  : deleteSummary?.netAmount > 0 ? `Collect ${formatCurrency(deleteSummary.netAmount)} & Delete`
+                  : deleteSummary?.netAmount < 0 ? `Pay Back ${formatCurrency(-deleteSummary.netAmount)} & Delete`
+                  : 'Confirm Delete'}
               </button>
             </div>
           </div>
@@ -1664,14 +1758,25 @@ export default function StudentProfilePage() {
 
       {deleteMembershipNotice != null && (
         <div className="modal-overlay" onClick={() => setDeleteMembershipNotice(null)}>
-          <div className="modal" style={{ maxWidth: 380 }} onClick={(e) => e.stopPropagation()}>
+          <div className="modal" style={{ maxWidth: 400 }} onClick={(e) => e.stopPropagation()}>
             <h2>🗑️ Membership Deleted</h2>
-            <div className="card" style={{ margin: '1rem 0', background: 'rgba(255,60,60,0.06)' }}>
-              <p className="mono" style={{ color: '#ff8888', fontSize: '1.2rem', fontWeight: 700 }}>
-                {formatCurrency(deleteMembershipNotice)}
-              </p>
-              <p style={{ fontSize: '0.85rem', color: 'var(--text-muted)', marginTop: '0.3rem' }}>
-                {deleteMembershipNotice > 0 ? 'Handed to the student as cash for their unused days.' : 'No refund was due.'}
+            <div className="card" style={{ margin: '1rem 0', background: 'rgba(255,255,255,0.03)' }}>
+              {deleteMembershipNotice.refundAmount > 0 ? (
+                <p className="mono" style={{ color: '#4ade80', fontSize: '1.2rem', fontWeight: 700 }}>
+                  Paid back {formatCurrency(deleteMembershipNotice.refundAmount)}
+                </p>
+              ) : deleteMembershipNotice.collectedAmount > 0 ? (
+                <p className="mono" style={{ color: 'var(--accent)', fontSize: '1.2rem', fontWeight: 700 }}>
+                  Collected {formatCurrency(deleteMembershipNotice.collectedAmount)}
+                </p>
+              ) : (
+                <p className="mono" style={{ color: '#4ade80', fontSize: '1.2rem', fontWeight: 700 }}>Fully settled</p>
+              )}
+              <p style={{ fontSize: '0.82rem', color: 'var(--text-muted)', marginTop: '0.5rem' }}>
+                Includes {formatCurrency(deleteMembershipNotice.proratedRefund)} refunded for {deleteMembershipNotice.remainingDays} of {deleteMembershipNotice.totalDays} unused day(s)
+                {deleteMembershipNotice.lockerDepositRefund > 0 && `, ${formatCurrency(deleteMembershipNotice.lockerDepositRefund)} locker deposit`}
+                {deleteMembershipNotice.foodPassRefund > 0 && `, ${formatCurrency(deleteMembershipNotice.foodPassRefund)} Food Pass balance`}
+                {deleteMembershipNotice.cashbackAmount > 0 && `, ${formatCurrency(deleteMembershipNotice.cashbackAmount)} cashback`}.
               </p>
             </div>
             <div className="modal-actions">

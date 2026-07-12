@@ -71,12 +71,17 @@ export function useMessageAlerts(branchId, currentStaffId) {
         // for a while) — they're still marked seen above so they never resurface later.
         if (!isToday(m.sent_at)) continue
         const senderName = m.staff?.display_name || m.staff?.username || 'Staff'
+        // Cross-branch check-in notices are inserted as ordinary messages (see
+        // check_in_member) but tagged so they get their own icon/title instead of looking
+        // like an indistinguishable chat message.
+        const isCrossBranch = m.content.startsWith('[cross_branch]')
+        const displayContent = isCrossBranch ? m.content.slice('[cross_branch]'.length).trim() : m.content
         newToasts.push({
-          id: `msg:${m.id}`, level: 'message',
-          message: `${senderName}: ${m.content}`,
+          id: `msg:${m.id}`, level: isCrossBranch ? 'cross_branch' : 'message',
+          message: isCrossBranch ? displayContent : `${senderName}: ${displayContent}`,
           createdAt: Date.parse(m.sent_at),
         })
-        fireNativeNotification(`💬 ${senderName}`, m.content)
+        fireNativeNotification(isCrossBranch ? '🔄 Cross-Branch Visit' : `💬 ${senderName}`, displayContent)
       }
       // Persist whenever anything new was marked seen — not just when it produced a toast —
       // otherwise a message from the current staff member (skipped from toasting) would be

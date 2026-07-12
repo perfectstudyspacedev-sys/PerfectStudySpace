@@ -25,6 +25,7 @@ const TOAST_META = {
   end: { icon: '🔔', title: 'Session Ended', color: '#ff8888', bg: '#1a0000', border: '#ff4444', shadow: 'rgba(255,60,60,0.35)' },
   warn: { icon: '⏰', title: 'Time Almost Up', color: 'var(--accent)', bg: '#1a1200', border: '#ffb800', shadow: 'rgba(255,184,0,0.35)' },
   message: { icon: '💬', title: 'New Message', color: '#ffaa44', bg: '#1a1000', border: '#ff9500', shadow: 'rgba(255,149,0,0.35)' },
+  cross_branch: { icon: '🔄', title: 'Cross-Branch Visit', color: '#a78bfa', bg: '#150f24', border: '#8b5cf6', shadow: 'rgba(139,92,246,0.35)' },
 }
 
 function SessionToasts({ toasts, dismiss, dismissAll }) {
@@ -93,6 +94,7 @@ function NotificationBell({ toasts, dismiss, dismissAll }) {
   const warnCount = toasts.filter(t => t.level === 'warn').length
   const endCount = toasts.filter(t => t.level === 'end').length
   const messageCount = toasts.filter(t => t.level === 'message').length
+  const crossBranchCount = toasts.filter(t => t.level === 'cross_branch').length
 
   useEffect(() => {
     if (!open) return
@@ -112,7 +114,7 @@ function NotificationBell({ toasts, dismiss, dismissAll }) {
         aria-label="Notifications"
       >
         🔔
-        {(warnCount > 0 || endCount > 0 || messageCount > 0) && (
+        {(warnCount > 0 || endCount > 0 || messageCount > 0 || crossBranchCount > 0) && (
           <span style={{ position: 'absolute', top: -6, right: -10, display: 'flex', gap: 2 }}>
             {warnCount > 0 && (
               <span style={{
@@ -131,6 +133,12 @@ function NotificationBell({ toasts, dismiss, dismissAll }) {
                 background: '#ff9500', color: '#1a1000', borderRadius: '50%', width: 16, height: 16,
                 fontSize: '0.62rem', fontWeight: 700, display: 'flex', alignItems: 'center', justifyContent: 'center',
               }}>{messageCount}</span>
+            )}
+            {crossBranchCount > 0 && (
+              <span style={{
+                background: '#8b5cf6', color: '#fff', borderRadius: '50%', width: 16, height: 16,
+                fontSize: '0.62rem', fontWeight: 700, display: 'flex', alignItems: 'center', justifyContent: 'center',
+              }}>{crossBranchCount}</span>
             )}
           </span>
         )}
@@ -297,7 +305,7 @@ export default function Shell() {
       <nav className="subnav">
         <div className="nav-links">
           <NavLink to="/" end>Dashboard</NavLink>
-          <NavLink to="/bookings">Bookings</NavLink>
+          <NavLink to="/bookings">Active Session</NavLink>
           <NavLink to="/membership">Membership</NavLink>
           <NavLink to="/students">Students</NavLink>
           <NavLink to="/enquiries">Enquiries</NavLink>

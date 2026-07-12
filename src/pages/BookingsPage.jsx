@@ -206,8 +206,8 @@ function CheckoutModal({ booking, onConfirm, onCancel, loading }) {
             <>
               {paidFoodTotal > 0 && <p className="mono" style={{ color: '#4ade80' }}>Food bill (paid separately): {formatCurrency(paidFoodTotal)}</p>}
               {unpaidFoodTotal > 0 && hasFoodPass && (
-                <p className="mono" style={{ color: '#4ade80', fontWeight: 700 }}>
-                  🎫 {formatCurrency(unpaidFoodTotal)} will be settled from Food Pass
+                <p className="mono" style={{ color: '#ff8888', fontWeight: 700 }}>
+                  🎫 {formatCurrency(unpaidFoodTotal)} will be settled from Food Pass — any shortfall beyond the balance is collected at checkout
                 </p>
               )}
               {unpaidFoodTotal > 0 && !hasFoodPass && (
@@ -286,8 +286,8 @@ function FoodOrderModal({ branchId, booking, onClose, onDone }) {
   const [foodPass, setFoodPass] = useState(null)
   const [payChoice, setPayChoice] = useState('later')
   const [payMode, setPayMode] = useState('cash')
-  const [negativeBalance, setNegativeBalance] = useState(null)
-  const [collectMode, setCollectMode] = useState('cash')
+  const [shortfallPrompt, setShortfallPrompt] = useState(null)
+  const [shortfallMode, setShortfallMode] = useState('cash')
   const [collecting, setCollecting] = useState(false)
 
   useEffect(() => {
@@ -298,9 +298,13 @@ function FoodOrderModal({ branchId, booking, onClose, onDone }) {
     if (!isMember) return
     api('get_food_pass', { studentId: booking.student_id }).then(d => {
       setFoodPass(d.pass)
-      if (d.pass) setPayChoice('pass')
+      // A pass with nothing left on it isn't usable for a new order — fall through to the
+      // normal Pay Now / Pay Later choice instead of "paying" via a pass that has ₹0.
+      if (d.pass && Number(d.pass.balance) > 0) setPayChoice('pass')
     }).catch(() => setFoodPass(null))
   }, [isMember, booking.student_id])
+
+  const passUsable = !!foodPass && Number(foodPass.balance) > 0
 
   const filtered = search.trim() ? items.filter(i => i.name.toLowerCase().includes(search.toLowerCase())) : items
 
@@ -319,6 +323,12 @@ function FoodOrderModal({ branchId, booking, onClose, onDone }) {
 
   const total = orders.reduce((s, o) => s + o.price * o.quantity, 0)
 
+  // The Food Pass balance itself can never go negative — if this order exceeds what's
+  // available, the backend leaves the bill unpaid rather than deducting past zero. It's
+  // already "added to the final bill" the moment it's saved (unpaid bills are what
+  // checkout_booking compulsorily collects against) — this follow-up prompt just gives staff
+  // the option to collect it right now instead of waiting for checkout; Skip just confirms
+  // and leaves it exactly where it already is, on the tab.
   const handleSave = async () => {
     if (orders.length === 0) return setError('Add at least one item')
     setSaving(true)
@@ -328,10 +338,14 @@ function FoodOrderModal({ branchId, booking, onClose, onDone }) {
         branchId, studentId: booking.student_id, studentName: booking.students?.name ?? null,
         studentPhone: booking.students?.phone ?? null, bookingId: booking.id,
         items: orders.map(o => ({ foodItemId: o.foodItemId, quantity: o.quantity })),
-        paymentMode: isMember && !foodPass && payChoice === 'now' ? payMode : undefined,
+        paymentMode: isMember && !passUsable && payChoice === 'now' ? payMode : undefined,
+        // A pass with a ₹0 balance shouldn't route this order through it at all — treat it
+        // like the student has no pass for this order (Pay Now / Pay Later instead).
+        skipFoodPass: isMember && foodPass && !passUsable ? true : undefined,
       })
-      if (res.foodPassBalance != null && res.foodPassBalance < 0) {
-        setNegativeBalance(-res.foodPassBalance)
+      if (res.foodPassShortfall > 0) {
+        setShortfallMode('cash')
+        setShortfallPrompt({ billId: res.bill.id, shortfall: res.foodPassShortfall })
       } else {
         onDone()
       }
@@ -343,11 +357,11 @@ function FoodOrderModal({ branchId, booking, onClose, onDone }) {
   }
 
   const handleCollectShortfall = async () => {
+    if (!shortfallPrompt) return
     setCollecting(true)
+    setError('')
     try {
-      await api('topup_food_pass', {
-        studentId: booking.student_id, branchId, amount: negativeBalance, paymentMode: collectMode,
-      })
+      await api('collect_food_bill_shortfall', { billId: shortfallPrompt.billId, paymentMode: shortfallMode })
       onDone()
     } catch (err) {
       setError(err.message)
@@ -356,7 +370,7 @@ function FoodOrderModal({ branchId, booking, onClose, onDone }) {
     }
   }
 
-  if (negativeBalance != null) {
+  if (shortfallPrompt) {
     return (
       <div className="modal-overlay" onClick={onDone}>
         <div className="modal" style={{ maxWidth: 400 }} onClick={(e) => e.stopPropagation()}>
@@ -364,18 +378,18 @@ function FoodOrderModal({ branchId, booking, onClose, onDone }) {
           <p style={{ color: 'var(--text-muted)', marginBottom: '1rem' }}>{booking.students?.name}</p>
           <div className="card" style={{ marginBottom: '1rem', background: 'rgba(255,60,60,0.06)' }}>
             <p className="mono" style={{ color: '#ff8888', fontSize: '1.2rem', fontWeight: 700 }}>
-              -{formatCurrency(negativeBalance)}
+              -{formatCurrency(shortfallPrompt.shortfall)}
             </p>
             <p style={{ fontSize: '0.85rem', color: 'var(--text-muted)', marginTop: '0.5rem' }}>
-              The order was placed, but the Food Pass balance is now negative. Collect this amount from the student now, or skip and settle it later.
+              The order was placed and the Food Pass balance was left at 0 — this amount is already on the tab, to be collected at checkout. Collect it now instead, or skip and leave it for checkout.
             </p>
           </div>
           <div className="form-group">
             <label>Mode</label>
             <div style={{ display: 'flex', gap: '0.5rem' }}>
               {[{ value: 'cash', label: '💵 Cash' }, { value: 'upi', label: '📱 UPI' }].map(({ value, label }) => (
-                <button key={value} type="button" onClick={() => setCollectMode(value)}
-                  style={{ flex: 1, padding: '0.5rem', border: `1px solid ${collectMode === value ? 'var(--accent)' : '#333'}`, borderRadius: 999, background: collectMode === value ? 'rgba(255,215,0,0.08)' : '#141414', color: collectMode === value ? 'var(--accent)' : 'var(--text-muted)', cursor: 'pointer', fontWeight: 600 }}
+                <button key={value} type="button" onClick={() => setShortfallMode(value)}
+                  style={{ flex: 1, padding: '0.5rem', border: `1px solid ${shortfallMode === value ? 'var(--accent)' : '#333'}`, borderRadius: 999, background: shortfallMode === value ? 'rgba(255,215,0,0.08)' : '#141414', color: shortfallMode === value ? 'var(--accent)' : 'var(--text-muted)', cursor: 'pointer', fontWeight: 600 }}
                 >{label}</button>
               ))}
             </div>
@@ -384,7 +398,7 @@ function FoodOrderModal({ branchId, booking, onClose, onDone }) {
           <div className="modal-actions">
             <button type="button" className="btn btn-ghost" onClick={onDone}>Skip for Now</button>
             <button type="button" className="btn btn-primary" disabled={collecting} onClick={handleCollectShortfall}>
-              {collecting ? 'Collecting…' : `Collect ${formatCurrency(negativeBalance)}`}
+              {collecting ? 'Collecting…' : `Collect ${formatCurrency(shortfallPrompt.shortfall)}`}
             </button>
           </div>
         </div>
@@ -434,7 +448,7 @@ function FoodOrderModal({ branchId, booking, onClose, onDone }) {
           </div>
         )}
         {isMember ? (
-          foodPass ? (
+          passUsable ? (
             <div className="form-group">
               <div style={{ padding: '0.65rem 0.8rem', background: 'rgba(255,215,0,0.06)', border: '1px solid rgba(255,215,0,0.25)', borderRadius: 6 }}>
                 <p style={{ fontSize: '0.85rem', fontWeight: 700, color: 'var(--accent)' }}>🎫 Paying via Food Pass</p>
@@ -443,7 +457,7 @@ function FoodOrderModal({ branchId, booking, onClose, onDone }) {
                 </p>
                 {Number(foodPass.balance) - total < 0 && (
                   <p style={{ fontSize: '0.78rem', color: '#ffaa44', marginTop: '0.3rem' }}>
-                    This will take the balance negative — you'll be asked to collect the shortfall after saving.
+                    This exceeds the available balance — the pass won't go negative; the shortfall will need collecting when this session checks out.
                   </p>
                 )}
               </div>
@@ -504,6 +518,8 @@ export default function BookingsPage() {
   const [tick, setTick] = useState(0)
   const [endedAlerts, setEndedAlerts] = useState([])
   const [checkoutBooking, setCheckoutBooking] = useState(null)
+  const [foodPassPrompt, setFoodPassPrompt] = useState(null)
+  const [foodPassCollectMode, setFoodPassCollectMode] = useState('cash')
   const [foodOrderBooking, setFoodOrderBooking] = useState(null)
   const [editBooking, setEditBooking] = useState(null)
   const [typeFilter, setTypeFilter] = useState('all')
@@ -558,18 +574,25 @@ export default function BookingsPage() {
     setCheckoutBooking(b)
   }
 
-  const confirmCheckout = async ({ overtimeMinutes, overtimePaymentMode, settleFoodNow }) => {
-    if (!checkoutBooking) return
-    const b = checkoutBooking
-    setActionLoading(b.id + ':checkout')
+  // Shared by the initial checkout attempt and the follow-up Food Pass collection prompt —
+  // a Food Pass can never end a session negative, so if checkout_booking reports a shortfall
+  // (no foodPassPaymentMode given yet), nothing was mutated server-side; this just swaps the
+  // checkout modal for a compulsory collect-now prompt (no skip option) and resubmits once
+  // a payment mode is picked.
+  const confirmCheckout = async (bookingId, { overtimeMinutes, overtimePaymentMode, settleFoodNow, foodPassPaymentMode }) => {
+    setActionLoading(bookingId + ':checkout')
     try {
-      await api('checkout_booking', {
-        bookingId: b.id,
-        overtimeMinutes,
-        overtimePaymentMode,
-        settleFoodNow,
+      const res = await api('checkout_booking', {
+        bookingId, overtimeMinutes, overtimePaymentMode, settleFoodNow, foodPassPaymentMode,
       })
+      if (res?.needsFoodPassCollection) {
+        setCheckoutBooking(null)
+        setFoodPassCollectMode('cash')
+        setFoodPassPrompt({ bookingId, shortfall: res.shortfall, overtimeMinutes, overtimePaymentMode, settleFoodNow })
+        return
+      }
       setCheckoutBooking(null)
+      setFoodPassPrompt(null)
       load()
     } catch (err) {
       window.alert(err.message)
@@ -586,7 +609,7 @@ export default function BookingsPage() {
   return (
     <>
       <div className="page-header">
-        <h1>Bookings</h1>
+        <h1>Active Session</h1>
         <span style={{ color: 'var(--text-muted)', fontSize: '0.85rem' }}>Currently present today</span>
         <button type="button" className="btn btn-ghost" onClick={load}>↻ Refresh</button>
       </div>
@@ -797,9 +820,49 @@ export default function BookingsPage() {
         <CheckoutModal
           booking={checkoutBooking}
           loading={actionLoading === checkoutBooking.id + ':checkout'}
-          onConfirm={confirmCheckout}
+          onConfirm={(params) => confirmCheckout(checkoutBooking.id, params)}
           onCancel={() => setCheckoutBooking(null)}
         />
+      )}
+
+      {foodPassPrompt && (
+        <div className="modal-overlay" onClick={() => {}}>
+          <div className="modal" style={{ maxWidth: 400 }} onClick={(e) => e.stopPropagation()}>
+            <h2>🎫 Food Pass Balance Negative</h2>
+            <div className="card" style={{ margin: '1rem 0', background: 'rgba(255,60,60,0.06)' }}>
+              <p className="mono" style={{ color: '#ff8888', fontSize: '1.2rem', fontWeight: 700 }}>
+                -{formatCurrency(foodPassPrompt.shortfall)}
+              </p>
+              <p style={{ fontSize: '0.85rem', color: 'var(--text-muted)', marginTop: '0.3rem' }}>
+                This session can't end with the Food Pass balance negative — collect this amount now to check out.
+              </p>
+            </div>
+            <div className="form-group">
+              <label>Mode</label>
+              <div style={{ display: 'flex', gap: '0.5rem' }}>
+                {[{ value: 'cash', label: '💵 Cash' }, { value: 'upi', label: '📱 UPI' }].map(({ value, label }) => (
+                  <button key={value} type="button" onClick={() => setFoodPassCollectMode(value)}
+                    style={{ flex: 1, padding: '0.5rem', border: `1px solid ${foodPassCollectMode === value ? 'var(--accent)' : '#333'}`, borderRadius: 999, background: foodPassCollectMode === value ? 'rgba(255,215,0,0.08)' : '#141414', color: foodPassCollectMode === value ? 'var(--accent)' : 'var(--text-muted)', cursor: 'pointer', fontWeight: 600 }}
+                  >{label}</button>
+                ))}
+              </div>
+            </div>
+            <div className="modal-actions">
+              <button
+                type="button" className="btn btn-primary"
+                disabled={actionLoading === foodPassPrompt.bookingId + ':checkout'}
+                onClick={() => confirmCheckout(foodPassPrompt.bookingId, {
+                  overtimeMinutes: foodPassPrompt.overtimeMinutes,
+                  overtimePaymentMode: foodPassPrompt.overtimePaymentMode,
+                  settleFoodNow: foodPassPrompt.settleFoodNow,
+                  foodPassPaymentMode: foodPassCollectMode,
+                })}
+              >
+                {actionLoading === foodPassPrompt.bookingId + ':checkout' ? 'Collecting…' : `Collect ${formatCurrency(foodPassPrompt.shortfall)} & Check Out`}
+              </button>
+            </div>
+          </div>
+        </div>
       )}
 
       {editBooking && (

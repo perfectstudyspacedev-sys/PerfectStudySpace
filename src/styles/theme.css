@@ -455,7 +455,9 @@ input[type="week"]::-webkit-calendar-picker-indicator {
 .modal-overlay {
   position: fixed;
   inset: 0;
-  background: rgba(0, 0, 0, 0.75);
+  /* High enough that vividly-colored content behind it (status badges, highlighted table
+     rows) doesn't ghost through and distract/confuse against the modal's own content. */
+  background: rgba(0, 0, 0, 0.94);
   z-index: 100;
   display: flex;
   align-items: center;
