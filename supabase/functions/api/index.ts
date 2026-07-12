@@ -206,6 +206,29 @@ function multiMonthDiscount(months: number): number {
   return 0;
 }
 
+const OVERTIME_GRACE_MINUTES = 15;
+
+// Overtime is billed in whole-hour blocks after the grace period, flat-rate — not prorated
+// per minute against whatever the person's own hourly rate happens to be. Any overshoot past
+// grace immediately bills a full hour block; going further into a second block bills another
+// full hour, and so on. A walk-in whose *original* booking was exactly 3 hours gets a
+// discounted first overtime hour (hour 4, ₹5 instead of ₹10) as a one-off special case — every
+// other hour, for anyone (walk-in or member), is a flat ₹10. Once total hours used for this
+// visit (booked/allotted hours + overtime hours) reaches 10, the total cost for the visit is
+// capped at a flat ₹100 rather than continuing to add up — computed once, at checkout, per
+// visit (never re-aggregated across separate days/sessions).
+function computeOvertimeCharge(overtimeMinutes: number, bookedHours: number, baseFee: number, isWalkinThreeHour: boolean) {
+  const overtimeHours = Math.ceil(Math.max(0, overtimeMinutes - OVERTIME_GRACE_MINUTES) / 60);
+  let addOn = 0;
+  for (let h = 1; h <= overtimeHours; h++) {
+    addOn += isWalkinThreeHour && h === 1 ? 5 : 10;
+  }
+  const totalHours = bookedHours + overtimeHours;
+  const totalCost = totalHours >= 10 ? 100 : baseFee + addOn;
+  const overtimeCharge = Math.max(totalCost - baseFee, 0);
+  return { overtimeHours, overtimeCharge, totalCost };
+}
+
 function dateRange(period: string, dateFrom?: string, dateTo?: string) {
   const today = todayISO();
   if (period === "today") return { from: today, to: today };
@@ -748,7 +771,7 @@ Deno.serve(async (req) => {
       const { data: booking, error: bErr } = await db.from("bookings").insert({
         student_id: studentId, branch_id: branchId, desk_id: desk?.id ?? null,
         booking_type: "walkin", start_time: startTime, end_time: endTime,
-        hours: Number(hours), amount, status: "active", payment_mode: paymentMode ?? "cash",
+        hours: Number(hours), scheduled_hours: Number(hours), amount, status: "active", payment_mode: paymentMode ?? "cash",
         created_by_staff_id: staff.id,
       }).select("id").single();
       if (bErr) return err(bErr.message);
@@ -1048,7 +1071,7 @@ Deno.serve(async (req) => {
         student_id: studentId, branch_id: branchId, desk_id: desk?.id ?? null,
         membership_id: membership.id, booking_type: bookingType,
         start_time: checkInTime, end_time: endTime,
-        hours: sessionHours, amount: 0, status: "active",
+        hours: sessionHours, scheduled_hours: sessionHours, amount: 0, status: "active",
         created_by_staff_id: staff.id,
       }).select("id").single();
       if (bErr) return err(bErr.message);
@@ -1093,10 +1116,22 @@ Deno.serve(async (req) => {
     // it wins (and hours is derived from the gap); otherwise hours (or the existing hours) is
     // used to derive the end time, same as before.
     if (action === "update_attendance") {
-      const { bookingId, startTime, endTime, hours, status } = payload;
+      const { bookingId, startTime, endTime, hours, status, scheduledHours } = payload;
       const { data: booking } = await db.from("bookings").select("*").eq("id", bookingId).single();
       if (!booking) return err("Attendance record not found");
       if (!requireBranch(staff, booking.branch_id)) return err("Branch access denied", 403);
+
+      // The originally booked/allotted session length — a stable baseline for recomputing
+      // overtime that survives repeated edits. Deliberately read from scheduled_hours, NOT
+      // the mutable `hours` column: `hours` gets overwritten below with the actual total
+      // duration, so on a *second* edit it would no longer reflect the true original session
+      // length, silently corrupting the overtime baseline. scheduled_hours is set once at
+      // booking creation and never touched again — except here: an explicit scheduledHours
+      // in the payload is a deliberate staff correction (e.g. a row whose scheduled_hours
+      // was itself corrupted before this baseline existed), the one legitimate way to change it.
+      const originalBookedHours = scheduledHours !== undefined && scheduledHours !== null && scheduledHours !== ""
+        ? Number(scheduledHours)
+        : Number(booking.scheduled_hours ?? booking.hours ?? 0);
 
       const newStartTime = startTime ? new Date(startTime).toISOString() : booking.start_time;
       let newEndTime: string;
@@ -1115,6 +1150,7 @@ Deno.serve(async (req) => {
 
       await db.from("bookings").update({
         start_time: newStartTime, end_time: newEndTime, hours: newHours, status: newStatus,
+        scheduled_hours: originalBookedHours,
       }).eq("id", bookingId);
 
       const hoursDelta = newHours - Number(booking.hours ?? 0);
@@ -1125,7 +1161,71 @@ Deno.serve(async (req) => {
         }).eq("id", booking.student_id);
       }
 
-      return json({ ok: true });
+      // Recompute overtime against the corrected times — scheduled end is derived from the
+      // *original* booked length (not the just-recomputed total-duration newHours), same
+      // basis checkout_booking used when it first logged this booking's overtime.
+      let overtimeAlreadyBilled = false;
+      if (booking.status === "completed" || newStatus === "completed") {
+        const scheduledEndMs = new Date(newStartTime).getTime() + originalBookedHours * 3_600_000;
+        const otMinutes = Math.max(0, Math.round((new Date(newEndTime).getTime() - scheduledEndMs) / 60_000));
+        const isWalkinBooking = booking.booking_type === "walkin";
+
+        // The 10-hour/₹100 cap is walk-in-only (total visit hours vs. total visit cost) — for
+        // a member, bookedHoursForCap=0 makes the cap trigger purely on overtimeHours itself.
+        const bookedHoursForCap = isWalkinBooking ? originalBookedHours : 0;
+        const baseFee = isWalkinBooking ? Number(booking.amount) : 0;
+        const isWalkinThreeHour = isWalkinBooking && originalBookedHours === 3;
+        const { overtimeCharge } = computeOvertimeCharge(otMinutes, bookedHoursForCap, baseFee, isWalkinThreeHour);
+
+        // .maybeSingle() would silently return nothing (not an error) if more than one row
+        // ever matched — risking a duplicate insert on top of stale rows instead of updating
+        // in place. Fetching as a list and taking the first is robust either way.
+        if (isWalkinBooking) {
+          const { data: existingTxns } = await db.from("transactions").select("id, amount")
+            .eq("booking_id", bookingId).eq("category", "overtime").order("created_at", { ascending: true });
+          const existingTxn = existingTxns?.[0];
+          if (existingTxn) {
+            if (overtimeCharge > 0) {
+              await db.from("transactions").update({ amount: overtimeCharge }).eq("id", existingTxn.id);
+            } else {
+              await db.from("transactions").delete().eq("id", existingTxn.id);
+            }
+          } else if (overtimeCharge > 0) {
+            await db.from("transactions").insert({
+              student_id: booking.student_id, branch_id: booking.branch_id,
+              booking_id: bookingId, category: "overtime", amount: overtimeCharge,
+              payment_mode: booking.payment_mode ?? "cash",
+              notes: "Overtime recomputed after editing attendance", created_by_staff_id: staff.id,
+            });
+          }
+        } else {
+          const { data: existingRows } = await db.from("overtime_sessions").select("id, billed_at")
+            .eq("booking_id", bookingId).order("created_at", { ascending: true });
+          const existingRow = existingRows?.[0];
+          if (existingRow) {
+            if (existingRow.billed_at) {
+              // Already collected/settled — leave the historical record alone rather than
+              // rewrite money that's already changed hands; just flag it in the response.
+              overtimeAlreadyBilled = true;
+            } else if (otMinutes > OVERTIME_GRACE_MINUTES) {
+              await db.from("overtime_sessions").update({
+                overtime_minutes: otMinutes, billed_amount: overtimeCharge,
+              }).eq("id", existingRow.id);
+            } else {
+              await db.from("overtime_sessions").delete().eq("id", existingRow.id);
+            }
+          } else if (otMinutes > OVERTIME_GRACE_MINUTES) {
+            await db.from("overtime_sessions").insert({
+              booking_id: bookingId, student_id: booking.student_id,
+              membership_id: booking.membership_id ?? null, branch_id: booking.branch_id,
+              overtime_minutes: otMinutes,
+              session_date: todayISO(), billed_amount: overtimeCharge, billed_at: null,
+            });
+          }
+        }
+      }
+
+      return json({ ok: true, overtimeAlreadyBilled });
     }
 
     // Record a past attendance the staff forgot to punch in at the time (e.g. "she came in
@@ -1159,7 +1259,7 @@ Deno.serve(async (req) => {
         student_id: studentId, branch_id: branchId, desk_id: deskId,
         membership_id: membership.id, booking_type: bookingType,
         start_time: newStartTime, end_time: newEndTime,
-        hours, amount: 0, status: "completed",
+        hours, scheduled_hours: hours, amount: 0, status: "completed",
         created_by_staff_id: staff.id,
       }).select("id").single();
       if (bErr) return err(bErr.message);
@@ -1248,7 +1348,7 @@ Deno.serve(async (req) => {
 
     // ─── CHECKOUT ───
     if (action === "checkout_booking") {
-      const { bookingId, overtimeMinutes, overtimePaymentMode, settleFoodNow, foodPassPaymentMode } = payload;
+      const { bookingId, overtimeMinutes, overtimePaymentMode, overtimePayNow, settleFoodNow, foodPassPaymentMode } = payload;
       const { data: booking } = await db.from("bookings").select("*").eq("id", bookingId).single();
       if (!booking) return err("Booking not found");
       if (!requireBranch(staff, booking.branch_id)) return err("Branch access denied", 403);
@@ -1365,35 +1465,50 @@ Deno.serve(async (req) => {
 
       if (otMinutes > 0) {
         if (booking.booking_type === "walkin") {
-          // First 15 minutes are grace — charge only beyond that
-          const billableMinutes = Math.max(0, otMinutes - 15);
-          const hours = Number(booking.hours) || 1;
-          const hourlyRate = Number(booking.amount) / hours;
-          const overtimeCharge = Math.round(billableMinutes * hourlyRate / 60);
+          const bookedHours = Number(booking.scheduled_hours ?? booking.hours) || 1;
+          const baseFee = Number(booking.amount);
+          const isWalkinThreeHour = bookedHours === 3;
+          const { overtimeCharge } = computeOvertimeCharge(otMinutes, bookedHours, baseFee, isWalkinThreeHour);
           if (overtimeCharge > 0) {
             await db.from("transactions").insert({
               student_id: booking.student_id, branch_id: booking.branch_id,
               booking_id: bookingId, category: "overtime",
               amount: overtimeCharge,
               payment_mode: overtimePaymentMode ?? booking.payment_mode ?? "cash",
-              notes: `${otMinutes}m overtime (${billableMinutes}m billed, 15m grace)`,
+              notes: `${otMinutes}m overtime, flat-rate billed`,
               created_by_staff_id: staff.id,
             });
           }
         } else {
-          // Member — 15 min grace, same as walk-ins; only the billable remainder is logged.
-          // Not charged now — it accumulates and gets added to the bill when the
-          // membership is finally settled (renewed or closed).
-          const billableMinutes = Math.max(0, otMinutes - 15);
-          if (billableMinutes > 0) {
+          // Member overtime is always logged (hours + computed amount) regardless of the
+          // Pay Now / Pay Later choice, so the record exists either way. Pay Now settles it
+          // immediately (billed_at set, transaction recorded today); Pay Later leaves it
+          // unbilled — exactly as before this feature — to be picked up at the membership's
+          // next renewal/closure settlement instead of today's bill.
+          // The 10-hour/₹100 cap is walk-in-only (total visit hours vs. total visit cost) —
+          // for a member there's no per-visit "total cost" to cap, so bookedHours=0 here makes
+          // the cap trigger purely on overtimeHours itself reaching 10.
+          const { overtimeHours, overtimeCharge } = computeOvertimeCharge(otMinutes, 0, 0, false);
+          if (overtimeHours > 0) {
+            const payNow = !!overtimePayNow;
             await db.from("overtime_sessions").insert({
               booking_id: bookingId,
               student_id: booking.student_id,
               membership_id: booking.membership_id ?? null,
               branch_id: booking.branch_id,
-              overtime_minutes: billableMinutes,
+              overtime_minutes: otMinutes,
               session_date: todayISO(),
+              billed_amount: overtimeCharge,
+              billed_at: payNow ? new Date().toISOString() : null,
             });
+            if (payNow && overtimeCharge > 0) {
+              await db.from("transactions").insert({
+                student_id: booking.student_id, branch_id: booking.branch_id,
+                booking_id: bookingId, category: "overtime",
+                amount: overtimeCharge, payment_mode: overtimePaymentMode ?? "cash",
+                notes: `${otMinutes}m overtime, flat-rate billed`, created_by_staff_id: staff.id,
+              });
+            }
           }
         }
       }
@@ -1888,6 +2003,20 @@ Deno.serve(async (req) => {
         category: "food", amount: bill.total, payment_mode: paymentMode ?? "cash",
         notes: "Food Pass shortfall collected at order time", created_by_staff_id: staff.id,
       });
+      return json({ ok: true });
+    }
+
+    // Per-row "omit from billing" toggle on the student profile's Overtime History table —
+    // waives that specific overtime session without deleting its record. Only meaningful for
+    // still-unbilled rows: once a row's already been collected/settled, toggling this after
+    // the fact wouldn't undo the money that already changed hands.
+    if (action === "set_overtime_excluded") {
+      const { overtimeSessionId, excluded } = payload;
+      const { data: row } = await db.from("overtime_sessions").select("*").eq("id", overtimeSessionId).single();
+      if (!row) return err("Overtime session not found");
+      if (!requireBranch(staff, row.branch_id)) return err("Branch access denied", 403);
+      if (row.billed_at) return err("This overtime was already billed/settled and can't be excluded");
+      await db.from("overtime_sessions").update({ excluded: !!excluded }).eq("id", overtimeSessionId);
       return json({ ok: true });
     }
 
@@ -2706,13 +2835,15 @@ Deno.serve(async (req) => {
     if (action === "list_today_bookings") {
       const { branchId } = payload;
       if (!requireBranch(staff, branchId)) return err("Branch access denied", 403);
-      const today = todayISO();
+      // status = "active" already means "not yet checked out" — that's true regardless of
+      // which day the session started, so no date filter here. A leftover date range meant a
+      // session staff forgot to check out would silently vanish from this tab the next day
+      // even though it was still genuinely open; sessions now only ever leave this list when
+      // checkout_booking explicitly closes them.
       const { data, error: bErr } = await db.from("bookings")
         .select("*, students(name, phone, course), desks!desk_id(label, seat_type), memberships:membership_id(total_paid, fee_due, monthly_fee, category, end_date)")
         .eq("branch_id", branchId)
         .eq("status", "active")
-        .gte("created_at", today + "T00:00:00Z")
-        .lte("created_at", today + "T23:59:59Z")
         .order("created_at", { ascending: false });
       if (bErr) return err(bErr.message);
 
@@ -3002,12 +3133,14 @@ Deno.serve(async (req) => {
 
       const { cashbackAmount, contribs: cashbackContribs } = await settlePendingCashbacks(db, mem.student_id, totalBeforeCashback);
 
-      // Any overtime run up since the last settlement gets folded into this renewal's bill.
-      const { data: unbilledOvertime } = await db.from("overtime_sessions").select("id, overtime_minutes")
-        .eq("student_id", mem.student_id).is("billed_at", null);
+      // Any "Pay Later" overtime logged since the last settlement gets folded into this
+      // renewal's bill — each row already carries its own flat-rate-computed charge from
+      // checkout time (computeOvertimeCharge), so this just sums what's still unbilled
+      // rather than re-deriving an amount from raw minutes.
+      const { data: unbilledOvertime } = await db.from("overtime_sessions").select("id, overtime_minutes, billed_amount")
+        .eq("student_id", mem.student_id).is("billed_at", null).eq("excluded", false);
       const overtimeMinutes = (unbilledOvertime ?? []).reduce((s: number, o: { overtime_minutes: number }) => s + Number(o.overtime_minutes), 0);
-      const overtimeHourlyRate = Number(mem.monthly_fee) / (Number(mem.hours_per_day) * 30);
-      const overtimeDue = Math.round(overtimeMinutes * overtimeHourlyRate / 60);
+      const overtimeDue = (unbilledOvertime ?? []).reduce((s: number, o: { billed_amount: number | null }) => s + Number(o.billed_amount ?? 0), 0);
 
       const totalFee = totalBeforeCashback - cashbackAmount + overtimeDue;
 
@@ -3074,7 +3207,9 @@ Deno.serve(async (req) => {
       }
 
       if (unbilledOvertime?.length) {
-        await db.from("overtime_sessions").update({ billed_at: new Date().toISOString(), billed_amount: overtimeDue })
+        // billed_amount is already correct per-row (set at checkout time) — only mark
+        // settled, don't overwrite each row with the aggregate sum.
+        await db.from("overtime_sessions").update({ billed_at: new Date().toISOString() })
           .in("id", unbilledOvertime.map((o: { id: string }) => o.id));
       }
 
@@ -3097,8 +3232,8 @@ Deno.serve(async (req) => {
         .eq("student_id", mem.student_id).eq("is_active", true).maybeSingle();
       const { data: foodPass } = await db.from("food_passes").select("*")
         .eq("student_id", mem.student_id).maybeSingle();
-      const { data: unbilledOvertime } = await db.from("overtime_sessions").select("overtime_minutes")
-        .eq("student_id", mem.student_id).is("billed_at", null);
+      const { data: unbilledOvertime } = await db.from("overtime_sessions").select("overtime_minutes, billed_amount")
+        .eq("student_id", mem.student_id).is("billed_at", null).eq("excluded", false);
       const { data: planChanges } = await db.from("membership_plan_changes").select("*")
         .eq("membership_id", membershipId).order("created_at", { ascending: true });
 
@@ -3113,8 +3248,7 @@ Deno.serve(async (req) => {
       const cashbackBase = Number(mem.monthly_fee) * Number(mem.months_paid);
       const { cashbackAmount } = await settlePendingCashbacks(db, mem.student_id, cashbackBase);
       const overtimeMinutes = (unbilledOvertime ?? []).reduce((s: number, o: { overtime_minutes: number }) => s + Number(o.overtime_minutes), 0);
-      const overtimeHourlyRate = Number(mem.monthly_fee) / (Number(mem.hours_per_day) * 30);
-      const overtimeDue = Math.round(overtimeMinutes * overtimeHourlyRate / 60);
+      const overtimeDue = (unbilledOvertime ?? []).reduce((s: number, o: { billed_amount: number | null }) => s + Number(o.billed_amount ?? 0), 0);
 
       const totalOwed = membershipDue + lockerDue + foodPassOwed + overtimeDue;
       const totalCredit = lockerDepositRefund + foodPassRefund + cashbackAmount;
@@ -3143,8 +3277,8 @@ Deno.serve(async (req) => {
         .eq("student_id", mem.student_id).eq("is_active", true).maybeSingle();
       const { data: foodPass } = await db.from("food_passes").select("*")
         .eq("student_id", mem.student_id).maybeSingle();
-      const { data: unbilledOvertime } = await db.from("overtime_sessions").select("id, overtime_minutes")
-        .eq("student_id", mem.student_id).is("billed_at", null);
+      const { data: unbilledOvertime } = await db.from("overtime_sessions").select("id, overtime_minutes, billed_amount")
+        .eq("student_id", mem.student_id).is("billed_at", null).eq("excluded", false);
       const { data: planChanges } = await db.from("membership_plan_changes").select("*")
         .eq("membership_id", mem.id).order("created_at", { ascending: true });
 
@@ -3157,8 +3291,7 @@ Deno.serve(async (req) => {
       const cashbackBase = Number(mem.monthly_fee) * Number(mem.months_paid);
       const { cashbackAmount, contribs: cashbackContribs } = await settlePendingCashbacks(db, mem.student_id, cashbackBase);
       const overtimeMinutes = (unbilledOvertime ?? []).reduce((s: number, o: { overtime_minutes: number }) => s + Number(o.overtime_minutes), 0);
-      const overtimeHourlyRate = Number(mem.monthly_fee) / (Number(mem.hours_per_day) * 30);
-      const overtimeDue = Math.round(overtimeMinutes * overtimeHourlyRate / 60);
+      const overtimeDue = (unbilledOvertime ?? []).reduce((s: number, o: { billed_amount: number | null }) => s + Number(o.billed_amount ?? 0), 0);
 
       const today = todayISO();
       const grossFee = Number(mem.monthly_fee) * Number(mem.months_paid);
@@ -3226,7 +3359,9 @@ Deno.serve(async (req) => {
       }
 
       if (s.unbilledOvertime.length) {
-        await db.from("overtime_sessions").update({ billed_at: new Date().toISOString(), billed_amount: s.overtimeDue })
+        // billed_amount is already correct per-row (set at checkout time) — only mark
+        // settled, don't overwrite each row with the aggregate sum.
+        await db.from("overtime_sessions").update({ billed_at: new Date().toISOString() })
           .in("id", s.unbilledOvertime.map((o: { id: string }) => o.id));
       }
 
@@ -3302,8 +3437,8 @@ Deno.serve(async (req) => {
         .eq("student_id", mem.student_id).eq("is_active", true).maybeSingle();
       const { data: foodPass } = await db.from("food_passes").select("*")
         .eq("student_id", mem.student_id).maybeSingle();
-      const { data: unbilledOvertime } = await db.from("overtime_sessions").select("id, overtime_minutes")
-        .eq("student_id", mem.student_id).is("billed_at", null);
+      const { data: unbilledOvertime } = await db.from("overtime_sessions").select("id, overtime_minutes, billed_amount")
+        .eq("student_id", mem.student_id).is("billed_at", null).eq("excluded", false);
 
       // Final settlement: what's owed to the business nets against what's owed back to
       // the student (locker deposit, unredeemed Food Pass balance, unredeemed cashback).
@@ -3316,8 +3451,7 @@ Deno.serve(async (req) => {
       const cashbackBase = Number(mem.monthly_fee) * Number(mem.months_paid);
       const { cashbackAmount, contribs: cashbackContribs } = await settlePendingCashbacks(db, mem.student_id, cashbackBase);
       const overtimeMinutes = (unbilledOvertime ?? []).reduce((s: number, o: { overtime_minutes: number }) => s + Number(o.overtime_minutes), 0);
-      const overtimeHourlyRate = Number(mem.monthly_fee) / (Number(mem.hours_per_day) * 30);
-      const overtimeDue = Math.round(overtimeMinutes * overtimeHourlyRate / 60);
+      const overtimeDue = (unbilledOvertime ?? []).reduce((s: number, o: { billed_amount: number | null }) => s + Number(o.billed_amount ?? 0), 0);
 
       const totalOwed = membershipDue + lockerDue + foodPassOwed + overtimeDue;
       const totalCredit = lockerDepositRefund + foodPassRefund + cashbackAmount;
@@ -3330,7 +3464,9 @@ Deno.serve(async (req) => {
       await db.from("memberships").update({ is_active: false, fee_due: 0 }).eq("id", membershipId);
 
       if (unbilledOvertime?.length) {
-        await db.from("overtime_sessions").update({ billed_at: new Date().toISOString(), billed_amount: overtimeDue })
+        // billed_amount is already correct per-row (set at checkout time) — only mark
+        // settled, don't overwrite each row with the aggregate sum.
+        await db.from("overtime_sessions").update({ billed_at: new Date().toISOString() })
           .in("id", unbilledOvertime.map((o: { id: string }) => o.id));
       }
 

@@ -5,6 +5,24 @@ import { api } from '../lib/api'
 import { formatCurrency, formatDate, todayISO } from '../lib/utils'
 import WalkInModal from '../components/WalkInModal'
 
+const OVERTIME_GRACE_MINUTES = 15
+
+// Mirrors computeOvertimeCharge() in the edge function — preview only, the server recomputes
+// authoritatively at checkout. Flat ₹10/hour after grace, rounded up to the next hour block;
+// a walk-in whose original booking was exactly 3 hours gets a discounted first overtime hour
+// (₹5); once total hours used (booked + overtime) reaches 10, the whole visit is capped at ₹100.
+function computeOvertimeCharge(overtimeMinutes, bookedHours, baseFee, isWalkinThreeHour) {
+  const overtimeHours = Math.ceil(Math.max(0, overtimeMinutes - OVERTIME_GRACE_MINUTES) / 60)
+  let addOn = 0
+  for (let h = 1; h <= overtimeHours; h++) {
+    addOn += isWalkinThreeHour && h === 1 ? 5 : 10
+  }
+  const totalHours = bookedHours + overtimeHours
+  const totalCost = totalHours >= 10 ? 100 : baseFee + addOn
+  const overtimeCharge = Math.max(totalCost - baseFee, 0)
+  return { overtimeHours, overtimeCharge, totalCost }
+}
+
 function getTimeStatus(endIso, totalPauseMs = 0) {
   const ms = new Date(endIso).getTime() + totalPauseMs - Date.now()
   if (ms <= 0) {
@@ -129,19 +147,25 @@ function EditStartTimeModal({ booking, onClose, onDone }) {
 function CheckoutModal({ booking, onConfirm, onCancel, loading }) {
   const [payMode, setPayMode] = useState(booking.payment_mode || 'cash')
   const [settleFoodNow, setSettleFoodNow] = useState(false)
+  const [overtimePayNow, setOvertimePayNow] = useState(false)
 
   const totalPauseMs = (booking.total_pause_minutes ?? 0) * 60_000
   const endMs = new Date(booking.end_time).getTime() + totalPauseMs
   const overtimeMs = Math.max(Date.now() - endMs, 0)
   const overtimeMinutes = Math.ceil(overtimeMs / 60_000)
   const isWalkin = booking.booking_type === 'walkin'
+  const membership = booking.memberships
 
-  // Walk-in overtime charge — first 15 min grace, then charge beyond that
-  const GRACE_MINUTES = 15
-  const billableMinutes = isWalkin ? Math.max(0, overtimeMinutes - GRACE_MINUTES) : 0
-  const hourlyRate = isWalkin ? (Number(booking.amount) / Number(booking.hours)) : 0
-  const overtimeCharge = isWalkin ? Math.round(billableMinutes * hourlyRate / 60) : 0
-  const inGrace = isWalkin && overtimeMinutes <= GRACE_MINUTES
+  // Flat ₹10/hour after the 15-min grace, rounded up per hour block; a 3-hour walk-in booking
+  // gets a discounted first overtime hour. The 10-hour/₹100 cap is walk-in-only (total visit
+  // hours vs. total visit cost) — for a member there's no per-visit "total cost" to cap, so
+  // bookedHours=0 makes the cap trigger purely on overtimeHours itself reaching 10. See
+  // computeOvertimeCharge() in the edge function, which is authoritative at checkout.
+  const bookedHours = isWalkin ? Number(booking.scheduled_hours ?? booking.hours) || 0 : 0
+  const baseFee = isWalkin ? Number(booking.amount) : 0
+  const isWalkinThreeHour = isWalkin && bookedHours === 3
+  const { overtimeHours, overtimeCharge } = computeOvertimeCharge(overtimeMinutes, bookedHours, baseFee, isWalkinThreeHour)
+  const inGrace = overtimeMinutes <= OVERTIME_GRACE_MINUTES
 
   const otH = Math.floor(overtimeMinutes / 60)
   const otM = overtimeMinutes % 60
@@ -152,12 +176,12 @@ function CheckoutModal({ booking, onConfirm, onCancel, loading }) {
   const alreadyPaid = Number(booking.amount) + paidFoodTotal
   const remainingDue = overtimeCharge + (isWalkin ? unpaidFoodTotal : 0) // session fee already settled — overtime + any unpaid food are owed now
   const fullBill = alreadyPaid + remainingDue
-  const membership = booking.memberships
   const membershipDue = membership ? Number(membership.fee_due ?? 0) : 0
   const isExpiredUnrenewed = !!membership && membership.end_date < todayISO()
   const hasFoodPass = !isWalkin && !!booking.hasFoodPass
   // A Food Pass holder's food is auto-deducted at checkout — nothing to "collect" from them.
   const memberDueNow = hasFoodPass ? 0 : unpaidFoodTotal
+  const memberOvertimeDueNow = !isWalkin && overtimeCharge > 0 && overtimePayNow ? overtimeCharge : 0
   const canClose = !isExpiredUnrenewed || membershipDue <= 0
 
   return (
@@ -170,19 +194,14 @@ function CheckoutModal({ booking, onConfirm, onCancel, loading }) {
             <p style={{ fontWeight: 700, color: inGrace ? '#4ade80' : '#ff8888', marginBottom: '0.3rem' }}>
               ⏱ {otLabel} overtime {inGrace ? '— within grace period' : ''}
             </p>
-            {isWalkin ? (
-              inGrace ? (
-                <p style={{ fontSize: '0.85rem', color: 'var(--text-muted)' }}>
-                  Under 15 minutes — no extra charge applies.
-                </p>
-              ) : (
-                <p style={{ fontSize: '0.85rem', color: 'var(--text-muted)' }}>
-                  15 min grace + {billableMinutes}m billed at ₹{Math.round(hourlyRate)}/hr
-                </p>
-              )
+            {inGrace ? (
+              <p style={{ fontSize: '0.85rem', color: 'var(--text-muted)' }}>
+                Under 15 minutes — no extra charge applies.
+              </p>
             ) : (
               <p style={{ fontSize: '0.85rem', color: 'var(--text-muted)' }}>
-                Overtime will be logged to this member&apos;s profile for settlement at membership end.
+                15 min grace, then {overtimeHours} hour{overtimeHours === 1 ? '' : 's'} billed — {formatCurrency(overtimeCharge)}
+                {isWalkin ? '' : ' (logged either way; see below)'}
               </p>
             )}
           </div>
@@ -218,6 +237,11 @@ function CheckoutModal({ booking, onConfirm, onCancel, loading }) {
                   </p>
                 </>
               )}
+              {overtimeCharge > 0 && (
+                <p className="mono" style={{ color: '#ff8888', fontWeight: 700 }}>
+                  Overtime ({overtimeHours}h): {formatCurrency(overtimeCharge)} — logged either way, choose below
+                </p>
+              )}
               {isExpiredUnrenewed && (
                 <>
                   <p style={{ color: '#ff4444', fontWeight: 700, marginTop: paidFoodTotal || unpaidFoodTotal ? '0.5rem' : 0 }}>
@@ -231,7 +255,7 @@ function CheckoutModal({ booking, onConfirm, onCancel, loading }) {
                   </p>
                 </>
               )}
-              {!paidFoodTotal && !unpaidFoodTotal && !isExpiredUnrenewed && (
+              {!paidFoodTotal && !unpaidFoodTotal && !overtimeCharge && !isExpiredUnrenewed && (
                 <p style={{ color: 'var(--text-muted)', fontSize: '0.85rem' }}>Nothing pending — membership in good standing.</p>
               )}
             </>
@@ -245,7 +269,26 @@ function CheckoutModal({ booking, onConfirm, onCancel, loading }) {
           </label>
         )}
 
-        {(isWalkin ? remainingDue > 0 : memberDueNow > 0 && settleFoodNow) && (
+        {!isWalkin && overtimeCharge > 0 && (
+          <div className="form-group">
+            <label>Overtime — {formatCurrency(overtimeCharge)}</label>
+            <div style={{ display: 'flex', gap: '0.5rem' }}>
+              <button type="button" onClick={() => setOvertimePayNow(true)}
+                style={{ flex: 1, padding: '0.5rem', border: `1px solid ${overtimePayNow ? 'var(--accent)' : '#333'}`, borderRadius: 999, background: overtimePayNow ? 'rgba(255,215,0,0.08)' : '#141414', color: overtimePayNow ? 'var(--accent)' : 'var(--text-muted)', cursor: 'pointer', fontWeight: 600, fontSize: '0.85rem' }}
+              >Pay Now</button>
+              <button type="button" onClick={() => setOvertimePayNow(false)}
+                style={{ flex: 1, padding: '0.5rem', border: `1px solid ${!overtimePayNow ? 'var(--accent)' : '#333'}`, borderRadius: 999, background: !overtimePayNow ? 'rgba(255,215,0,0.08)' : '#141414', color: !overtimePayNow ? 'var(--accent)' : 'var(--text-muted)', cursor: 'pointer', fontWeight: 600, fontSize: '0.85rem' }}
+              >Pay Later</button>
+            </div>
+            <p style={{ fontSize: '0.78rem', color: 'var(--text-muted)', marginTop: '0.3rem' }}>
+              {overtimePayNow
+                ? 'Collected now, added to today\'s bill.'
+                : 'Logged to their profile, not added to today\'s bill — settled at their next renewal/closure.'}
+            </p>
+          </div>
+        )}
+
+        {(isWalkin ? remainingDue > 0 : (memberDueNow > 0 && settleFoodNow) || memberOvertimeDueNow > 0) && (
           <div className="form-group">
             <label>Payment Mode</label>
             <div style={{ display: 'flex', gap: '0.5rem' }}>
@@ -261,11 +304,13 @@ function CheckoutModal({ booking, onConfirm, onCancel, loading }) {
         <div className="modal-actions">
           <button type="button" className="btn btn-ghost" onClick={onCancel}>Cancel</button>
           <button type="button" className="btn btn-primary" disabled={loading}
-            onClick={() => onConfirm({ overtimeMinutes, overtimeCharge, overtimePaymentMode: payMode, settleFoodNow })}
+            onClick={() => onConfirm({ overtimeMinutes, overtimeCharge, overtimePaymentMode: payMode, overtimePayNow, settleFoodNow })}
           >
             {loading ? 'Checking out…'
               : isWalkin && remainingDue > 0 ? `Collect ₹${remainingDue.toLocaleString('en-IN')} & Check Out`
+              : !isWalkin && (memberDueNow > 0 && settleFoodNow) && memberOvertimeDueNow > 0 ? `Collect ₹${(memberDueNow + memberOvertimeDueNow).toLocaleString('en-IN')} & Check Out`
               : !isWalkin && memberDueNow > 0 && settleFoodNow ? `Collect ₹${memberDueNow.toLocaleString('en-IN')} & Check Out`
+              : !isWalkin && memberOvertimeDueNow > 0 ? `Collect ₹${memberOvertimeDueNow.toLocaleString('en-IN')} & Check Out`
               : !isWalkin && !canClose ? 'Check Out Anyway'
               : 'Check Out'}
           </button>
@@ -378,7 +423,7 @@ function FoodOrderModal({ branchId, booking, onClose, onDone }) {
           <p style={{ color: 'var(--text-muted)', marginBottom: '1rem' }}>{booking.students?.name}</p>
           <div className="card" style={{ marginBottom: '1rem', background: 'rgba(255,60,60,0.06)' }}>
             <p className="mono" style={{ color: '#ff8888', fontSize: '1.2rem', fontWeight: 700 }}>
-              -{formatCurrency(shortfallPrompt.shortfall)}
+              {formatCurrency(shortfallPrompt.shortfall)}
             </p>
             <p style={{ fontSize: '0.85rem', color: 'var(--text-muted)', marginTop: '0.5rem' }}>
               The order was placed and the Food Pass balance was left at 0 — this amount is already on the tab, to be collected at checkout. Collect it now instead, or skip and leave it for checkout.
@@ -579,16 +624,16 @@ export default function BookingsPage() {
   // (no foodPassPaymentMode given yet), nothing was mutated server-side; this just swaps the
   // checkout modal for a compulsory collect-now prompt (no skip option) and resubmits once
   // a payment mode is picked.
-  const confirmCheckout = async (bookingId, { overtimeMinutes, overtimePaymentMode, settleFoodNow, foodPassPaymentMode }) => {
+  const confirmCheckout = async (bookingId, { overtimeMinutes, overtimePaymentMode, overtimePayNow, settleFoodNow, foodPassPaymentMode }) => {
     setActionLoading(bookingId + ':checkout')
     try {
       const res = await api('checkout_booking', {
-        bookingId, overtimeMinutes, overtimePaymentMode, settleFoodNow, foodPassPaymentMode,
+        bookingId, overtimeMinutes, overtimePaymentMode, overtimePayNow, settleFoodNow, foodPassPaymentMode,
       })
       if (res?.needsFoodPassCollection) {
         setCheckoutBooking(null)
         setFoodPassCollectMode('cash')
-        setFoodPassPrompt({ bookingId, shortfall: res.shortfall, overtimeMinutes, overtimePaymentMode, settleFoodNow })
+        setFoodPassPrompt({ bookingId, shortfall: res.shortfall, overtimeMinutes, overtimePaymentMode, overtimePayNow, settleFoodNow })
         return
       }
       setCheckoutBooking(null)
@@ -831,7 +876,7 @@ export default function BookingsPage() {
             <h2>🎫 Food Pass Balance Negative</h2>
             <div className="card" style={{ margin: '1rem 0', background: 'rgba(255,60,60,0.06)' }}>
               <p className="mono" style={{ color: '#ff8888', fontSize: '1.2rem', fontWeight: 700 }}>
-                -{formatCurrency(foodPassPrompt.shortfall)}
+                {formatCurrency(foodPassPrompt.shortfall)}
               </p>
               <p style={{ fontSize: '0.85rem', color: 'var(--text-muted)', marginTop: '0.3rem' }}>
                 This session can't end with the Food Pass balance negative — collect this amount now to check out.
@@ -854,6 +899,7 @@ export default function BookingsPage() {
                 onClick={() => confirmCheckout(foodPassPrompt.bookingId, {
                   overtimeMinutes: foodPassPrompt.overtimeMinutes,
                   overtimePaymentMode: foodPassPrompt.overtimePaymentMode,
+                  overtimePayNow: foodPassPrompt.overtimePayNow,
                   settleFoodNow: foodPassPrompt.settleFoodNow,
                   foodPassPaymentMode: foodPassCollectMode,
                 })}

@@ -43,6 +43,7 @@ function AttendanceModal({ studentId, branchId, booking, onClose, onDone }) {
   const [date, setDate] = useState(booking ? toLocalDateInput(booking.start_time) : todayISO())
   const [checkIn, setCheckIn] = useState(booking ? toLocalTimeInput(booking.start_time) : '09:00')
   const [checkOut, setCheckOut] = useState(booking && booking.status !== 'active' ? toLocalTimeInput(booking.end_time) : '')
+  const [scheduledHours, setScheduledHours] = useState(booking ? String(booking.scheduled_hours ?? booking.hours ?? '') : '')
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState('')
 
@@ -54,7 +55,13 @@ function AttendanceModal({ studentId, branchId, booking, onClose, onDone }) {
       const startTime = combineDateTime(date, checkIn).toISOString()
       const endTime = combineDateTime(date, checkOut).toISOString()
       if (isEdit) {
-        await api('update_attendance', { bookingId: booking.id, startTime, endTime })
+        const res = await api('update_attendance', {
+          bookingId: booking.id, startTime, endTime,
+          scheduledHours: scheduledHours !== '' ? Number(scheduledHours) : undefined,
+        })
+        if (res?.overtimeAlreadyBilled) {
+          window.alert('Attendance updated. Note: overtime for this session was already billed/collected, so its amount was not adjusted — check the Overtime History table if it needs a manual correction.')
+        }
       } else {
         await api('add_attendance', { studentId, branchId, startTime, endTime })
       }
@@ -82,6 +89,18 @@ function AttendanceModal({ studentId, branchId, booking, onClose, onDone }) {
           <label>Check-out Time</label>
           <input type="time" value={checkOut} onChange={(e) => setCheckOut(e.target.value)} />
         </div>
+        {isEdit && (
+          <div className="form-group">
+            <label>Scheduled Hours (their true original allotment)</label>
+            <input
+              type="number" min={0} step={0.5} value={scheduledHours}
+              onChange={(e) => setScheduledHours(e.target.value)}
+            />
+            <p style={{ fontSize: '0.75rem', color: 'var(--text-muted)', marginTop: '0.25rem' }}>
+              Used as the baseline for overtime — only change this if it looks wrong (e.g. from a record edited before this fix existed), not just because you're correcting the check-in/out time.
+            </p>
+          </div>
+        )}
         {error && <p className="error-msg">{error}</p>}
         <div className="modal-actions">
           <button type="button" className="btn btn-ghost" onClick={onClose}>Cancel</button>
@@ -335,6 +354,7 @@ export default function StudentProfilePage() {
   const [foodPassLoading, setFoodPassLoading] = useState(false)
   const [foodPassError, setFoodPassError] = useState('')
   const [attendanceModal, setAttendanceModal] = useState(null) // { booking } to edit, or {} to add
+  const [overtimeToggleLoading, setOvertimeToggleLoading] = useState(null)
   const [planChangeOpen, setPlanChangeOpen] = useState(false)
   const [cabinChangeOpen, setCabinChangeOpen] = useState(false)
   const [transferOpen, setTransferOpen] = useState(false)
@@ -620,6 +640,18 @@ export default function StudentProfilePage() {
       setDeleteMembershipError(err.message)
     } finally {
       setDeleteMembershipLoading(false)
+    }
+  }
+
+  const handleToggleOvertimeExcluded = async (overtimeSessionId, excluded) => {
+    setOvertimeToggleLoading(overtimeSessionId)
+    try {
+      await api('set_overtime_excluded', { overtimeSessionId, excluded })
+      refresh()
+    } catch (err) {
+      window.alert(err.message)
+    } finally {
+      setOvertimeToggleLoading(null)
     }
   }
 
@@ -1435,27 +1467,40 @@ export default function StudentProfilePage() {
           <h3 style={{ color: 'var(--accent)', marginBottom: '0.75rem' }}>Overtime History</h3>
           <p style={{ color: 'var(--text-muted)', fontSize: '0.82rem', marginBottom: '0.75rem' }}>
             Total overtime: {(overtimeSessions ?? []).reduce((sum, s) => sum + s.overtime_minutes, 0)} minutes
-            {' '}(15 min grace already excluded — this is the billable portion)
+            {' '}(includes the 15 min grace period — billing itself still exempts it). Owed so far: {formatCurrency((overtimeSessions ?? []).filter(s => !s.billed_at && !s.excluded).reduce((sum, s) => sum + Number(s.billed_amount ?? 0), 0))}
           </p>
           <table className="data-table">
             <thead>
-              <tr><th>Date</th><th>Duration</th><th>Status</th></tr>
+              <tr><th>Date</th><th>Duration</th><th>Amount</th><th>Status</th><th>Omit</th></tr>
             </thead>
             <tbody>
               {(overtimeSessions ?? []).map(s => {
                 const h = Math.floor(s.overtime_minutes / 60)
                 const m = s.overtime_minutes % 60
                 return (
-                  <tr key={s.id}>
+                  <tr key={s.id} style={s.excluded ? { opacity: 0.5 } : undefined}>
                     <td className="mono">{formatDate(s.session_date)}</td>
                     <td style={{ color: '#ff8888', fontWeight: 600 }}>
                       {h > 0 ? `${h}h ${m}m` : `${m}m`}
                     </td>
+                    <td className="mono">{s.billed_amount != null ? formatCurrency(s.billed_amount) : '—'}</td>
                     <td>
                       {s.billed_at ? (
                         <span className="badge badge-active">Billed{s.billed_amount != null ? ` (${formatCurrency(s.billed_amount)})` : ''}</span>
+                      ) : s.excluded ? (
+                        <span className="badge badge-inactive">Omitted</span>
                       ) : (
                         <span className="badge badge-pending">Pending</span>
+                      )}
+                    </td>
+                    <td>
+                      {!s.billed_at && (
+                        <input
+                          type="checkbox" checked={!!s.excluded}
+                          disabled={overtimeToggleLoading === s.id}
+                          onChange={(e) => handleToggleOvertimeExcluded(s.id, e.target.checked)}
+                          title="Omit this overtime from billing"
+                        />
                       )}
                     </td>
                   </tr>
