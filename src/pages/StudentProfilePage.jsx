@@ -29,6 +29,15 @@ function toLocalTimeInput(isoString) {
   const pad = (n) => String(n).padStart(2, '0')
   return `${pad(d.getHours())}:${pad(d.getMinutes())}`
 }
+function formatAttendanceEdit(rawValue) {
+  try {
+    const { start, end } = JSON.parse(rawValue)
+    const fmt = (iso) => new Date(iso).toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit' })
+    return `${formatDate(start)} ${fmt(start)} – ${fmt(end)}`
+  } catch {
+    return rawValue ?? '—'
+  }
+}
 function combineDateTime(dateStr, timeStr) {
   const [h, m] = timeStr.split(':').map(Number)
   const d = new Date(`${dateStr}T00:00:00`)
@@ -331,7 +340,10 @@ export default function StudentProfilePage() {
   const [permPackages, setPermPackages] = useState(DEFAULT_PERM_PACKAGES)
   const [renewOpen, setRenewOpen] = useState(false)
   const [renewCategory, setRenewCategory] = useState('temporary')
-  const [renewHoursPerDay, setRenewHoursPerDay] = useState(4)
+  const [renewHoursPerDay, setRenewHoursPerDay] = useState(4) // number for a package, or the string 'custom'
+  const [renewCustomAmount, setRenewCustomAmount] = useState('')
+  const [renewCustomWeekdayHours, setRenewCustomWeekdayHours] = useState('')
+  const [renewCustomWeekendHours, setRenewCustomWeekendHours] = useState('')
   const [renewMonths, setRenewMonths] = useState(1)
   const [renewPayMode, setRenewPayMode] = useState('cash')
   const [renewPayType, setRenewPayType] = useState('full')
@@ -447,7 +459,7 @@ export default function StudentProfilePage() {
 
   // Keep the selected hours-per-day valid whenever the renewal category changes
   useEffect(() => {
-    if (!renewOpen) return
+    if (!renewOpen || renewHoursPerDay === 'custom') return
     const pkgs = renewCategory === 'permanent' ? permPackages : tempPackages
     if (pkgs.length && !pkgs.some(p => p.hours === renewHoursPerDay)) {
       setRenewHoursPerDay(pkgs[0].hours)
@@ -576,9 +588,13 @@ export default function StudentProfilePage() {
   }
 
   const openRenew = (mem) => {
+    const wasCustomPlan = mem.hours_per_day_weekend != null
     setRenewOpen(true)
     setRenewCategory(mem.category)
-    setRenewHoursPerDay(mem.hours_per_day)
+    setRenewHoursPerDay(wasCustomPlan ? 'custom' : mem.hours_per_day)
+    setRenewCustomAmount(wasCustomPlan ? String(mem.monthly_fee) : '')
+    setRenewCustomWeekdayHours(wasCustomPlan ? String(mem.hours_per_day) : '')
+    setRenewCustomWeekendHours(wasCustomPlan ? String(mem.hours_per_day_weekend) : '')
     setRenewMonths(1)
     setRenewPayMode('cash')
     setRenewPayType('full')
@@ -587,16 +603,22 @@ export default function StudentProfilePage() {
   }
 
   const handleRenewSubmit = async (membershipId) => {
+    const renewIsCustomPlan = renewHoursPerDay === 'custom'
+    if (renewIsCustomPlan && !(Number(renewCustomAmount) > 0)) return setRenewError('Enter a valid custom amount')
+    if (renewIsCustomPlan && !(Number(renewCustomWeekdayHours) > 0)) return setRenewError('Enter valid weekday hours')
     setRenewLoading(true)
     setRenewError('')
     try {
       const res = await api('renew_membership', {
         membershipId,
         category: renewCategory,
-        hoursPerDay: renewHoursPerDay,
+        hoursPerDay: renewIsCustomPlan ? Number(renewCustomWeekdayHours) : renewHoursPerDay,
         monthsPaid: renewMonths,
         paymentMode: renewPayMode,
         advanceAmount: renewPayType === 'partial' ? (Number(renewAdvance) || null) : renewPayType === 'pending' ? 0 : null,
+        isCustomPlan: renewIsCustomPlan || undefined,
+        customAmount: renewIsCustomPlan ? Number(renewCustomAmount) : undefined,
+        weekendHours: renewIsCustomPlan ? (Number(renewCustomWeekendHours) || Number(renewCustomWeekdayHours)) : undefined,
       })
       setRenewOpen(false)
       if (res.cashbackApplied || res.overtimeCharged) {
@@ -673,7 +695,19 @@ export default function StudentProfilePage() {
   if (loading) return <p>Loading profile…</p>
   if (!data?.student) return <p>Student not found.</p>
 
-  const { student, memberships, bookings, transactions, locker, overtimeSessions, holds, discounts, cashbacks, planChanges, edits } = data
+  const { student, memberships, locker } = data
+  // These come back from the backend ordered by created_at, but backfilled records (e.g.
+  // "Add Attendance" for a past date) are inserted in whatever order staff happen to enter
+  // them — not the order their actual session dates fall in — so sort explicitly here by
+  // the date that's actually shown in each table, newest first, rather than trusting insert order.
+  const bookings = [...(data.bookings ?? [])].sort((a, b) => new Date(b.start_time) - new Date(a.start_time))
+  const overtimeSessions = [...(data.overtimeSessions ?? [])].sort((a, b) => new Date(b.session_date) - new Date(a.session_date))
+  const transactions = [...(data.transactions ?? [])].sort((a, b) => new Date(b.created_at) - new Date(a.created_at))
+  const holds = [...(data.holds ?? [])].sort((a, b) => new Date(b.paused_at) - new Date(a.paused_at))
+  const discounts = [...(data.discounts ?? [])].sort((a, b) => new Date(b.created_at) - new Date(a.created_at))
+  const cashbacks = [...(data.cashbacks ?? [])].sort((a, b) => new Date(b.created_at) - new Date(a.created_at))
+  const planChanges = [...(data.planChanges ?? [])].sort((a, b) => new Date(b.created_at) - new Date(a.created_at))
+  const edits = [...(data.edits ?? [])].sort((a, b) => new Date(b.created_at) - new Date(a.created_at))
   const activeMem = memberships?.find(m => m.is_active)
   const isPaused = activeMem?.is_paused || activeMem?.status === 'paused'
   const isExpired = !!activeMem && activeMem.end_date < todayISO()
@@ -693,10 +727,12 @@ export default function StudentProfilePage() {
   const pendingCashback = (cashbacks ?? []).find(c => c.status === 'pending')
 
   // Renewal pricing — plan (category/hours) is editable at renewal time
+  const renewIsCustomPlan = renewHoursPerDay === 'custom'
   const renewPackages = renewCategory === 'permanent' ? permPackages : tempPackages
   const renewPkg = renewPackages.find(p => p.hours === renewHoursPerDay) ?? renewPackages[0]
+  const renewMonthlyFee = renewIsCustomPlan ? (Number(renewCustomAmount) || 0) : (renewPkg?.fee ?? 0)
   const renewDiscount = getMultiMonthDiscount(renewMonths)
-  const renewGross = renewPkg ? renewPkg.fee * renewMonths : 0
+  const renewGross = renewMonthlyFee * renewMonths
   const renewBeforeCashback = renewGross * (1 - renewDiscount / 100)
   const renewCashbackAmount = pendingCashback
     ? Math.min(
@@ -738,7 +774,10 @@ export default function StudentProfilePage() {
                 ['Course', student.course || '—'],
                 activeMem && ['Membership', (
                   <span key="mem">
-                    <span className="cap">{activeMem.category}</span> · {activeMem.hours_per_day}h/day
+                    <span className="cap">{activeMem.category}</span> ·{' '}
+                    {activeMem.hours_per_day_weekend != null
+                      ? `${activeMem.hours_per_day}h/day weekday, ${activeMem.hours_per_day_weekend}h/day weekend (custom)`
+                      : `${activeMem.hours_per_day}h/day`}
                     {isPaused && <span style={{ marginLeft: 6, background: '#ff990020', color: '#ffaa44', padding: '1px 6px', borderRadius: 4, fontSize: '0.72rem', fontWeight: 700 }}>ON HOLD</span>}
                   </span>
                 )],
@@ -1361,12 +1400,16 @@ export default function StudentProfilePage() {
               {edits.map(e => (
                 <tr key={e.id}>
                   <td className="mono">{formatDate(e.created_at)}</td>
-                  <td className="cap">{e.edit_type === 'cabin' ? 'Cabin' : 'End Date'}</td>
+                  <td className="cap">{e.edit_type === 'cabin' ? 'Cabin' : e.edit_type === 'attendance' ? 'Attendance' : 'End Date'}</td>
                   <td className="mono" style={{ fontSize: '0.85rem' }}>
-                    {e.edit_type === 'end_date' ? formatDate(e.old_value) : (e.old_value ?? '—')}
+                    {e.edit_type === 'end_date' ? formatDate(e.old_value)
+                      : e.edit_type === 'attendance' ? formatAttendanceEdit(e.old_value)
+                      : (e.old_value ?? '—')}
                   </td>
                   <td className="mono" style={{ fontSize: '0.85rem' }}>
-                    {e.edit_type === 'end_date' ? formatDate(e.new_value) : (e.new_value ?? '—')}
+                    {e.edit_type === 'end_date' ? formatDate(e.new_value)
+                      : e.edit_type === 'attendance' ? formatAttendanceEdit(e.new_value)
+                      : (e.new_value ?? '—')}
                   </td>
                   <td>{e.staff?.display_name || e.staff?.username || '—'}</td>
                 </tr>
@@ -1546,12 +1589,32 @@ export default function StudentProfilePage() {
 
             <div className="form-group">
               <label>Hours per Day</label>
-              <select value={renewHoursPerDay} onChange={(e) => setRenewHoursPerDay(Number(e.target.value))}>
+              <select value={renewHoursPerDay} onChange={(e) => setRenewHoursPerDay(e.target.value === 'custom' ? 'custom' : Number(e.target.value))}>
                 {renewPackages.map(p => (
                   <option key={p.hours} value={p.hours}>{p.hours} hrs/day — {formatCurrency(p.fee)}/mo</option>
                 ))}
+                <option value="custom">Custom Plan</option>
               </select>
             </div>
+            {renewIsCustomPlan && (
+              <div className="form-group">
+                <label>Custom Plan Details</label>
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
+                  <input
+                    type="number" min={0} placeholder="Amount Collected (₹/mo)"
+                    value={renewCustomAmount} onChange={(e) => setRenewCustomAmount(e.target.value)}
+                  />
+                  <input
+                    type="number" min={0} step={0.5} placeholder="Weekday Hours"
+                    value={renewCustomWeekdayHours} onChange={(e) => setRenewCustomWeekdayHours(e.target.value)}
+                  />
+                  <input
+                    type="number" min={0} step={0.5} placeholder="Weekend Hours (defaults to weekday if left blank)"
+                    value={renewCustomWeekendHours} onChange={(e) => setRenewCustomWeekendHours(e.target.value)}
+                  />
+                </div>
+              </div>
+            )}
 
             <div className="form-group">
               <label>Months</label>

@@ -799,6 +799,7 @@ Deno.serve(async (req) => {
         branchId, name, phone, category, hoursPerDay, timings, monthsPaid,
         paymentMode, course, lockerNo, withLocker,
         advanceAmount, emergencyContact, referralSource, startDate: customStartDate,
+        isCustomPlan, customAmount, weekendHours,
       } = payload;
       if (!requireBranch(staff, branchId)) return err("Branch access denied", 403);
       if (!emergencyContact) return err("Emergency contact is required");
@@ -811,8 +812,25 @@ Deno.serve(async (req) => {
         emergency_contact: emergencyContact, referral_source: referralSource,
       });
 
-      const monthlyFee = await getMembershipPackage(db, Number(hoursPerDay), category);
-      if (!monthlyFee) return err("Invalid membership package");
+      // A Custom plan skips the fixed fee_config tiers entirely — staff enter a negotiated
+      // monthly amount directly, plus separate weekday/weekend hour allotments (enforced at
+      // check-in). hours_per_day_weekend being set is what marks a membership as custom
+      // everywhere else (renewal, check-in) — a normal package never sets it.
+      let monthlyFee: number;
+      let weekdayHoursValue: number;
+      let weekendHoursValue: number | null = null;
+      if (isCustomPlan) {
+        monthlyFee = Number(customAmount);
+        if (!(monthlyFee > 0)) return err("Enter a valid custom amount");
+        weekdayHoursValue = Number(hoursPerDay);
+        if (!(weekdayHoursValue > 0)) return err("Enter valid weekday hours");
+        weekendHoursValue = Number(weekendHours) || weekdayHoursValue;
+      } else {
+        const pkgFee = await getMembershipPackage(db, Number(hoursPerDay), category);
+        if (!pkgFee) return err("Invalid membership package");
+        monthlyFee = pkgFee;
+        weekdayHoursValue = Number(hoursPerDay);
+      }
 
       const months = Number(monthsPaid) || 1;
       const discount = multiMonthDiscount(months);
@@ -844,7 +862,8 @@ Deno.serve(async (req) => {
       const { data: mem, error: mErr } = await db.from("memberships").insert({
         student_id: studentId, branch_id: branchId, category, seat_type: seatType,
         desk_id: deskId, cabin_no: cabinNo, month: monthLabel,
-        hours_per_day: hoursPerDay, timings: timings ?? '', start_date: startDate, end_date: endDate,
+        hours_per_day: weekdayHoursValue, hours_per_day_weekend: weekendHoursValue,
+        timings: timings ?? '', start_date: startDate, end_date: endDate,
         due_date: dueDate, months_paid: months, discount_percent: discount,
         monthly_fee: monthlyFee,
         total_paid: advanceAmount != null ? Number(advanceAmount) : totalPaid,
@@ -1043,9 +1062,17 @@ Deno.serve(async (req) => {
       const usedMinutesToday = (todaysSessions ?? []).reduce((sum: number, b: { start_time: string; end_time: string }) => {
         return sum + Math.max(0, (new Date(b.end_time).getTime() - new Date(b.start_time).getTime()) / 60_000);
       }, 0);
-      const remainingMinutes = membership.hours_per_day * 60 - usedMinutesToday;
+      // A custom-plan membership (hours_per_day_weekend set) gets a different daily quota
+      // on Sat/Sun than on weekdays — everyone else's hours_per_day applies every day.
+      const istDayOfWeek = new Date(Date.now() + IST_OFFSET_MS).getUTCDay();
+      const isWeekendToday = istDayOfWeek === 0 || istDayOfWeek === 6;
+      const effectiveHoursPerDay = isWeekendToday && membership.hours_per_day_weekend != null
+        ? Number(membership.hours_per_day_weekend)
+        : Number(membership.hours_per_day);
+
+      const remainingMinutes = effectiveHoursPerDay * 60 - usedMinutesToday;
       if (remainingMinutes <= 0) {
-        return err(`Daily quota of ${membership.hours_per_day}h has already been used today (split across earlier sessions).`);
+        return err(`Daily quota of ${effectiveHoursPerDay}h has already been used today (split across earlier sessions).`);
       }
 
       // A member visiting a branch other than their registered home branch can't use their
@@ -1153,6 +1180,19 @@ Deno.serve(async (req) => {
         scheduled_hours: originalBookedHours,
       }).eq("id", bookingId);
 
+      // Log the correction to the same Edit History a cabin/end-date edit shows up in — a
+      // member session's start/end time only, since membership_edits.membership_id is
+      // NOT NULL and a walk-in booking has none.
+      if (booking.membership_id && (newStartTime !== booking.start_time || newEndTime !== booking.end_time)) {
+        await db.from("membership_edits").insert({
+          membership_id: booking.membership_id, student_id: booking.student_id, branch_id: booking.branch_id,
+          edit_type: "attendance",
+          old_value: JSON.stringify({ start: booking.start_time, end: booking.end_time }),
+          new_value: JSON.stringify({ start: newStartTime, end: newEndTime }),
+          changed_by_staff_id: staff.id,
+        });
+      }
+
       const hoursDelta = newHours - Number(booking.hours ?? 0);
       if (hoursDelta !== 0) {
         const { data: st } = await db.from("students").select("total_hours_studied").eq("id", booking.student_id).single();
@@ -1255,11 +1295,21 @@ Deno.serve(async (req) => {
       const isCrossBranchVisit = student.branch_id != null && student.branch_id !== branchId;
       const deskId = membership.category === "permanent" && !isCrossBranchVisit ? membership.desk_id : null;
 
+      // Overtime must always be measured against the student's actual plan allotment for
+      // the day this session falls on, never the duration the staff member happened to type
+      // in — otherwise a manually-added session's "scheduled hours" always equals its actual
+      // hours and overtime silently never triggers.
+      const attendanceDayOfWeek = new Date(new Date(newStartTime).getTime() + IST_OFFSET_MS).getUTCDay();
+      const isWeekendAttendance = attendanceDayOfWeek === 0 || attendanceDayOfWeek === 6;
+      const scheduledHours = isWeekendAttendance && membership.hours_per_day_weekend != null
+        ? Number(membership.hours_per_day_weekend)
+        : Number(membership.hours_per_day);
+
       const { data: booking, error: bErr } = await db.from("bookings").insert({
         student_id: studentId, branch_id: branchId, desk_id: deskId,
         membership_id: membership.id, booking_type: bookingType,
         start_time: newStartTime, end_time: newEndTime,
-        hours, scheduled_hours: hours, amount: 0, status: "completed",
+        hours, scheduled_hours: scheduledHours, amount: 0, status: "completed",
         created_by_staff_id: staff.id,
       }).select("id").single();
       if (bErr) return err(bErr.message);
@@ -1269,6 +1319,21 @@ Deno.serve(async (req) => {
         total_hours_studied: Number(student.total_hours_studied ?? 0) + hours,
         updated_at: new Date().toISOString(),
       }).eq("id", studentId);
+
+      // Log overtime immediately (unbilled — Pay Later — since there's no live checkout
+      // moment for a backfilled session to ask Pay Now/Later), same basis as a normal
+      // checkout: scheduled end = check-in + the plan's actual allotment for that day.
+      const scheduledEndMs = new Date(newStartTime).getTime() + scheduledHours * 3_600_000;
+      const otMinutes = Math.max(0, Math.round((new Date(newEndTime).getTime() - scheduledEndMs) / 60_000));
+      if (otMinutes > OVERTIME_GRACE_MINUTES) {
+        const { overtimeCharge } = computeOvertimeCharge(otMinutes, 0, 0, false);
+        await db.from("overtime_sessions").insert({
+          booking_id: booking!.id, student_id: studentId,
+          membership_id: membership.id, branch_id: branchId,
+          overtime_minutes: otMinutes,
+          session_date: toISTDateStr(newStartTime), billed_amount: overtimeCharge, billed_at: null,
+        });
+      }
 
       return json({ ok: true, bookingId: booking!.id });
     }
@@ -2708,7 +2773,7 @@ Deno.serve(async (req) => {
         username, password_hash: hash, role: role ?? "staff",
         display_name: displayName, branch_id: branchId,
       });
-      if (error) return err(error.message);
+      if (error) return err(error.code === "23505" ? "That username is already taken (usernames aren't case-sensitive)" : error.message);
       return json({ ok: true });
     }
 
@@ -2740,7 +2805,7 @@ Deno.serve(async (req) => {
       }
 
       const { error } = await db.from("staff").update(updates).eq("id", staffId);
-      if (error) return err(error.message);
+      if (error) return err(error.code === "23505" ? "That username is already taken (usernames aren't case-sensitive)" : error.message);
 
       // Deactivation removes the account permanently, so its tasks (recurring and
       // one-time alike) are removed too rather than left dangling — new occurrences
@@ -3112,7 +3177,10 @@ Deno.serve(async (req) => {
 
     // ─── RENEW MEMBERSHIP ───
     if (action === "renew_membership") {
-      const { membershipId, monthsPaid, paymentMode, advanceAmount, category, hoursPerDay } = payload;
+      const {
+        membershipId, monthsPaid, paymentMode, advanceAmount, category, hoursPerDay,
+        isCustomPlan, customAmount, weekendHours,
+      } = payload;
       const { data: mem } = await db.from("memberships").select("*").eq("id", membershipId).single();
       if (!mem) return err("Membership not found");
       if (!requireBranch(staff, mem.branch_id)) return err("Branch access denied", 403);
@@ -3120,12 +3188,28 @@ Deno.serve(async (req) => {
         return err(`This membership still has ₹${Number(mem.fee_due)} pending — clear it before renewing.`);
       }
 
+      const wasCustomPlan = mem.hours_per_day_weekend != null;
       const newCategory = category ?? mem.category;
-      const newHoursPerDay = Number(hoursPerDay ?? mem.hours_per_day);
 
-      const months = Number(monthsPaid) || 1;
-      const monthlyFee = await getMembershipPackage(db, newHoursPerDay, newCategory);
-      if (!monthlyFee) return err("Invalid membership package");
+      // A custom plan renews the same way it was created — a negotiated amount and
+      // weekday/weekend hours instead of a fee_config package lookup. If the renewal
+      // doesn't explicitly re-specify custom terms, the expiring membership's own custom
+      // amount/hours just carry forward unchanged.
+      let monthlyFee: number;
+      let newHoursPerDay: number;
+      let newWeekendHours: number | null = null;
+      if (isCustomPlan || (wasCustomPlan && isCustomPlan === undefined)) {
+        monthlyFee = customAmount != null ? Number(customAmount) : Number(mem.monthly_fee);
+        if (!(monthlyFee > 0)) return err("Enter a valid custom amount");
+        newHoursPerDay = hoursPerDay != null ? Number(hoursPerDay) : Number(mem.hours_per_day);
+        if (!(newHoursPerDay > 0)) return err("Enter valid weekday hours");
+        newWeekendHours = weekendHours != null ? Number(weekendHours) : Number(mem.hours_per_day_weekend ?? newHoursPerDay);
+      } else {
+        newHoursPerDay = Number(hoursPerDay ?? mem.hours_per_day);
+        const pkgFee = await getMembershipPackage(db, newHoursPerDay, newCategory);
+        if (!pkgFee) return err("Invalid membership package");
+        monthlyFee = pkgFee;
+      }
 
       const discount = multiMonthDiscount(months);
       const gross = monthlyFee * months;
@@ -3181,7 +3265,7 @@ Deno.serve(async (req) => {
         student_id: mem.student_id, branch_id: mem.branch_id,
         category: newCategory, seat_type: seatType,
         desk_id: deskId, cabin_no: cabinNo,
-        month: monthLabel, hours_per_day: newHoursPerDay,
+        month: monthLabel, hours_per_day: newHoursPerDay, hours_per_day_weekend: newWeekendHours,
         timings: mem.timings ?? '', start_date: startDate, end_date: endDate,
         due_date: dueDate, months_paid: months, discount_percent: discount,
         monthly_fee: monthlyFee, total_paid: feePaid, fee_due: feeDue,

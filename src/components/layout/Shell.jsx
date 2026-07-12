@@ -28,15 +28,27 @@ const TOAST_META = {
   cross_branch: { icon: '🔄', title: 'Cross-Branch Visit', color: '#a78bfa', bg: '#150f24', border: '#8b5cf6', shadow: 'rgba(139,92,246,0.35)' },
 }
 
+// Only the 4 most recent toasts stack up on screen — a burst of alerts (e.g. several
+// sessions ending at once) would otherwise pile up and block the page underneath. Anything
+// older stays fully accessible via the bell dropdown, which lists every toast regardless.
+const MAX_VISIBLE_TOASTS = 4
+
 function SessionToasts({ toasts, dismiss, dismissAll }) {
   if (toasts.length === 0) return null
+  const visible = toasts.slice(-MAX_VISIBLE_TOASTS)
+  const hiddenCount = toasts.length - visible.length
   return (
     <div style={{
       position: 'fixed', bottom: '1.5rem', left: '50%', transform: 'translateX(-50%)',
       zIndex: 300, display: 'flex', flexDirection: 'column', gap: '0.5rem',
       alignItems: 'center', pointerEvents: 'none', width: '100%', maxWidth: 480,
     }}>
-      {toasts.map(t => {
+      {hiddenCount > 0 && (
+        <p style={{ pointerEvents: 'none', fontSize: '0.75rem', color: 'var(--text-muted)' }}>
+          +{hiddenCount} more in the bell 🔔
+        </p>
+      )}
+      {visible.map(t => {
         const meta = TOAST_META[t.level] ?? TOAST_META.warn
         return (
           <div key={t.id} style={{

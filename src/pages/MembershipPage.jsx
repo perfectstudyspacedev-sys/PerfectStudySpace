@@ -685,7 +685,10 @@ function NewMembershipForm({ branchId, onCreated, tempPackages, permPackages }) 
   const [referralSource, setReferralSource] = useState('')
   const [course, setCourse] = useState('')
   const [category, setCategory] = useState('temporary')
-  const [hoursPerDay, setHoursPerDay] = useState(4)
+  const [hoursPerDay, setHoursPerDay] = useState(4) // number for a package, or the string 'custom'
+  const [customAmount, setCustomAmount] = useState('')
+  const [customWeekdayHours, setCustomWeekdayHours] = useState('')
+  const [customWeekendHours, setCustomWeekendHours] = useState('')
   const [monthsPaid, setMonthsPaid] = useState(1)
   const [startDate, setStartDate] = useState(todayISO())
   const [paymentMode, setPaymentMode] = useState('cash')
@@ -713,10 +716,12 @@ function NewMembershipForm({ branchId, onCreated, tempPackages, permPackages }) 
   }, [branchId])
 
   const packages = category === 'permanent' ? permPackages : tempPackages
+  const isCustomPlan = hoursPerDay === 'custom'
 
-  // Keep hoursPerDay valid whenever category changes or live fee_config packages load in
+  // Keep hoursPerDay valid whenever category changes or live fee_config packages load in —
+  // but leave an explicit "Custom" choice alone, it isn't tied to a package.
   useEffect(() => {
-    if (packages.length && !packages.some(p => p.hours === hoursPerDay)) {
+    if (!isCustomPlan && packages.length && !packages.some(p => p.hours === hoursPerDay)) {
       setHoursPerDay(packages[0].hours)
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -766,7 +771,7 @@ function NewMembershipForm({ branchId, onCreated, tempPackages, permPackages }) 
     }
   }, [withLocker, lockerStatus, lockerNo])
 
-  const monthlyFee = packages.find(p => p.hours === hoursPerDay)?.fee ?? 0
+  const monthlyFee = isCustomPlan ? (Number(customAmount) || 0) : (packages.find(p => p.hours === hoursPerDay)?.fee ?? 0)
   const discount = getMultiMonthDiscount(monthsPaid)
   const gross = monthlyFee * monthsPaid
   const total = gross * (1 - discount / 100)
@@ -786,16 +791,22 @@ function NewMembershipForm({ branchId, onCreated, tempPackages, permPackages }) 
     if (paymentType === 'partial' && (advanceNum <= 0 || advanceNum >= grandTotal)) {
       return setError('Partial payment must be more than ₹0 and less than the total — use Full Paid or Full Pending otherwise')
     }
+    if (isCustomPlan && !(Number(customAmount) > 0)) return setError('Enter a valid custom amount')
+    if (isCustomPlan && !(Number(customWeekdayHours) > 0)) return setError('Enter valid weekday hours')
     setLoading(true)
     setError('')
     try {
       const result = await api('create_membership', {
-        branchId, name, phone, category, hoursPerDay, monthsPaid,
-        paymentMode, course,
+        branchId, name, phone, category,
+        hoursPerDay: isCustomPlan ? Number(customWeekdayHours) : hoursPerDay,
+        monthsPaid, paymentMode, course,
         emergencyContact, referralSource,
         withLocker, lockerNo: withLocker ? lockerNo : null,
         advanceAmount: paymentType === 'full' ? null : paymentType === 'partial' ? advanceNum : 0,
         startDate: isOwner ? startDate : undefined,
+        isCustomPlan: isCustomPlan || undefined,
+        customAmount: isCustomPlan ? Number(customAmount) : undefined,
+        weekendHours: isCustomPlan ? (Number(customWeekendHours) || Number(customWeekdayHours)) : undefined,
       })
       setReceipt({ ...result, name, phone, total: grandTotal, amountPaid, amountRemaining })
       openWhatsApp(phone, waTemplate.replace(/\{name\}/gi, name))
@@ -915,12 +926,32 @@ function NewMembershipForm({ branchId, onCreated, tempPackages, permPackages }) 
         </div>
         <div className="form-group">
           <label>Hours per Day</label>
-          <select value={hoursPerDay} onChange={(e) => setHoursPerDay(Number(e.target.value))}>
+          <select value={hoursPerDay} onChange={(e) => setHoursPerDay(e.target.value === 'custom' ? 'custom' : Number(e.target.value))}>
             {packages.map(p => (
               <option key={p.hours} value={p.hours}>{p.hours} hrs/day — {formatCurrency(p.fee)}/mo</option>
             ))}
+            <option value="custom">Custom Plan</option>
           </select>
         </div>
+        {isCustomPlan && (
+          <div className="form-group">
+            <label>Custom Plan Details</label>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
+              <input
+                type="number" min={0} placeholder="Amount Collected (₹/mo)"
+                value={customAmount} onChange={(e) => setCustomAmount(e.target.value)}
+              />
+              <input
+                type="number" min={0} step={0.5} placeholder="Weekday Hours"
+                value={customWeekdayHours} onChange={(e) => setCustomWeekdayHours(e.target.value)}
+              />
+              <input
+                type="number" min={0} step={0.5} placeholder="Weekend Hours (defaults to weekday if left blank)"
+                value={customWeekendHours} onChange={(e) => setCustomWeekendHours(e.target.value)}
+              />
+            </div>
+          </div>
+        )}
         <div className="form-group">
           <label>Months Paid Upfront</label>
           <select value={monthsPaid} onChange={(e) => setMonthsPaid(Number(e.target.value))}>

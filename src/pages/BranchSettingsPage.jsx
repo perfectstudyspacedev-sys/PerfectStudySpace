@@ -15,10 +15,6 @@ export default function BranchSettingsPage() {
   const [lockerCapacity, setLockerCapacity] = useState('')
   const [savingLockers, setSavingLockers] = useState(false)
   const [msg, setMsg] = useState('')
-  const [fixingDates, setFixingDates] = useState(false)
-  const [fixDatesResult, setFixDatesResult] = useState('')
-  const [fixingFoodPasses, setFixingFoodPasses] = useState(false)
-  const [fixFoodPassesResult, setFixFoodPassesResult] = useState('')
 
   const load = useCallback(async () => {
     if (!selectedBranch) return
@@ -48,34 +44,6 @@ export default function BranchSettingsPage() {
   }, [branches, selectedBranch])
 
   if (!isOwner) return <Navigate to="/" replace />
-
-  const handleFixMembershipDates = async () => {
-    if (!window.confirm('Recompute end/due dates for every membership from its start date? This corrects drift from a past timezone bug and is safe to run more than once.')) return
-    setFixingDates(true)
-    setFixDatesResult('')
-    try {
-      const res = await api('fix_membership_dates')
-      setFixDatesResult(`Checked ${res.checked} memberships, corrected ${res.fixed}.`)
-    } catch (err) {
-      setFixDatesResult(`Error: ${err.message}`)
-    } finally {
-      setFixingDates(false)
-    }
-  }
-
-  const handleFixNegativeFoodPasses = async () => {
-    if (!window.confirm('Reset every negative Food Pass balance to 0 and record the shortfall as an unpaid food bill (collected at the student\'s next checkout)? Safe to run more than once.')) return
-    setFixingFoodPasses(true)
-    setFixFoodPassesResult('')
-    try {
-      const res = await api('fix_negative_food_pass_balances')
-      setFixFoodPassesResult(`Checked ${res.checked} Food Pass(es), corrected ${res.fixed}.`)
-    } catch (err) {
-      setFixFoodPassesResult(`Error: ${err.message}`)
-    } finally {
-      setFixingFoodPasses(false)
-    }
-  }
 
   const handleAddDesk = async () => {
     if (!newDeskLabel.trim()) return
@@ -146,25 +114,6 @@ export default function BranchSettingsPage() {
       </div>
 
       {msg && <p style={{ color: 'var(--accent)', marginBottom: '1rem' }}>{msg}</p>}
-
-      <div className="card" style={{ marginBottom: '1.5rem' }}>
-        <h3 style={{ color: 'var(--accent)', marginBottom: '0.5rem' }}>Data Repair</h3>
-        <p style={{ color: 'var(--text-muted)', fontSize: '0.82rem', marginBottom: '0.75rem' }}>
-          Recomputes every membership's end/due date from its start date — fixes drift left over from a past timezone bug. Safe to run more than once.
-        </p>
-        <button type="button" className="btn btn-ghost" onClick={handleFixMembershipDates} disabled={fixingDates}>
-          {fixingDates ? 'Fixing…' : 'Fix Membership Dates'}
-        </button>
-        {fixDatesResult && <p style={{ marginTop: '0.5rem', fontSize: '0.85rem', color: 'var(--accent)' }}>{fixDatesResult}</p>}
-
-        <p style={{ color: 'var(--text-muted)', fontSize: '0.82rem', margin: '1rem 0 0.75rem' }}>
-          Resets any Food Pass balance still negative from before the "never go negative" fix — the shortfall is preserved as an unpaid food bill so it's still collected at the student's next checkout. Safe to run more than once.
-        </p>
-        <button type="button" className="btn btn-ghost" onClick={handleFixNegativeFoodPasses} disabled={fixingFoodPasses}>
-          {fixingFoodPasses ? 'Fixing…' : 'Fix Negative Food Pass Balances'}
-        </button>
-        {fixFoodPassesResult && <p style={{ marginTop: '0.5rem', fontSize: '0.85rem', color: 'var(--accent)' }}>{fixFoodPassesResult}</p>}
-      </div>
 
       <div className="card" style={{ marginBottom: '1.5rem' }}>
         <h3 style={{ color: 'var(--accent)', marginBottom: '1rem' }}>Manage Desks</h3>
