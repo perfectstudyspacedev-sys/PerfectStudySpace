@@ -12,7 +12,7 @@ function json(data: unknown, status = 200) {
     headers: { ...corsHeaders, "Content-Type": "application/json" },
   });
 }
-
+ 
 function err(message: string, status = 400) {
   return json({ error: message }, status);
 }
