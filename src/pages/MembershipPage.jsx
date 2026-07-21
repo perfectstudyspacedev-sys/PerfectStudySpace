@@ -4,6 +4,7 @@ import { useAuth } from '../context/AuthContext'
 import { api } from '../lib/api'
 import { formatCurrency, formatDate, getMultiMonthDiscount, todayISO, openWhatsApp, getWelcomeTemplate, saveWelcomeTemplate } from '../lib/utils'
 import PaymentModeSelector, { isSplitValid } from '../components/PaymentModeSelector'
+import { DEV_MODE } from '../lib/devMode'
 
 // Fallback packages — used only until live rates are fetched from fee_config (Branch Settings)
 const DEFAULT_TEMP_PACKAGES = [
@@ -1139,7 +1140,7 @@ function WaitlistTab({ branchId }) {
   if (loading) return <p>Loading…</p>
   if (!data) return <p>Could not load waitlist.</p>
 
-  if (!data.isFull) {
+  if (!data.isFull && !DEV_MODE) {
     return (
       <div className="card">
         <h3 style={{ color: 'var(--accent)', marginBottom: '0.5rem' }}>Waitlist</h3>

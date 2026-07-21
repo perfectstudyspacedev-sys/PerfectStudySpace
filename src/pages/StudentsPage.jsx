@@ -3,6 +3,7 @@ import { Link } from 'react-router-dom'
 import { useAuth } from '../context/AuthContext'
 import { api } from '../lib/api'
 import { exportToCSV, formatDate, formatCurrency } from '../lib/utils'
+import { DEV_MODE } from '../lib/devMode'
 
 const COLUMNS = [
   { key: 'sNo', label: 'S.No' },
@@ -18,7 +19,9 @@ const COLUMNS = [
 ]
 
 export default function StudentsPage() {
-  const { branchId, isOwner } = useAuth()
+  const { branchId, isOwner: isOwnerRole } = useAuth()
+  // Dev-mode: staff get the same Students spreadsheet access as owner, code-level only.
+  const isOwner = isOwnerRole || DEV_MODE
   const [students, setStudents] = useState([])
   const [loading, setLoading] = useState(true)
   const [sortKey, setSortKey] = useState('sNo')

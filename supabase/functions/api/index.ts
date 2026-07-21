@@ -6,6 +6,11 @@ const corsHeaders = {
   "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type",
 };
 
+// Temporary dev-mode switch, code-level only (no UI toggle) — flip and redeploy to turn its
+// gated behaviors on/off. Currently: lets join_permanent_waitlist succeed even when the
+// branch has vacant permanent seats. Matching frontend switch is src/lib/devMode.js.
+const DEV_MODE = true;
+
 function json(data: unknown, status = 200) {
   return new Response(JSON.stringify(data), {
     status,
@@ -399,7 +404,10 @@ Deno.serve(async (req) => {
 
     // ─── PUBLIC ───
     if (action === "login") {
-      const { username, password } = payload;
+      // Stray leading/trailing whitespace (a common typo/autocomplete artifact) shouldn't
+      // ever be the reason a valid login fails.
+      const username = String(payload.username ?? "").trim();
+      const password = String(payload.password ?? "").trim();
       if (!username || !password) return err("Username and password required");
       const { data, error } = await db.rpc("verify_staff_login", { p_username: username, p_password: password });
       if (error || !data?.length) return err("Invalid login credentials", 401);
@@ -954,7 +962,7 @@ Deno.serve(async (req) => {
       if (!name || !phone) return err("Name and phone are required");
       const { count: freeDesks } = await db.from("desks").select("*", { count: "exact", head: true })
         .eq("branch_id", branchId).eq("status", "free");
-      if ((freeDesks ?? 0) > 0) return err("Permanent seats are still available — register directly instead of waitlisting");
+      if ((freeDesks ?? 0) > 0 && !DEV_MODE) return err("Permanent seats are still available — register directly instead of waitlisting");
 
       const { error } = await db.from("permanent_waitlist").insert({
         branch_id: branchId, name, phone, hours_per_day: hoursPerDay || null, notes: notes || null,
