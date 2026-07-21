@@ -62,8 +62,8 @@ export default function StudentsPage() {
 
   const filtered = useMemo(() => {
     let rows = [...students]
-    if (search) {
-      const s = search.toLowerCase()
+    if (search.trim()) {
+      const s = search.trim().toLowerCase()
       rows = rows.filter(r => r.name.toLowerCase().includes(s) || r.contact.includes(s) || r.cabin.toLowerCase().includes(s))
     }
     if (statusFilter) rows = rows.filter(r => r.status === statusFilter)

@@ -336,6 +336,8 @@ export default function StudentProfilePage() {
   const [lockerPayAmount, setLockerPayAmount] = useState('')
   const [lockerLoading, setLockerLoading] = useState(false)
   const [lockerError, setLockerError] = useState('')
+  const [editingLockerDue, setEditingLockerDue] = useState(false)
+  const [lockerDueDate, setLockerDueDate] = useState('')
   const [tempPackages, setTempPackages] = useState(DEFAULT_TEMP_PACKAGES)
   const [permPackages, setPermPackages] = useState(DEFAULT_PERM_PACKAGES)
   const [renewOpen, setRenewOpen] = useState(false)
@@ -490,6 +492,21 @@ export default function StudentProfilePage() {
     try {
       await api('record_locker_payment', { lockerId, amount: Number(lockerPayAmount), paymentMode: lockerPayMode })
       setLockerPayAmount('')
+      refresh()
+    } catch (err) {
+      setLockerError(err.message)
+    } finally {
+      setLockerLoading(false)
+    }
+  }
+
+  const handleEditLockerDueDate = async (lockerId) => {
+    if (!lockerDueDate) return
+    setLockerLoading(true)
+    setLockerError('')
+    try {
+      await api('update_locker_due_date', { lockerId, dueDate: lockerDueDate })
+      setEditingLockerDue(false)
       refresh()
     } catch (err) {
       setLockerError(err.message)
@@ -1143,8 +1160,27 @@ export default function StudentProfilePage() {
           <h2 style={{ color: 'var(--accent)', marginBottom: '0.75rem' }}>Locker</h2>
           {locker ? (
             <>
-              <p style={{ fontSize: '0.88rem', marginBottom: '0.5rem' }}>
-                Locker <strong>{locker.locker_no}</strong> · Due {formatDate(locker.locker_due_date)}
+              <p style={{ fontSize: '0.88rem', marginBottom: '0.5rem', display: 'flex', alignItems: 'center', gap: '0.5rem', flexWrap: 'wrap' }}>
+                <span>Locker <strong>{locker.locker_no}</strong></span>
+                {editingLockerDue ? (
+                  <>
+                    <input
+                      type="date" value={lockerDueDate}
+                      onChange={(e) => setLockerDueDate(e.target.value)}
+                      style={{ padding: '0.2rem 0.4rem', fontSize: '0.82rem' }}
+                    />
+                    <button type="button" className="btn btn-primary" style={{ padding: '0.2rem 0.6rem', fontSize: '0.8rem' }}
+                      onClick={() => handleEditLockerDueDate(locker.id)} disabled={lockerLoading}>Save</button>
+                    <button type="button" style={{ padding: '0.2rem 0.6rem', fontSize: '0.8rem', background: 'transparent', border: '1px solid #333', borderRadius: 4, color: 'var(--text-muted)', cursor: 'pointer' }}
+                      onClick={() => setEditingLockerDue(false)}>Cancel</button>
+                  </>
+                ) : (
+                  <>
+                    <span>Due {formatDate(locker.locker_due_date)}</span>
+                    <button type="button" style={{ padding: '0.15rem 0.5rem', fontSize: '0.75rem', background: 'transparent', border: '1px solid #333', borderRadius: 4, color: 'var(--accent)', cursor: 'pointer' }}
+                      onClick={() => { setLockerDueDate(locker.locker_due_date); setEditingLockerDue(true) }}>Edit</button>
+                  </>
+                )}
               </p>
               {Number(locker.fee_due) > 0 ? (
                 <div style={{ marginBottom: '0.75rem' }}>

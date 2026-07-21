@@ -837,6 +837,7 @@ Deno.serve(async (req) => {
       const gross = monthlyFee * months;
       const totalPaid = gross * (1 - discount / 100);
       const startDate = isOwner(staff) && customStartDate ? customStartDate : todayISO();
+      if (startDate > todayISO()) return err("Start date cannot be in the future");
       const endDate = endDateForMonths(startDate, months);
       // Derived the same clamp-aware way as endDate (not a raw addMonths) so a start date
       // on the 29th/30th/31st can't make dueDate collide with a 1-month endDate instead of
@@ -1009,6 +1010,17 @@ Deno.serve(async (req) => {
       if (!requireBranch(staff, locker.branch_id)) return err("Branch access denied", 403);
 
       await db.from("lockers").update({ is_active: false, deposit_returned: true }).eq("id", lockerId);
+      return json({ ok: true });
+    }
+
+    if (action === "update_locker_due_date") {
+      const { lockerId, dueDate } = payload;
+      if (!dueDate) return err("Due date is required");
+      const { data: locker } = await db.from("lockers").select("branch_id").eq("id", lockerId).single();
+      if (!locker) return err("Locker not found");
+      if (!requireBranch(staff, locker.branch_id)) return err("Branch access denied", 403);
+
+      await db.from("lockers").update({ locker_due_date: dueDate }).eq("id", lockerId);
       return json({ ok: true });
     }
 
