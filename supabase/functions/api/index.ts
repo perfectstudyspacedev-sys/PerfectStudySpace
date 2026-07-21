@@ -1282,6 +1282,30 @@ Deno.serve(async (req) => {
               notes: "Overtime recomputed after editing attendance", created_by_staff_id: staff.id,
             });
           }
+
+          // Keep the history row (added at checkout, see checkout_booking) in sync with the
+          // same recomputed numbers — a walk-in's overtime money is always adjusted directly
+          // above (no billed-money-already-changed-hands guard needed, unlike members), so
+          // this just mirrors that same update/insert/delete.
+          const { data: existingOtRows } = await db.from("overtime_sessions").select("id")
+            .eq("booking_id", bookingId).order("created_at", { ascending: true });
+          const existingOtRow = existingOtRows?.[0];
+          if (existingOtRow) {
+            if (otMinutes > OVERTIME_GRACE_MINUTES) {
+              await db.from("overtime_sessions").update({
+                overtime_minutes: otMinutes, billed_amount: overtimeCharge,
+              }).eq("id", existingOtRow.id);
+            } else {
+              await db.from("overtime_sessions").delete().eq("id", existingOtRow.id);
+            }
+          } else if (otMinutes > OVERTIME_GRACE_MINUTES) {
+            await db.from("overtime_sessions").insert({
+              booking_id: bookingId, student_id: booking.student_id, membership_id: null,
+              branch_id: booking.branch_id, overtime_minutes: otMinutes,
+              session_date: todayISO(), billed_amount: overtimeCharge,
+              billed_at: new Date().toISOString(),
+            });
+          }
         } else {
           const { data: existingRows } = await db.from("overtime_sessions").select("id, billed_at")
             .eq("booking_id", bookingId).order("created_at", { ascending: true });
@@ -1577,7 +1601,20 @@ Deno.serve(async (req) => {
           const bookedHours = Number(booking.scheduled_hours ?? booking.hours) || 1;
           const baseFee = Number(booking.amount);
           const isWalkinThreeHour = bookedHours === 3;
-          const { overtimeCharge } = computeOvertimeCharge(otMinutes, bookedHours, baseFee, isWalkinThreeHour);
+          const { overtimeHours, overtimeCharge } = computeOvertimeCharge(otMinutes, bookedHours, baseFee, isWalkinThreeHour);
+          if (overtimeHours > 0) {
+            // A walk-in has no "Pay Later" concept — the charge is collected immediately
+            // as part of checkout below, so this row is recorded already-billed. It exists
+            // purely so the student's profile shows the same Overtime History table a
+            // member gets; it was never used for walk-in billing itself (that's the
+            // transactions insert), so adding it doesn't change how/when money moves.
+            await db.from("overtime_sessions").insert({
+              booking_id: bookingId, student_id: booking.student_id, membership_id: null,
+              branch_id: booking.branch_id, overtime_minutes: otMinutes,
+              session_date: todayISO(), billed_amount: overtimeCharge,
+              billed_at: new Date().toISOString(),
+            });
+          }
           if (overtimeCharge > 0) {
             await db.from("transactions").insert({
               student_id: booking.student_id, branch_id: booking.branch_id,

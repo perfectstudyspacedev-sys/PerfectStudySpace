@@ -392,7 +392,7 @@ function ActiveMembersTab({ branchId, tempPackages, permPackages }) {
                             style={{ padding: '0.3rem 0.7rem', fontSize: '0.8rem', background: 'rgba(255,60,60,0.08)', border: '1px solid rgba(255,60,60,0.4)', color: '#ff8888', borderRadius: 999, cursor: 'pointer', fontWeight: 600 }}
                             disabled={actionLoading === m.membership_id + ':close'}
                             onClick={() => openCloseModal(m.membership_id, m.student_name)}
-                          >✕ Finish</button>
+                          >✕ Quit</button>
                         </>
                       ) : (
                         <>
@@ -533,11 +533,11 @@ function ActiveMembersTab({ branchId, tempPackages, permPackages }) {
         </div>
       )}
 
-      {/* Finish membership — permanently ends it; blocks until membership + locker dues are cleared */}
+      {/* Quit membership — permanently ends it; blocks until membership + locker dues are cleared */}
       {closeModal && (
         <div className="modal-overlay" onClick={() => setCloseModal(null)}>
           <div className="modal" style={{ maxWidth: 420 }} onClick={(e) => e.stopPropagation()}>
-            <h2>Finish Membership — {closeModal.studentName}</h2>
+            <h2>Quit Membership — {closeModal.studentName}</h2>
 
             {!closeSummary ? (
               <p>Checking final settlement…</p>
@@ -611,10 +611,10 @@ function ActiveMembersTab({ branchId, tempPackages, permPackages }) {
                 disabled={!closeSummary || closeLoading}
                 onClick={confirmClose}
               >
-                {closeLoading ? 'Finishing…'
-                  : closeSummary?.netAmount > 0 ? `Collect ${formatCurrency(closeSummary.netAmount)} & Finish`
-                  : closeSummary?.netAmount < 0 ? `Pay Back ${formatCurrency(-closeSummary.netAmount)} & Finish`
-                  : 'Confirm Finish'}
+                {closeLoading ? 'Quitting…'
+                  : closeSummary?.netAmount > 0 ? `Collect ${formatCurrency(closeSummary.netAmount)} & Quit`
+                  : closeSummary?.netAmount < 0 ? `Pay Back ${formatCurrency(-closeSummary.netAmount)} & Quit`
+                  : 'Confirm Quit'}
               </button>
             </div>
           </div>

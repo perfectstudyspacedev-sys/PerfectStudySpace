@@ -1817,7 +1817,7 @@ export default function StudentProfilePage() {
           <div className="modal" style={{ maxWidth: 440 }} onClick={(e) => e.stopPropagation()}>
             <h2 style={{ color: '#ff8888', marginBottom: '0.5rem' }}>🗑️ Delete Membership — {student.name}</h2>
             <p style={{ color: 'var(--text-muted)', fontSize: '0.82rem', marginBottom: '0.75rem' }}>
-              Ends the membership immediately{activeMem.category === 'permanent' ? ' and releases their cabin' : ''} — runs the same locker/Food Pass/cashback/overtime settlement as Finish Membership, plus a prorated refund for unused days. This can't be undone.
+              Ends the membership immediately{activeMem.category === 'permanent' ? ' and releases their cabin' : ''} — runs the same locker/Food Pass/cashback/overtime settlement as Quit Membership, plus a prorated refund for unused days. This can't be undone.
             </p>
 
             {deleteMembershipError && <p className="error-msg">{deleteMembershipError}</p>}
