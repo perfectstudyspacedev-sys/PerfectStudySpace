@@ -1160,28 +1160,39 @@ export default function StudentProfilePage() {
           <h2 style={{ color: 'var(--accent)', marginBottom: '0.75rem' }}>Locker</h2>
           {locker ? (
             <>
-              <p style={{ fontSize: '0.88rem', marginBottom: '0.5rem', display: 'flex', alignItems: 'center', gap: '0.5rem', flexWrap: 'wrap' }}>
-                <span>Locker <strong>{locker.locker_no}</strong></span>
-                {editingLockerDue ? (
-                  <>
-                    <input
-                      type="date" value={lockerDueDate}
-                      onChange={(e) => setLockerDueDate(e.target.value)}
-                      style={{ padding: '0.2rem 0.4rem', fontSize: '0.82rem' }}
-                    />
-                    <button type="button" className="btn btn-primary" style={{ padding: '0.2rem 0.6rem', fontSize: '0.8rem' }}
-                      onClick={() => handleEditLockerDueDate(locker.id)} disabled={lockerLoading}>Save</button>
-                    <button type="button" style={{ padding: '0.2rem 0.6rem', fontSize: '0.8rem', background: 'transparent', border: '1px solid #333', borderRadius: 4, color: 'var(--text-muted)', cursor: 'pointer' }}
-                      onClick={() => setEditingLockerDue(false)}>Cancel</button>
-                  </>
-                ) : (
-                  <>
-                    <span>Due {formatDate(locker.locker_due_date)}</span>
-                    <button type="button" style={{ padding: '0.15rem 0.5rem', fontSize: '0.75rem', background: 'transparent', border: '1px solid #333', borderRadius: 4, color: 'var(--accent)', cursor: 'pointer' }}
-                      onClick={() => { setLockerDueDate(locker.locker_due_date); setEditingLockerDue(true) }}>Edit</button>
-                  </>
-                )}
+              <p style={{ fontSize: '0.88rem', marginBottom: '0.5rem' }}>
+                Locker <strong>{locker.locker_no}</strong>{!editingLockerDue && <> · Due {formatDate(locker.locker_due_date)}</>}
               </p>
+              {editingLockerDue ? (
+                <div style={{ marginBottom: '0.75rem' }}>
+                  <div className="form-group">
+                    <label>Due Date</label>
+                    <input type="date" value={lockerDueDate} onChange={(e) => setLockerDueDate(e.target.value)} />
+                  </div>
+                  {lockerError && <p className="error-msg">{lockerError}</p>}
+                  <div style={{ display: 'flex', gap: '0.5rem' }}>
+                    <button
+                      type="button" className="btn btn-ghost" style={{ flex: 1 }}
+                      onClick={() => { setEditingLockerDue(false); setLockerError('') }}
+                    >
+                      Cancel
+                    </button>
+                    <button
+                      type="button" className="btn btn-primary" style={{ flex: 1 }}
+                      onClick={() => handleEditLockerDueDate(locker.id)} disabled={lockerLoading || !lockerDueDate}
+                    >
+                      {lockerLoading ? 'Saving…' : 'Save'}
+                    </button>
+                  </div>
+                </div>
+              ) : (
+                <button
+                  type="button" className="btn btn-ghost" style={{ width: '100%', fontSize: '0.85rem', marginBottom: '0.75rem' }}
+                  onClick={() => { setLockerDueDate(locker.locker_due_date); setEditingLockerDue(true) }}
+                >
+                  ✏️ Edit Due Date
+                </button>
+              )}
               {Number(locker.fee_due) > 0 ? (
                 <div style={{ marginBottom: '0.75rem' }}>
                   <p className="mono" style={{ color: '#ff8888', fontWeight: 700, marginBottom: '0.5rem' }}>
