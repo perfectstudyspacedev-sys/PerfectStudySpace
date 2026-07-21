@@ -3,6 +3,19 @@ import { Link } from 'react-router-dom'
 import { api } from '../lib/api'
 import { formatCurrency, formatDate, todayISO } from '../lib/utils'
 
+const STUDENT_COLUMNS = [
+  { key: 'sNo', label: 'S.No' },
+  { key: 'name', label: 'Name' },
+  { key: 'cabin', label: 'Cabin' },
+  { key: 'dueDate', label: 'Due Date', isDate: true },
+  { key: 'month', label: 'Month' },
+  { key: 'hours', label: 'Hours' },
+  { key: 'locker', label: 'Locker' },
+  { key: 'lockerDue', label: 'Locker Due', isDate: true },
+  { key: 'course', label: 'Course' },
+  { key: 'contact', label: 'Contact' },
+]
+
 function groupByBranch(rows) {
   const groups = new Map()
   for (const row of rows) {
@@ -19,6 +32,10 @@ export default function CombinedHallPage() {
   const [seatMap, setSeatMap] = useState(null)
   const [pending, setPending] = useState(null)
   const [pendingDate, setPendingDate] = useState(todayISO())
+  const [students, setStudents] = useState(null)
+  const [studentSearch, setStudentSearch] = useState('')
+  const [memberships, setMemberships] = useState(null)
+  const [sessions, setSessions] = useState(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
 
@@ -55,9 +72,42 @@ export default function CombinedHallPage() {
     }
   }, [pendingDate])
 
+  const loadStudents = useCallback(async () => {
+    setError('')
+    try {
+      const data = await api('list_students', { allBranches: true })
+      setStudents(data.students)
+    } catch (err) {
+      setError(err.message)
+    }
+  }, [])
+
+  const loadMemberships = useCallback(async () => {
+    setError('')
+    try {
+      const data = await api('list_active_memberships', { allBranches: true })
+      setMemberships(data.members)
+    } catch (err) {
+      setError(err.message)
+    }
+  }, [])
+
+  const loadSessions = useCallback(async () => {
+    setError('')
+    try {
+      const data = await api('list_today_bookings', { allBranches: true })
+      setSessions(data.bookings)
+    } catch (err) {
+      setError(err.message)
+    }
+  }, [])
+
   useEffect(() => { loadOverview() }, [loadOverview])
   useEffect(() => { if (tab === 'seatmap') loadSeatMap() }, [tab, loadSeatMap])
   useEffect(() => { if (tab === 'pending') loadPending() }, [tab, loadPending])
+  useEffect(() => { if (tab === 'students') loadStudents() }, [tab, loadStudents])
+  useEffect(() => { if (tab === 'membership') loadMemberships() }, [tab, loadMemberships])
+  useEffect(() => { if (tab === 'sessions') loadSessions() }, [tab, loadSessions])
 
   return (
     <>
@@ -66,6 +116,9 @@ export default function CombinedHallPage() {
         <button type="button" className={tab === 'overview' ? 'active' : ''} onClick={() => setTab('overview')}>Overview</button>
         <button type="button" className={tab === 'seatmap' ? 'active' : ''} onClick={() => setTab('seatmap')}>Seat Map</button>
         <button type="button" className={tab === 'pending' ? 'active' : ''} onClick={() => setTab('pending')}>Pending Tracking</button>
+        <button type="button" className={tab === 'students' ? 'active' : ''} onClick={() => setTab('students')}>Students</button>
+        <button type="button" className={tab === 'membership' ? 'active' : ''} onClick={() => setTab('membership')}>Membership</button>
+        <button type="button" className={tab === 'sessions' ? 'active' : ''} onClick={() => setTab('sessions')}>Active Session</button>
       </div>
 
       {error && <p className="error-msg" style={{ marginBottom: '1rem' }}>{error}</p>}
@@ -241,6 +294,119 @@ export default function CombinedHallPage() {
             </>
           )}
         </>
+      )}
+
+      {tab === 'students' && (
+        !students ? <p>Loading…</p> : (
+          <>
+            <div className="filters" style={{ marginBottom: '1rem' }}>
+              <input
+                placeholder="Search name, phone, cabin…" value={studentSearch}
+                onChange={(e) => setStudentSearch(e.target.value)}
+              />
+            </div>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '1.25rem' }}>
+              {groupByBranch(
+                studentSearch.trim()
+                  ? students.filter(s => {
+                      const q = studentSearch.trim().toLowerCase()
+                      return s.name.toLowerCase().includes(q) || s.contact.includes(q) || String(s.cabin).toLowerCase().includes(q)
+                    })
+                  : students
+              ).map(([branchName, rows]) => (
+                <div key={branchName} className="card" style={{ overflowX: 'auto' }}>
+                  <h3 style={{ color: 'var(--accent)', marginBottom: '0.75rem' }}>{branchName} · {rows.length} student{rows.length === 1 ? '' : 's'}</h3>
+                  <table className="data-table">
+                    <thead>
+                      <tr>
+                        {STUDENT_COLUMNS.map(col => <th key={col.key}>{col.label}</th>)}
+                        <th>Status</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {rows.map(s => (
+                        <tr key={s.id} className={(s.isOverdue || s.lockerOverdue) ? 'row-overdue' : ''}>
+                          {STUDENT_COLUMNS.map(col => (
+                            <td key={col.key}>
+                              {col.key === 'name' ? (
+                                <Link to={`/students/${s.id}`} style={{ color: 'var(--accent)' }}>{s.name}</Link>
+                              ) : col.isDate && s[col.key] && s[col.key] !== '-' ? formatDate(s[col.key]) : s[col.key]}
+                            </td>
+                          ))}
+                          <td><span className={`badge badge-${s.status} cap`}>{s.status}</span></td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              ))}
+            </div>
+          </>
+        )
+      )}
+
+      {tab === 'membership' && (
+        !memberships ? <p>Loading…</p> : (
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '1.25rem' }}>
+            {groupByBranch(memberships).map(([branchName, rows]) => (
+              <div key={branchName} className="card">
+                <h3 style={{ color: 'var(--accent)', marginBottom: '0.75rem' }}>{branchName} · {rows.length} active membership{rows.length === 1 ? '' : 's'}</h3>
+                <table className="data-table">
+                  <thead>
+                    <tr><th>Student</th><th>Category</th><th>Hours</th><th>Cabin</th><th>Start</th><th>End</th><th>Fee Due</th></tr>
+                  </thead>
+                  <tbody>
+                    {rows.map(m => (
+                      <tr key={m.membership_id} className={m.fee_due > 0 ? 'row-overdue' : ''}>
+                        <td>
+                          <Link to={`/students/${m.student_id}`} style={{ color: 'var(--accent)' }}>{m.student_name}</Link>
+                          <div className="mono" style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>{m.student_phone}</div>
+                        </td>
+                        <td className="cap">{m.category}</td>
+                        <td className="mono">{m.hours_per_day}h/day</td>
+                        <td>{m.cabin_no ?? '—'}</td>
+                        <td className="mono">{formatDate(m.start_date)}</td>
+                        <td className="mono">{formatDate(m.end_date)}</td>
+                        <td className="mono" style={{ color: m.fee_due > 0 ? '#ff8888' : undefined, fontWeight: m.fee_due > 0 ? 700 : 400 }}>{formatCurrency(m.fee_due)}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            ))}
+          </div>
+        )
+      )}
+
+      {tab === 'sessions' && (
+        !sessions ? <p>Loading…</p> : (
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '1.25rem' }}>
+            {groupByBranch(sessions).map(([branchName, rows]) => (
+              <div key={branchName} className="card">
+                <h3 style={{ color: 'var(--accent)', marginBottom: '0.75rem' }}>{branchName} · {rows.length} active session{rows.length === 1 ? '' : 's'}</h3>
+                <table className="data-table">
+                  <thead>
+                    <tr><th>Student</th><th>Desk</th><th>Type</th><th>Started</th><th>Hours</th></tr>
+                  </thead>
+                  <tbody>
+                    {rows.map(b => (
+                      <tr key={b.id}>
+                        <td>
+                          <Link to={`/students/${b.student_id}`} style={{ color: 'var(--accent)' }}>{b.students?.name}</Link>
+                          <div className="mono" style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>{b.students?.phone}</div>
+                        </td>
+                        <td>{b.desks?.label ?? '—'}</td>
+                        <td className="cap">{b.booking_type}</td>
+                        <td className="mono">{new Date(b.start_time).toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit' })}</td>
+                        <td className="mono">{b.hours ?? '—'}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            ))}
+          </div>
+        )
       )}
     </>
   )

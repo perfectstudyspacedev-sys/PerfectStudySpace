@@ -3,6 +3,7 @@ import { useNavigate, Link } from 'react-router-dom'
 import { useAuth } from '../context/AuthContext'
 import { api } from '../lib/api'
 import { formatCurrency, formatDate, getMultiMonthDiscount, todayISO, openWhatsApp, getWelcomeTemplate, saveWelcomeTemplate } from '../lib/utils'
+import PaymentModeSelector, { isSplitValid } from '../components/PaymentModeSelector'
 
 // Fallback packages — used only until live rates are fetched from fee_config (Branch Settings)
 const DEFAULT_TEMP_PACKAGES = [
@@ -33,7 +34,7 @@ function ActiveMembersTab({ branchId, tempPackages, permPackages }) {
   const [renewCategory, setRenewCategory] = useState('temporary')
   const [renewHoursPerDay, setRenewHoursPerDay] = useState(4)
   const [renewMonths, setRenewMonths] = useState(1)
-  const [renewPayMode, setRenewPayMode] = useState('cash')
+  const [renewPayMode, setRenewPayMode] = useState({ mode: 'cash', cashAmount: '', upiAmount: '' })
   const [renewPayType, setRenewPayType] = useState('full')
   const [renewAdvance, setRenewAdvance] = useState('')
   const [renewError, setRenewError] = useState('')
@@ -155,7 +156,7 @@ function ActiveMembersTab({ branchId, tempPackages, permPackages }) {
     setRenewCategory(m.category)
     setRenewHoursPerDay(m.hours_per_day)
     setRenewMonths(1)
-    setRenewPayMode('cash')
+    setRenewPayMode({ mode: 'cash', cashAmount: '', upiAmount: '' })
     setRenewPayType('full')
     setRenewAdvance('')
     setRenewError('')
@@ -193,6 +194,8 @@ function ActiveMembersTab({ branchId, tempPackages, permPackages }) {
 
   const handleRenewSubmit = async () => {
     if (!renewModal) return
+    const renewAmountNow = renewPayType === 'partial' ? renewAdvanceNum : renewPayType === 'pending' ? 0 : renewTotal
+    if (renewAmountNow > 0 && !isSplitValid(renewPayMode, renewAmountNow)) return setRenewError('Cash + UPI must add up to the amount paid now')
     setActionLoading(renewModal.membershipId + ':renew')
     setRenewError('')
     try {
@@ -201,7 +204,8 @@ function ActiveMembersTab({ branchId, tempPackages, permPackages }) {
         category: renewCategory,
         hoursPerDay: renewHoursPerDay,
         monthsPaid: renewMonths,
-        paymentMode: renewPayMode,
+        paymentMode: renewPayMode.mode,
+        cashAmount: renewPayMode.cashAmount, upiAmount: renewPayMode.upiAmount,
         advanceAmount: renewPayType === 'partial' ? (Number(renewAdvance) || null) : renewPayType === 'pending' ? 0 : null,
       })
       setRenewModal(null)
@@ -261,6 +265,7 @@ function ActiveMembersTab({ branchId, tempPackages, permPackages }) {
   const renewRemaining = renewPayType === 'partial' ? Math.max(renewTotal - renewAdvanceNum, 0) : 0
 
   return (
+    <>
     <div className="card">
       {/* Expiry reminder banner — stays up for the entire final week of validity */}
       {expiringSoon.length > 0 && (
@@ -433,6 +438,7 @@ function ActiveMembersTab({ branchId, tempPackages, permPackages }) {
           </tbody>
         </table>
       )}
+    </div>
 
       {/* Renew modal */}
       {renewModal && (
@@ -467,16 +473,15 @@ function ActiveMembersTab({ branchId, tempPackages, permPackages }) {
               </select>
             </div>
 
-            <div className="form-group">
-              <label>Payment Mode</label>
-              <div style={{ display: 'flex', gap: '0.5rem' }}>
-                {[{ value: 'cash', label: '💵 Cash' }, { value: 'upi', label: '📱 UPI' }].map(({ value, label }) => (
-                  <button key={value} type="button" onClick={() => setRenewPayMode(value)}
-                    style={{ flex: 1, padding: '0.5rem', border: `1px solid ${renewPayMode === value ? 'var(--accent)' : '#333'}`, borderRadius: 999, background: renewPayMode === value ? 'rgba(255,215,0,0.08)' : '#141414', color: renewPayMode === value ? 'var(--accent)' : 'var(--text-muted)', cursor: 'pointer', fontWeight: 600 }}
-                  >{label}</button>
-                ))}
+            {renewPayType !== 'pending' && (
+              <div className="form-group">
+                <label>Payment Mode</label>
+                <PaymentModeSelector
+                  value={renewPayMode} onChange={setRenewPayMode}
+                  total={renewPayType === 'partial' ? renewAdvanceNum : renewTotal}
+                />
               </div>
-            </div>
+            )}
 
             <div className="form-group">
               <label>Payment Type</label>
@@ -671,7 +676,7 @@ function ActiveMembersTab({ branchId, tempPackages, permPackages }) {
           </div>
         </div>
       )}
-    </div>
+    </>
   )
 }
 
@@ -691,7 +696,7 @@ function NewMembershipForm({ branchId, onCreated, tempPackages, permPackages }) 
   const [customWeekendHours, setCustomWeekendHours] = useState('')
   const [monthsPaid, setMonthsPaid] = useState(1)
   const [startDate, setStartDate] = useState(todayISO())
-  const [paymentMode, setPaymentMode] = useState('cash')
+  const [paymentMode, setPaymentMode] = useState({ mode: 'cash', cashAmount: '', upiAmount: '' })
   const [paymentType, setPaymentType] = useState('full')
   const [advanceAmount, setAdvanceAmount] = useState('')
   const [withLocker, setWithLocker] = useState(false)
@@ -793,13 +798,15 @@ function NewMembershipForm({ branchId, onCreated, tempPackages, permPackages }) 
     }
     if (isCustomPlan && !(Number(customAmount) > 0)) return setError('Enter a valid custom amount')
     if (isCustomPlan && !(Number(customWeekdayHours) > 0)) return setError('Enter valid weekday hours')
+    if (amountPaid > 0 && !isSplitValid(paymentMode, amountPaid)) return setError('Cash + UPI must add up to the amount paid now')
     setLoading(true)
     setError('')
     try {
       const result = await api('create_membership', {
         branchId, name, phone, category,
         hoursPerDay: isCustomPlan ? Number(customWeekdayHours) : hoursPerDay,
-        monthsPaid, paymentMode, course,
+        monthsPaid, paymentMode: paymentMode.mode,
+        cashAmount: paymentMode.cashAmount, upiAmount: paymentMode.upiAmount, course,
         emergencyContact, referralSource,
         withLocker, lockerNo: withLocker ? lockerNo : null,
         advanceAmount: paymentType === 'full' ? null : paymentType === 'partial' ? advanceNum : 0,
@@ -1011,22 +1018,7 @@ function NewMembershipForm({ branchId, onCreated, tempPackages, permPackages }) 
         </div>
         <div className="form-group">
           <label>Payment Mode</label>
-          <div style={{ display: 'flex', gap: '0.5rem' }}>
-            {[{ value: 'cash', label: '💵 Cash' }, { value: 'upi', label: '📱 UPI' }].map(({ value, label }) => (
-              <button
-                key={value} type="button"
-                onClick={() => setPaymentMode(value)}
-                style={{
-                  flex: 1, padding: '0.6rem',
-                  border: `1px solid ${paymentMode === value ? 'var(--accent)' : '#333'}`,
-                  borderRadius: 999,
-                  background: paymentMode === value ? 'rgba(255,215,0,0.08)' : '#141414',
-                  color: paymentMode === value ? 'var(--accent)' : 'var(--text-muted)',
-                  cursor: 'pointer', fontWeight: 600, fontSize: '0.9rem',
-                }}
-              >{label}</button>
-            ))}
-          </div>
+          <PaymentModeSelector value={paymentMode} onChange={setPaymentMode} total={amountPaid} />
         </div>
         <div className="form-group">
           <label>Payment Status</label>

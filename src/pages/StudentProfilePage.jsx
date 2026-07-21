@@ -3,6 +3,7 @@ import { useParams, Link } from 'react-router-dom'
 import { api } from '../lib/api'
 import { useAuth } from '../context/AuthContext'
 import { formatCurrency, formatDate, paymentModeLabel, getMultiMonthDiscount, todayISO } from '../lib/utils'
+import PaymentModeSelector, { isSplitValid } from '../components/PaymentModeSelector'
 
 const PAYMENT_OPTIONS = [
   { value: 'cash', label: '💵 Cash' },
@@ -124,7 +125,7 @@ function AttendanceModal({ studentId, branchId, booking, onClose, onDone }) {
 
 // Mid-cycle plan change (temp <-> permanent, or hours/day) on the current active
 // membership — prorates the difference over the days remaining, doesn't touch expiry.
-function ChangePlanModal({ membership, tempPackages, permPackages, isOwner, onClose, onDone }) {
+function ChangePlanModal({ membership, tempPackages, permPackages, onClose, onDone }) {
   const [category, setCategory] = useState(membership.category)
   const [hoursPerDay, setHoursPerDay] = useState(membership.hours_per_day)
   const [endDate, setEndDate] = useState(membership.end_date)
@@ -146,7 +147,7 @@ function ChangePlanModal({ membership, tempPackages, permPackages, isOwner, onCl
     try {
       await api('change_membership_plan', {
         membershipId: membership.id, newCategory: category, newHoursPerDay: pkg.hours,
-        newEndDate: isOwner && endDate !== membership.end_date ? endDate : undefined,
+        newEndDate: endDate !== membership.end_date ? endDate : undefined,
       })
       onDone()
     } catch (err) {
@@ -187,12 +188,10 @@ function ChangePlanModal({ membership, tempPackages, permPackages, isOwner, onCl
             {packages.map(p => <option key={p.hours} value={p.hours}>{p.hours}h/day — {formatCurrency(p.fee)}/mo</option>)}
           </select>
         </div>
-        {isOwner && (
-          <div className="form-group">
-            <label>End Date</label>
-            <input type="date" value={endDate} onChange={(e) => setEndDate(e.target.value)} />
-          </div>
-        )}
+        <div className="form-group">
+          <label>End Date</label>
+          <input type="date" value={endDate} onChange={(e) => setEndDate(e.target.value)} />
+        </div>
         {(category !== membership.category || hoursPerDay !== membership.hours_per_day) && (
           <p className="mono" style={{ marginBottom: '1rem', color: proratedPreview >= 0 ? '#ff8888' : '#4ade80' }}>
             {proratedPreview >= 0
@@ -326,13 +325,14 @@ export default function StudentProfilePage() {
   const [loading, setLoading] = useState(true)
   const [openPanel, setOpenPanel] = useState(null) // which shrunk-to-a-button card is currently shown as a modal
   const [payAmount, setPayAmount] = useState('')
-  const [payMode, setPayMode] = useState('cash')
+  const [payMode, setPayMode] = useState({ mode: 'cash', cashAmount: '', upiAmount: '' })
   const [holdLoading, setHoldLoading] = useState(false)
   const [holdError, setHoldError] = useState('')
   const [lockerStatus, setLockerStatus] = useState(null)
   const [lockerNo, setLockerNo] = useState('')
   const [lockerPayType, setLockerPayType] = useState('now')
-  const [lockerPayMode, setLockerPayMode] = useState('cash')
+  const [lockerPayMode, setLockerPayMode] = useState({ mode: 'cash', cashAmount: '', upiAmount: '' })
+  const [addLockerPayMode, setAddLockerPayMode] = useState('cash')
   const [lockerPayAmount, setLockerPayAmount] = useState('')
   const [lockerLoading, setLockerLoading] = useState(false)
   const [lockerError, setLockerError] = useState('')
@@ -347,7 +347,7 @@ export default function StudentProfilePage() {
   const [renewCustomWeekdayHours, setRenewCustomWeekdayHours] = useState('')
   const [renewCustomWeekendHours, setRenewCustomWeekendHours] = useState('')
   const [renewMonths, setRenewMonths] = useState(1)
-  const [renewPayMode, setRenewPayMode] = useState('cash')
+  const [renewPayMode, setRenewPayMode] = useState({ mode: 'cash', cashAmount: '', upiAmount: '' })
   const [renewPayType, setRenewPayType] = useState('full')
   const [renewAdvance, setRenewAdvance] = useState('')
   const [renewLoading, setRenewLoading] = useState(false)
@@ -475,7 +475,7 @@ export default function StudentProfilePage() {
     try {
       await api('add_locker', {
         studentId: id, branchId: data.student.branch_id, lockerNo,
-        paymentMode: lockerPayMode, payLater: lockerPayType === 'later',
+        paymentMode: addLockerPayMode, payLater: lockerPayType === 'later',
       })
       refresh()
     } catch (err) {
@@ -486,12 +486,16 @@ export default function StudentProfilePage() {
   }
 
   const handleLockerPayment = async (lockerId) => {
-    if (!lockerPayAmount) return
+    if (!lockerPayAmount || !isSplitValid(lockerPayMode, lockerPayAmount)) return
     setLockerLoading(true)
     setLockerError('')
     try {
-      await api('record_locker_payment', { lockerId, amount: Number(lockerPayAmount), paymentMode: lockerPayMode })
+      await api('record_locker_payment', {
+        lockerId, amount: Number(lockerPayAmount), paymentMode: lockerPayMode.mode,
+        cashAmount: lockerPayMode.cashAmount, upiAmount: lockerPayMode.upiAmount,
+      })
       setLockerPayAmount('')
+      setLockerPayMode({ mode: 'cash', cashAmount: '', upiAmount: '' })
       refresh()
     } catch (err) {
       setLockerError(err.message)
@@ -530,9 +534,13 @@ export default function StudentProfilePage() {
   }
 
   const handlePayment = async (membershipId) => {
-    if (!payAmount) return
-    await api('record_payment', { membershipId, amount: Number(payAmount), paymentMode: payMode })
+    if (!payAmount || !isSplitValid(payMode, payAmount)) return
+    await api('record_payment', {
+      membershipId, amount: Number(payAmount), paymentMode: payMode.mode,
+      cashAmount: payMode.cashAmount, upiAmount: payMode.upiAmount,
+    })
     setPayAmount('')
+    setPayMode({ mode: 'cash', cashAmount: '', upiAmount: '' })
     refresh()
   }
 
@@ -623,6 +631,8 @@ export default function StudentProfilePage() {
     const renewIsCustomPlan = renewHoursPerDay === 'custom'
     if (renewIsCustomPlan && !(Number(renewCustomAmount) > 0)) return setRenewError('Enter a valid custom amount')
     if (renewIsCustomPlan && !(Number(renewCustomWeekdayHours) > 0)) return setRenewError('Enter valid weekday hours')
+    const renewAmountNow = renewPayType === 'partial' ? renewAdvanceNum : renewPayType === 'pending' ? 0 : renewTotal
+    if (renewAmountNow > 0 && !isSplitValid(renewPayMode, renewAmountNow)) return setRenewError('Cash + UPI must add up to the amount paid now')
     setRenewLoading(true)
     setRenewError('')
     try {
@@ -631,7 +641,8 @@ export default function StudentProfilePage() {
         category: renewCategory,
         hoursPerDay: renewIsCustomPlan ? Number(renewCustomWeekdayHours) : renewHoursPerDay,
         monthsPaid: renewMonths,
-        paymentMode: renewPayMode,
+        paymentMode: renewPayMode.mode,
+        cashAmount: renewPayMode.cashAmount, upiAmount: renewPayMode.upiAmount,
         advanceAmount: renewPayType === 'partial' ? (Number(renewAdvance) || null) : renewPayType === 'pending' ? 0 : null,
         isCustomPlan: renewIsCustomPlan || undefined,
         customAmount: renewIsCustomPlan ? Number(renewCustomAmount) : undefined,
@@ -934,7 +945,7 @@ export default function StudentProfilePage() {
               </>
             )}
             {holdError && <p className="error-msg">{holdError}</p>}
-            {!isPaused && (
+            {!isPaused && !isExpired && (
               <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem', marginTop: '0.25rem' }}>
                 <button type="button" className="btn btn-ghost" style={{ width: '100%', fontSize: '0.85rem' }} onClick={() => setPlanChangeOpen(true)}>
                   ⇄ Change Plan
@@ -945,6 +956,11 @@ export default function StudentProfilePage() {
                   </button>
                 )}
               </div>
+            )}
+            {!isPaused && isExpired && (
+              <p style={{ fontSize: '0.78rem', color: 'var(--text-muted)', marginTop: '0.25rem' }}>
+                Renew this membership to change its plan or cabin.
+              </p>
             )}
             {isOwner && (
               <button
@@ -977,26 +993,15 @@ export default function StudentProfilePage() {
             </div>
             <div className="form-group">
               <label>Mode</label>
-              <div style={{ display: 'flex', gap: '0.5rem' }}>
-                {PAYMENT_OPTIONS.map(({ value, label }) => (
-                  <button
-                    key={value} type="button"
-                    onClick={() => setPayMode(value)}
-                    style={{
-                      flex: 1, padding: '0.55rem',
-                      border: `1px solid ${payMode === value ? 'var(--accent)' : '#333'}`,
-                      borderRadius: 999,
-                      background: payMode === value ? 'rgba(255,215,0,0.08)' : '#141414',
-                      color: payMode === value ? 'var(--accent)' : 'var(--text-muted)',
-                      cursor: 'pointer', fontWeight: 600, fontSize: '0.85rem',
-                    }}
-                  >{label}</button>
-                ))}
-              </div>
+              <PaymentModeSelector value={payMode} onChange={setPayMode} total={payAmount} />
             </div>
             <div className="modal-actions">
               <button type="button" className="btn btn-ghost" onClick={() => setOpenPanel(null)}>Cancel</button>
-              <button type="button" className="btn btn-primary" onClick={() => handlePayment(activeMem.id)}>Record</button>
+              <button
+                type="button" className="btn btn-primary"
+                disabled={!payAmount || !isSplitValid(payMode, payAmount)}
+                onClick={() => handlePayment(activeMem.id)}
+              >Record</button>
             </div>
           </div>
           </div>
@@ -1204,22 +1209,13 @@ export default function StudentProfilePage() {
                   </div>
                   <div className="form-group">
                     <label>Mode</label>
-                    <div style={{ display: 'flex', gap: '0.5rem' }}>
-                      {PAYMENT_OPTIONS.map(({ value, label }) => (
-                        <button
-                          key={value} type="button" onClick={() => setLockerPayMode(value)}
-                          style={{
-                            flex: 1, padding: '0.5rem',
-                            border: `1px solid ${lockerPayMode === value ? 'var(--accent)' : '#333'}`,
-                            borderRadius: 999, background: lockerPayMode === value ? 'rgba(255,215,0,0.08)' : '#141414',
-                            color: lockerPayMode === value ? 'var(--accent)' : 'var(--text-muted)',
-                            cursor: 'pointer', fontWeight: 600, fontSize: '0.85rem',
-                          }}
-                        >{label}</button>
-                      ))}
-                    </div>
+                    <PaymentModeSelector value={lockerPayMode} onChange={setLockerPayMode} total={lockerPayAmount} />
                   </div>
-                  <button type="button" className="btn btn-primary" style={{ width: '100%' }} onClick={() => handleLockerPayment(locker.id)} disabled={lockerLoading}>
+                  <button
+                    type="button" className="btn btn-primary" style={{ width: '100%' }}
+                    onClick={() => handleLockerPayment(locker.id)}
+                    disabled={lockerLoading || !lockerPayAmount || !isSplitValid(lockerPayMode, lockerPayAmount)}
+                  >
                     Record Locker Payment
                   </button>
                 </div>
@@ -1272,12 +1268,12 @@ export default function StudentProfilePage() {
                       <div style={{ display: 'flex', gap: '0.5rem' }}>
                         {PAYMENT_OPTIONS.map(({ value, label }) => (
                           <button
-                            key={value} type="button" onClick={() => setLockerPayMode(value)}
+                            key={value} type="button" onClick={() => setAddLockerPayMode(value)}
                             style={{
                               flex: 1, padding: '0.5rem',
-                              border: `1px solid ${lockerPayMode === value ? 'var(--accent)' : '#333'}`,
-                              borderRadius: 999, background: lockerPayMode === value ? 'rgba(255,215,0,0.08)' : '#141414',
-                              color: lockerPayMode === value ? 'var(--accent)' : 'var(--text-muted)',
+                              border: `1px solid ${addLockerPayMode === value ? 'var(--accent)' : '#333'}`,
+                              borderRadius: 999, background: addLockerPayMode === value ? 'rgba(255,215,0,0.08)' : '#141414',
+                              color: addLockerPayMode === value ? 'var(--accent)' : 'var(--text-muted)',
                               cursor: 'pointer', fontWeight: 600, fontSize: '0.85rem',
                             }}
                           >{label}</button>
@@ -1527,7 +1523,6 @@ export default function StudentProfilePage() {
           membership={activeMem}
           tempPackages={tempPackages}
           permPackages={permPackages}
-          isOwner={isOwner}
           onClose={() => setPlanChangeOpen(false)}
           onDone={() => { setPlanChangeOpen(false); refresh() }}
         />
@@ -1672,16 +1667,15 @@ export default function StudentProfilePage() {
               </select>
             </div>
 
-            <div className="form-group">
-              <label>Payment Mode</label>
-              <div style={{ display: 'flex', gap: '0.5rem' }}>
-                {PAYMENT_OPTIONS.map(({ value, label }) => (
-                  <button key={value} type="button" onClick={() => setRenewPayMode(value)}
-                    style={{ flex: 1, padding: '0.5rem', border: `1px solid ${renewPayMode === value ? 'var(--accent)' : '#333'}`, borderRadius: 999, background: renewPayMode === value ? 'rgba(255,215,0,0.08)' : '#141414', color: renewPayMode === value ? 'var(--accent)' : 'var(--text-muted)', cursor: 'pointer', fontWeight: 600 }}
-                  >{label}</button>
-                ))}
+            {renewPayType !== 'pending' && (
+              <div className="form-group">
+                <label>Payment Mode</label>
+                <PaymentModeSelector
+                  value={renewPayMode} onChange={setRenewPayMode}
+                  total={renewPayType === 'partial' ? renewAdvanceNum : renewTotal}
+                />
               </div>
-            </div>
+            )}
 
             <div className="form-group">
               <label>Payment Type</label>

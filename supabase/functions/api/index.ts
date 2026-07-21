@@ -342,7 +342,41 @@ async function refreshStudentStatus(db: ReturnType<typeof adminClient>, studentI
     else if (mem.end_date >= today) status = "active";
     else status = "inactive";
   }
+  // An otherwise-active membership still reads as Pending if the student's locker rent is
+  // overdue — a student shouldn't look fully settled while they owe locker money.
+  if (status === "active") {
+    const { data: locker } = await db.from("lockers").select("locker_due_date")
+      .eq("student_id", studentId).eq("is_active", true).maybeSingle();
+    if (locker?.locker_due_date && locker.locker_due_date < today) status = "pending";
+  }
   await db.from("students").update({ status, updated_at: new Date().toISOString() }).eq("id", studentId);
+}
+
+// A "split" payment isn't a real payment_mode value (the DB enum is only cash/upi/other),
+// it's a UI convenience meaning "part cash, part UPI" — so it becomes two real transaction
+// rows here (one per mode actually used), while the parent record (membership/locker/etc,
+// whose own payment_mode column is the same restricted enum) just stores "other" for it.
+function storedPaymentMode(paymentMode?: string | null): string {
+  return paymentMode === "split" ? "other" : (paymentMode ?? "cash");
+}
+
+async function insertPaymentTransactions(
+  db: ReturnType<typeof adminClient>,
+  base: Record<string, unknown>,
+  paymentMode: string | undefined, amount: number,
+  cashAmount?: number | string, upiAmount?: number | string,
+) {
+  if (paymentMode === "split") {
+    const cash = Math.round((Number(cashAmount) || 0) * 100) / 100;
+    const upi = Math.round((Number(upiAmount) || 0) * 100) / 100;
+    if (Math.round((cash + upi) * 100) !== Math.round(Number(amount) * 100)) {
+      throw new Error("Cash + UPI amounts must add up to the total");
+    }
+    if (cash > 0) await db.from("transactions").insert({ ...base, amount: cash, payment_mode: "cash" });
+    if (upi > 0) await db.from("transactions").insert({ ...base, amount: upi, payment_mode: "upi" });
+  } else {
+    await db.from("transactions").insert({ ...base, amount, payment_mode: paymentMode ?? "cash" });
+  }
 }
 
 async function createAlert(db: ReturnType<typeof adminClient>, studentId: string, branchId: string, type: string, dueDate: string, message: string) {
@@ -797,7 +831,7 @@ Deno.serve(async (req) => {
     if (action === "create_membership") {
       const {
         branchId, name, phone, category, hoursPerDay, timings, monthsPaid,
-        paymentMode, course, lockerNo, withLocker,
+        paymentMode, cashAmount, upiAmount, course, lockerNo, withLocker,
         advanceAmount, emergencyContact, referralSource, startDate: customStartDate,
         isCustomPlan, customAmount, weekendHours,
       } = payload;
@@ -869,16 +903,15 @@ Deno.serve(async (req) => {
         monthly_fee: monthlyFee,
         total_paid: advanceAmount != null ? Number(advanceAmount) : totalPaid,
         fee_due: advanceAmount != null ? Math.max(totalPaid - Number(advanceAmount), 0) : 0,
-        payment_mode: paymentMode ?? "cash", created_by_staff_id: staff.id,
+        payment_mode: storedPaymentMode(paymentMode), created_by_staff_id: staff.id,
       }).select("id").single();
       if (mErr) return err(mErr.message);
 
       const actualPaid = advanceAmount != null ? Number(advanceAmount) : totalPaid;
-      await db.from("transactions").insert({
+      await insertPaymentTransactions(db, {
         student_id: studentId, branch_id: branchId, membership_id: mem!.id,
-        category: "membership", amount: actualPaid, payment_mode: paymentMode ?? "cash",
-        created_by_staff_id: staff.id,
-      });
+        category: "membership", created_by_staff_id: staff.id,
+      }, paymentMode, actualPaid, cashAmount, upiAmount);
 
       if (withLocker && lockerNo) {
         const { data: branchRow } = await db.from("branches").select("locker_capacity").eq("id", branchId).single();
@@ -893,8 +926,8 @@ Deno.serve(async (req) => {
         });
         await db.from("transactions").insert({
           student_id: studentId, branch_id: branchId, category: "locker",
-          amount: 200, payment_mode: paymentMode ?? "cash", notes: "Locker rent + deposit",
-          created_by_staff_id: staff.id,
+          amount: 200, payment_mode: storedPaymentMode(paymentMode) === "other" ? "cash" : storedPaymentMode(paymentMode),
+          notes: "Locker rent + deposit", created_by_staff_id: staff.id,
         });
       }
 
@@ -958,7 +991,7 @@ Deno.serve(async (req) => {
     }
 
     if (action === "add_locker") {
-      const { studentId, branchId, lockerNo, paymentMode, payLater } = payload;
+      const { studentId, branchId, lockerNo, paymentMode, cashAmount, upiAmount, payLater } = payload;
       if (!requireBranch(staff, branchId)) return err("Branch access denied", 403);
       const { data: lockerStudent } = await db.from("students").select("branch_id").eq("id", studentId).single();
       if (!lockerStudent || lockerStudent.branch_id !== branchId) return err("Student does not belong to this branch", 403);
@@ -991,14 +1024,13 @@ Deno.serve(async (req) => {
       }).select("*").single();
       if (lErr) return err(lErr.message);
 
-      await db.from("transactions").insert({
+      await insertPaymentTransactions(db, {
         student_id: studentId, branch_id: branchId, category: "locker",
-        amount: amountPaid, payment_mode: paymentMode ?? "cash",
         notes: payLater
           ? `Locker deposit (₹${deposit}) — rent (₹${proratedFee} for ${daysRemaining}d) deferred`
           : `Locker — prorated ${daysRemaining}d rent (₹${proratedFee}) + deposit (₹${deposit})`,
         created_by_staff_id: staff.id,
-      });
+      }, paymentMode, amountPaid, cashAmount, upiAmount);
 
       return json({ ok: true, locker, amountCharged: amountPaid, proratedFee, deposit, daysRemaining, payLater: !!payLater });
     }
@@ -1595,12 +1627,20 @@ Deno.serve(async (req) => {
 
     // ─── STUDENTS LIST (spreadsheet view) ───
     if (action === "list_students") {
-      const { branchId } = payload;
-      if (!requireBranch(staff, branchId)) return err("Branch access denied", 403);
+      const { branchId, allBranches } = payload;
+      let branchIds: string[];
+      if (allBranches) {
+        if (!isOwner(staff)) return err("Owner only", 403);
+        const { data: branchesList } = await db.from("branches").select("id").eq("is_active", true);
+        branchIds = (branchesList ?? []).map(b => b.id);
+      } else {
+        if (!requireBranch(staff, branchId)) return err("Branch access denied", 403);
+        branchIds = [branchId];
+      }
 
-      const { data: students } = await db.from("students").select("*").eq("branch_id", branchId).order("s_no");
-      const { data: memberships } = await db.from("memberships").select("*").eq("branch_id", branchId).eq("is_active", true);
-      const { data: lockers } = await db.from("lockers").select("*").eq("branch_id", branchId).eq("is_active", true);
+      const { data: students } = await db.from("students").select("*, branches(name)").in("branch_id", branchIds).order("s_no");
+      const { data: memberships } = await db.from("memberships").select("*").in("branch_id", branchIds).eq("is_active", true);
+      const { data: lockers } = await db.from("lockers").select("*").in("branch_id", branchIds).eq("is_active", true);
 
       const memByStudent = new Map(memberships?.map(m => [m.student_id, m]) ?? []);
       const lockerByStudent = new Map(lockers?.map(l => [l.student_id, l]) ?? []);
@@ -1612,6 +1652,7 @@ Deno.serve(async (req) => {
           sNo: s.s_no ?? i + 1,
           id: s.id,
           name: s.name,
+          branches: s.branches,
           cabin: mem?.cabin_no ?? "-",
           dueDate: mem?.due_date ?? "-",
           month: mem?.month ?? "-",
@@ -1813,7 +1854,7 @@ Deno.serve(async (req) => {
     }
 
     if (action === "record_payment") {
-      const { membershipId, amount, paymentMode } = payload;
+      const { membershipId, amount, paymentMode, cashAmount, upiAmount } = payload;
       const { data: mem } = await db.from("memberships").select("*").eq("id", membershipId).single();
       if (!mem) return err("Membership not found");
       if (!requireBranch(staff, mem.branch_id)) return err("Branch access denied", 403);
@@ -1826,11 +1867,10 @@ Deno.serve(async (req) => {
         fee_due: newDue, due_date: newDueDate, total_paid: Number(mem.total_paid) + Number(amount),
       }).eq("id", membershipId);
 
-      await db.from("transactions").insert({
+      await insertPaymentTransactions(db, {
         student_id: mem.student_id, branch_id: mem.branch_id, membership_id: membershipId,
-        category: "membership", amount: Number(amount), payment_mode: paymentMode ?? "cash",
-        created_by_staff_id: staff.id,
-      });
+        category: "membership", created_by_staff_id: staff.id,
+      }, paymentMode, Number(amount), cashAmount, upiAmount);
 
       if (newDue === 0) {
         await db.from("alerts").update({ status: "resolved" }).eq("student_id", mem.student_id).eq("alert_type", "payment_due").eq("status", "pending");
@@ -2000,7 +2040,7 @@ Deno.serve(async (req) => {
     }
 
     if (action === "record_locker_payment") {
-      const { lockerId, amount, paymentMode } = payload;
+      const { lockerId, amount, paymentMode, cashAmount, upiAmount } = payload;
       const { data: locker } = await db.from("lockers").select("*").eq("id", lockerId).single();
       if (!locker) return err("Locker not found");
       if (!requireBranch(staff, locker.branch_id)) return err("Branch access denied", 403);
@@ -2010,11 +2050,10 @@ Deno.serve(async (req) => {
         fee_due: newDue, amount_paid: Number(locker.amount_paid) + Number(amount),
       }).eq("id", lockerId);
 
-      await db.from("transactions").insert({
+      await insertPaymentTransactions(db, {
         student_id: locker.student_id, branch_id: locker.branch_id,
-        category: "locker", amount: Number(amount), payment_mode: paymentMode ?? "cash",
-        notes: "Locker pending payment", created_by_staff_id: staff.id,
-      });
+        category: "locker", notes: "Locker pending payment", created_by_staff_id: staff.id,
+      }, paymentMode, Number(amount), cashAmount, upiAmount);
 
       return json({ ok: true });
     }
@@ -2910,16 +2949,24 @@ Deno.serve(async (req) => {
 
     // ─── TODAY'S BOOKINGS ───
     if (action === "list_today_bookings") {
-      const { branchId } = payload;
-      if (!requireBranch(staff, branchId)) return err("Branch access denied", 403);
+      const { branchId, allBranches } = payload;
+      let branchIds: string[];
+      if (allBranches) {
+        if (!isOwner(staff)) return err("Owner only", 403);
+        const { data: branchesList } = await db.from("branches").select("id").eq("is_active", true);
+        branchIds = (branchesList ?? []).map(b => b.id);
+      } else {
+        if (!requireBranch(staff, branchId)) return err("Branch access denied", 403);
+        branchIds = [branchId];
+      }
       // status = "active" already means "not yet checked out" — that's true regardless of
       // which day the session started, so no date filter here. A leftover date range meant a
       // session staff forgot to check out would silently vanish from this tab the next day
       // even though it was still genuinely open; sessions now only ever leave this list when
       // checkout_booking explicitly closes them.
       const { data, error: bErr } = await db.from("bookings")
-        .select("*, students(name, phone, course), desks!desk_id(label, seat_type), memberships:membership_id(total_paid, fee_due, monthly_fee, category, end_date)")
-        .eq("branch_id", branchId)
+        .select("*, students(name, phone, course), desks!desk_id(label, seat_type), memberships:membership_id(total_paid, fee_due, monthly_fee, category, end_date), branches(name)")
+        .in("branch_id", branchIds)
         .eq("status", "active")
         .order("created_at", { ascending: false });
       if (bErr) return err(bErr.message);
@@ -3005,14 +3052,22 @@ Deno.serve(async (req) => {
 
     // ─── ACTIVE MEMBERSHIPS ───
     if (action === "list_active_memberships") {
-      const { branchId } = payload;
-      if (!requireBranch(staff, branchId)) return err("Branch access denied", 403);
+      const { branchId, allBranches } = payload;
+      let branchIds: string[];
+      if (allBranches) {
+        if (!isOwner(staff)) return err("Owner only", 403);
+        const { data: branchesList } = await db.from("branches").select("id").eq("is_active", true);
+        branchIds = (branchesList ?? []).map(b => b.id);
+      } else {
+        if (!requireBranch(staff, branchId)) return err("Branch access denied", 403);
+        branchIds = [branchId];
+      }
       const { data } = await db.from("memberships")
-        .select("id, category, hours_per_day, start_date, end_date, cabin_no, is_paused, hold_days, fee_due, total_paid, students(id, name, phone)")
-        .eq("branch_id", branchId)
+        .select("id, branch_id, category, hours_per_day, start_date, end_date, cabin_no, is_paused, hold_days, fee_due, total_paid, students(id, name, phone), branches(name)")
+        .in("branch_id", branchIds)
         .eq("is_active", true)
         .order("end_date");
-      type MemRow = { id: string; category: string; hours_per_day: number; start_date: string; end_date: string; cabin_no: string | null; is_paused: boolean; hold_days: number; fee_due: number; total_paid: number; students: { id: string; name: string; phone: string } | null };
+      type MemRow = { id: string; branch_id: string; category: string; hours_per_day: number; start_date: string; end_date: string; cabin_no: string | null; is_paused: boolean; hold_days: number; fee_due: number; total_paid: number; students: { id: string; name: string; phone: string } | null; branches: { name: string } | null };
       const studentIds = (data as MemRow[] ?? []).map(m => m.students?.id).filter((id): id is string => !!id);
       const { data: pendingCashbacks } = studentIds.length
         ? await db.from("cashbacks").select("student_id, cashback_type, cashback_value").in("student_id", studentIds).eq("status", "pending")
@@ -3021,6 +3076,8 @@ Deno.serve(async (req) => {
 
       const members = (data as MemRow[] ?? []).map(m => ({
         membership_id: m.id,
+        branch_id: m.branch_id,
+        branches: m.branches,
         student_id: m.students?.id,
         student_name: m.students?.name,
         student_phone: m.students?.phone,
@@ -3043,7 +3100,7 @@ Deno.serve(async (req) => {
       for (const m of members) {
         if (!m.student_id) continue;
         if (m.end_date >= today && m.end_date <= weekOut) {
-          await createAlert(db, m.student_id, branchId, "expiry", m.end_date,
+          await createAlert(db, m.student_id, m.branch_id, "expiry", m.end_date,
             `${m.student_name}'s membership expires on ${m.end_date} — remind them to renew.`);
         }
       }
@@ -3063,12 +3120,13 @@ Deno.serve(async (req) => {
       if (!mem) return err("Membership not found");
       if (!requireBranch(staff, mem.branch_id)) return err("Branch access denied", 403);
       if (!mem.is_active) return err("Membership is not active");
+      if (mem.end_date < todayISO()) return err("Membership has expired — renew it before changing the plan");
 
       const newHours = Number(newHoursPerDay);
       const newMonthlyFee = await getMembershipPackage(db, newHours, newCategory);
       if (!newMonthlyFee) return err("Invalid membership package for that category/hours combination");
       const planUnchanged = newCategory === mem.category && newHours === Number(mem.hours_per_day);
-      const wantsEndDateChange = isOwner(staff) && newEndDate && newEndDate !== mem.end_date;
+      const wantsEndDateChange = newEndDate && newEndDate !== mem.end_date;
       if (planUnchanged && !wantsEndDateChange) {
         return err("That's already the current plan");
       }
@@ -3159,6 +3217,7 @@ Deno.serve(async (req) => {
       if (!mem) return err("Membership not found");
       if (!requireBranch(staff, mem.branch_id)) return err("Branch access denied", 403);
       if (!mem.is_active) return err("Membership is not active");
+      if (mem.end_date < todayISO()) return err("Membership has expired — renew it before changing the cabin");
       if (mem.category !== "permanent") return err("Only permanent memberships have an assigned cabin");
 
       const { data: newDesk } = await db.from("desks").select("*").eq("id", newDeskId).eq("branch_id", mem.branch_id).single();
@@ -3190,7 +3249,7 @@ Deno.serve(async (req) => {
     // ─── RENEW MEMBERSHIP ───
     if (action === "renew_membership") {
       const {
-        membershipId, monthsPaid, paymentMode, advanceAmount, category, hoursPerDay,
+        membershipId, monthsPaid, paymentMode, cashAmount, upiAmount, advanceAmount, category, hoursPerDay,
         isCustomPlan, customAmount, weekendHours,
       } = payload;
       const { data: mem } = await db.from("memberships").select("*").eq("id", membershipId).single();
@@ -3281,15 +3340,14 @@ Deno.serve(async (req) => {
         timings: mem.timings ?? '', start_date: startDate, end_date: endDate,
         due_date: dueDate, months_paid: months, discount_percent: discount,
         monthly_fee: monthlyFee, total_paid: feePaid, fee_due: feeDue,
-        payment_mode: paymentMode ?? "cash", created_by_staff_id: staff.id,
+        payment_mode: storedPaymentMode(paymentMode), created_by_staff_id: staff.id,
       }).select("id").single();
       if (mErr) return err(mErr.message);
 
-      await db.from("transactions").insert({
+      await insertPaymentTransactions(db, {
         student_id: mem.student_id, branch_id: mem.branch_id, membership_id: newMem!.id,
-        category: "membership", amount: feePaid, payment_mode: paymentMode ?? "cash",
-        notes: "Renewal", created_by_staff_id: staff.id,
-      });
+        category: "membership", notes: "Renewal", created_by_staff_id: staff.id,
+      }, paymentMode, feePaid, cashAmount, upiAmount);
 
       // Deactivate old membership
       await db.from("memberships").update({ is_active: false }).eq("id", membershipId);
