@@ -151,7 +151,6 @@ export default function StaffPage() {
   const [staffList, setStaffList] = useState([])
   const [branches, setBranches] = useState([])
   const [staffBranchFilter, setStaffBranchFilter] = useState('')
-  const [showInactive, setShowInactive] = useState(false)
   const [attendanceBranchFilter, setAttendanceBranchFilter] = useState('')
   const [attendance, setAttendance] = useState(null)
   const [attendanceDate, setAttendanceDate] = useState(todayISO())
@@ -196,7 +195,6 @@ export default function StaffPage() {
 
   const branchScoped = staffBranchFilter ? staffList.filter(s => s.branch_id === staffBranchFilter) : staffList
   const activeStaff = branchScoped.filter(s => s.is_active)
-  const inactiveStaff = branchScoped.filter(s => !s.is_active)
   const filteredAttendance = attendance
     ? (attendanceBranchFilter
         ? attendance.rows.filter(r => r.branchId === attendanceBranchFilter)
@@ -367,45 +365,6 @@ export default function StaffPage() {
           </div>
         )}
 
-        {inactiveStaff.length > 0 && (
-          <div style={{ marginTop: '1.25rem', paddingTop: '1rem', borderTop: '1px solid #2c2c2c' }}>
-            <button
-              type="button"
-              className="btn btn-ghost"
-              style={{ fontSize: '0.78rem' }}
-              onClick={() => setShowInactive(v => !v)}
-            >
-              {showInactive ? 'Hide' : 'Show'} Inactive ({inactiveStaff.length})
-            </button>
-            {showInactive && (
-              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(240px, 1fr))', gap: '0.75rem', marginTop: '0.9rem' }}>
-                {inactiveStaff.map(s => (
-                  <div key={s.id} style={{
-                    display: 'flex', flexDirection: 'column', gap: '0.6rem',
-                    padding: '0.75rem 0.9rem', borderRadius: 8,
-                    background: '#141414', border: '1px solid rgba(255,60,60,0.3)', opacity: 0.6,
-                  }}>
-                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                      <div>
-                        <strong style={{ fontSize: '0.9rem' }}>{s.display_name || s.username}</strong>
-                        <div style={{ display: 'flex', gap: '0.4rem', alignItems: 'center', marginTop: '0.2rem' }}>
-                          <span className="mono" style={{ fontSize: '0.72rem', color: 'var(--text-muted)', textTransform: 'uppercase' }}>{s.role}</span>
-                          {s.branches?.name && (
-                            <span style={{ fontSize: '0.72rem', color: 'var(--accent)' }}>· {s.branches.name}</span>
-                          )}
-                        </div>
-                      </div>
-                      <span className="badge badge-inactive">Removed</span>
-                    </div>
-                    <p style={{ fontSize: '0.75rem', color: 'var(--text-muted)', margin: 0 }}>
-                      Permanently removed — cannot be reactivated
-                    </p>
-                  </div>
-                ))}
-              </div>
-            )}
-          </div>
-        )}
       </div>
 
       <div style={{ marginTop: '1.5rem' }}>
