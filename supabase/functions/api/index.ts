@@ -3327,6 +3327,7 @@ Deno.serve(async (req) => {
         monthlyFee = pkgFee;
       }
 
+      const months = Number(monthsPaid) || 1;
       const discount = multiMonthDiscount(months);
       const gross = monthlyFee * months;
       const totalBeforeCashback = gross * (1 - discount / 100);
