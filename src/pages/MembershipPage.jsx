@@ -847,6 +847,10 @@ function NewMembershipForm({ branchId, onCreated, tempPackages, permPackages }) 
     setName(s.name)
     setPhone(s.phone ?? '')
     setNameMatches([])
+    // The name-search result is a thin row — re-look it up by phone so the
+    // active-membership / returning-student status below is populated for this
+    // path too, not just when staff type the phone number directly.
+    if (s.phone) lookupPhone(s.phone)
   }
 
   useEffect(() => {
@@ -854,6 +858,11 @@ function NewMembershipForm({ branchId, onCreated, tempPackages, permPackages }) 
       setLockerNo(lockerStatus.availableNumbers[0])
     }
   }, [withLocker, lockerStatus, lockerNo])
+
+  // Mirrors create_membership's server-side duplicate guard so staff see the block up-front
+  // instead of filling the whole form and being rejected at submit. The backend check is the
+  // authoritative one — this is purely the friendlier surface for it.
+  const blockedByActiveMembership = !!selectedStudent?.is_member
 
   const monthlyFee = isCustomPlan ? (Number(customAmount) || 0) : (packages.find(p => p.hours === hoursPerDay)?.fee ?? 0)
   const isCustomDays = monthsPaid === 'custom'
@@ -881,6 +890,9 @@ function NewMembershipForm({ branchId, onCreated, tempPackages, permPackages }) 
   const handleSubmit = async (e) => {
     e.preventDefault()
     if (!/^\d{10}$/.test(phone)) return setError('Phone must be 10 digits')
+    if (blockedByActiveMembership) {
+      return setError(`${selectedStudent.name} already has an active membership on this phone number. Use Renew on their profile, or close/delete that membership before registering again.`)
+    }
     if (name.trim().split(/\s+/).length < 2) return setError('Please enter the full name (first and last name)')
     if (!/^\d{10}$/.test(emergencyContact)) return setError('Emergency contact must be a 10 digit phone number')
     if (phone === emergencyContact) return setError('Emergency contact cannot be the same as the primary phone number')
@@ -973,7 +985,7 @@ function NewMembershipForm({ branchId, onCreated, tempPackages, permPackages }) 
         <div className="form-group" style={{ position: 'relative' }}>
           <label>Full Name *</label>
           <input value={name} onChange={(e) => setName(e.target.value)} placeholder="Enter your Full Name" autoComplete="off" required />
-          {selectedStudent && (
+          {selectedStudent && !selectedStudent.is_member && !selectedStudent.is_returning && (
             <p style={{ fontSize: '0.75rem', color: '#4ade80', marginTop: '0.3rem' }}>✓ Matched existing student</p>
           )}
           {nameMatches.length > 0 && (
@@ -1000,6 +1012,45 @@ function NewMembershipForm({ branchId, onCreated, tempPackages, permPackages }) 
         <div className="form-group">
           <label>Phone Number *</label>
           <input value={phone} onChange={(e) => { setPhone(e.target.value.replace(/\D/g, '').slice(0, 10)); setSelectedStudent(null) }} required />
+          {blockedByActiveMembership && (
+            <div style={{
+              marginTop: '0.5rem', padding: '0.6rem 0.7rem', borderRadius: 6,
+              background: 'rgba(255,60,60,0.08)', border: '1px solid rgba(255,60,60,0.4)',
+            }}>
+              <p style={{ fontSize: '0.8rem', color: '#ff8888', fontWeight: 700, marginBottom: '0.25rem' }}>
+                ⛔ This phone already has an active membership
+              </p>
+              <p style={{ fontSize: '0.76rem', color: 'var(--text-muted)', lineHeight: 1.5 }}>
+                {selectedStudent.name} holds an active <span className="cap">{selectedStudent.active_membership?.category}</span> membership
+                {selectedStudent.active_branch_name ? ` at ${selectedStudent.active_branch_name}` : ''}
+                {selectedStudent.active_membership?.end_date ? `, valid until ${formatDate(selectedStudent.active_membership.end_date)}` : ''}.
+                Registering again would create a duplicate — use <strong>Renew</strong> on their profile to extend it, or close/delete that membership first.
+              </p>
+              <button
+                type="button" className="btn btn-ghost"
+                style={{ marginTop: '0.5rem', fontSize: '0.78rem', padding: '0.3rem 0.7rem' }}
+                onClick={() => navigate(`/students/${selectedStudent.id}`)}
+              >
+                Open their profile →
+              </button>
+            </div>
+          )}
+          {selectedStudent?.is_returning && (
+            <div style={{
+              marginTop: '0.5rem', padding: '0.6rem 0.7rem', borderRadius: 6,
+              background: 'rgba(74,222,128,0.07)', border: '1px solid rgba(74,222,128,0.35)',
+            }}>
+              <p style={{ fontSize: '0.8rem', color: '#4ade80', fontWeight: 700, marginBottom: '0.25rem' }}>
+                ↩ Returning student
+              </p>
+              <p style={{ fontSize: '0.76rem', color: 'var(--text-muted)', lineHeight: 1.5 }}>
+                {selectedStudent.name} was previously a <span className="cap">{selectedStudent.last_membership_category}</span> member
+                {selectedStudent.last_membership_end ? ` until ${formatDate(selectedStudent.last_membership_end)}` : ''}.
+                Their past attendance and payment history stays on record, and their Total Visits / Hours Studied
+                counters restart from zero for this new membership.
+              </p>
+            </div>
+          )}
         </div>
         <div className="form-group">
           <label>Emergency Contact (10-digit phone) *</label>
@@ -1186,7 +1237,7 @@ function NewMembershipForm({ branchId, onCreated, tempPackages, permPackages }) 
           )}
         </div>
         {error && <p className="error-msg">{error}</p>}
-        <button type="submit" className="btn btn-primary" disabled={loading || !branchId}>
+        <button type="submit" className="btn btn-primary" disabled={loading || !branchId || blockedByActiveMembership}>
           {loading ? 'Creating…' : 'Create Membership'}
         </button>
       </form>

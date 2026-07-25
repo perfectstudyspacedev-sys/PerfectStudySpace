@@ -790,10 +790,27 @@ Deno.serve(async (req) => {
         .eq("phone", phone).maybeSingle();
       if (lookupErr) return err(lookupErr.message);
       if (!data) return json({ student: null });
-      const { data: membership } = await db.from("memberships").select("*")
+      const { data: membership } = await db.from("memberships").select("*, branches(name)")
         .eq("student_id", data.id).eq("is_active", true)
         .order("end_date", { ascending: false }).limit(1).maybeSingle();
-      return json({ student: { ...data, active_membership: membership ?? null, is_member: !!membership } });
+      // A student whose memberships are all inactive is a *returning* student — re-registering
+      // them is the supported flow, and must reuse this same student record (keeping their
+      // history) rather than creating a second person on the same phone number.
+      const { data: pastMems } = await db.from("memberships").select("end_date, category")
+        .eq("student_id", data.id).eq("is_active", false)
+        .order("end_date", { ascending: false }).limit(1);
+      const lastPast = pastMems?.[0] ?? null;
+      return json({
+        student: {
+          ...data,
+          active_membership: membership ?? null,
+          is_member: !!membership,
+          active_branch_name: (membership?.branches as { name: string } | null)?.name ?? null,
+          is_returning: !membership && !!lastPast,
+          last_membership_end: lastPast?.end_date ?? null,
+          last_membership_category: lastPast?.category ?? null,
+        },
+      });
     }
 
     if (action === "search_students_by_name") {
@@ -868,9 +885,40 @@ Deno.serve(async (req) => {
       const validReferrals = ["google_search", "instagram", "word_of_mouth", "flex", "ai_platform"];
       if (!validReferrals.includes(referralSource)) return err("Please select how the student heard about us");
 
+      // Duplicate-registration guard. A phone that already holds an ACTIVE membership —
+      // at ANY branch, of any category — cannot be registered again: stacking a second
+      // membership on top of a live one is exactly what produced the double-active records
+      // this database had to be audited for (two cabins reserved for one person, inflated
+      // active counts, ambiguous renewals). Checked before upsertStudent so a rejection
+      // leaves no partial writes behind. An all-inactive history is deliberately allowed —
+      // that's a returning student, and re-registering them is the supported path.
+      const { data: dupStudent } = await db.from("students").select("id, name").eq("phone", phone).maybeSingle();
+      if (dupStudent) {
+        const { data: liveMems } = await db.from("memberships")
+          .select("category, end_date, branches(name)")
+          .eq("student_id", dupStudent.id).eq("is_active", true)
+          .order("end_date", { ascending: false });
+        const live = liveMems?.[0];
+        if (live) {
+          const liveBranch = (live.branches as unknown as { name: string } | null)?.name ?? "another branch";
+          return err(
+            `${dupStudent.name} (${phone}) already has an active ${live.category} membership at ${liveBranch}, valid until ${live.end_date}. ` +
+            `Use Renew on their profile to extend it, Transfer Branch to move them, or close/delete that membership first — registering again would create a duplicate.`,
+          );
+        }
+      }
+
+      // Reaching here with an existing record means a returning student (the guard above
+      // already rejected anyone holding a live membership). Their visit/hours totals belong
+      // to the membership they were earned under, so a fresh membership starts the counters
+      // at zero rather than carrying the old figures forward. Their underlying per-session
+      // rows (bookings/transactions) are deliberately left intact as historical record.
+      const isReturningStudent = !!dupStudent;
+
       const { id: studentId } = await upsertStudent(db, name, phone, branchId, {
         course, status: "active",
         emergency_contact: emergencyContact, referral_source: referralSource,
+        ...(isReturningStudent ? { total_visits: 0, total_hours_studied: 0 } : {}),
       });
 
       // A Custom plan skips the fixed fee_config tiers entirely — staff enter a negotiated

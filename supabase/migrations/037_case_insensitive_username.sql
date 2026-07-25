@@ -4,7 +4,7 @@
 -- can no longer differ only by case, and updates verify_staff_login to match case-insensitively.
 
 ALTER TABLE staff DROP CONSTRAINT IF EXISTS staff_username_key;
-CREATE UNIQUE INDEX staff_username_lower_key ON staff (lower(username));
+CREATE UNIQUE INDEX IF NOT EXISTS staff_username_lower_key ON staff (lower(username));
 
 CREATE OR REPLACE FUNCTION verify_staff_login(p_username TEXT, p_password TEXT)
 RETURNS TABLE (
