@@ -1,0 +1,12 @@
+project_id = "ozatixapvxwrwbpdxuzt"
+
+# This function performs its own authentication: every request carries a Bearer token that
+# authStaff() verifies against JWT_SECRET and checks against the staff table, and each action
+# additionally enforces branch access. Supabase's gateway-level verify_jwt is therefore
+# redundant here — and actively harmful, because the app replaces the Authorization header
+# with its own staff token, so the gateway has no Supabase-issued JWT to validate. Leaving it
+# on caused every request to fail with UNAUTHORIZED_LEGACY_JWT once the project moved to the
+# new API-key format. Auth is unchanged; it just happens inside the function instead of at
+# the edge.
+[functions.api]
+verify_jwt = false
