@@ -132,6 +132,19 @@ function todayISO() { return new Date(Date.now() + IST_OFFSET_MS).toISOString().
 // instead of "now" — needed to compare calendar dates rather than raw elapsed hours.
 function toISTDateStr(isoTimestamp: string) { return new Date(new Date(isoTimestamp).getTime() + IST_OFFSET_MS).toISOString().slice(0, 10); }
 
+// Start/end instants of an IST calendar date, for filtering UTC-stored timestamptz columns
+// (created_at, redeemed_at, …) by an IST day. Returned as a plain "…Z" UTC instant (the IST
+// boundary converted to its true UTC moment — e.g. IST midnight is the prior day 18:30 UTC),
+// deliberately with no fractional seconds and no "+" offset so the value is byte-for-byte the
+// same shape PostgREST already accepted here — safe to embed in .gte()/.lte() and inside an
+// .or() filter string alike. Previously these ranges used a literal "…T00:00:00Z", which is
+// actually 05:30 IST, so any row between IST midnight and 05:30 was counted on the wrong day.
+function istInstant(dateStr: string, istClock: string) {
+  return new Date(`${dateStr}T${istClock}+05:30`).toISOString().replace(/\.\d{3}Z$/, "Z");
+}
+function istDayStart(dateStr: string) { return istInstant(dateStr, "00:00:00"); }
+function istDayEnd(dateStr: string) { return istInstant(dateStr, "23:59:59"); }
+
 // Pure UTC calendar arithmetic — "dateStr + T12:00:00" (no timezone designator) is parsed
 // as *local* time by the JS Date constructor, and if the runtime's local timezone doesn't
 // happen to be UTC, that silently shifts the result by a day. Using Date.UTC directly and
@@ -193,7 +206,7 @@ function endDateForMonths(startDate: string, months: number): string {
 // daily tasks are due every day from the anchor onward; weekly/monthly repeat on the
 // anchor's weekday / day-of-month.
 function isTaskDueOn(task: { repeat_interval: string; due_date: string | null; created_at: string; status?: string }, dateStr: string): boolean {
-  const anchor = task.due_date ?? task.created_at.slice(0, 10);
+  const anchor = task.due_date ?? toISTDateStr(task.created_at);
   if (task.repeat_interval === "none") return anchor === dateStr && task.status !== "done";
   if (anchor > dateStr) return false;
   if (task.repeat_interval === "daily") return true;
@@ -235,15 +248,16 @@ function computeOvertimeCharge(overtimeMinutes: number, bookedHours: number, bas
 }
 
 function dateRange(period: string, dateFrom?: string, dateTo?: string) {
-  const today = todayISO();
+  const today = todayISO(); // IST calendar date
   if (period === "today") return { from: today, to: today };
   if (period === "week") {
-    const d = new Date(); d.setDate(d.getDate() - 7);
-    return { from: d.toISOString().slice(0, 10), to: today };
+    // 7 IST days back from today, derived from the IST date itself (not the server's UTC
+    // clock) so the window doesn't shift by a day near IST midnight.
+    return { from: addDays(today, -7), to: today };
   }
   if (period === "month") {
-    const d = new Date();
-    return { from: `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-01`, to: today };
+    // First of the current IST month.
+    return { from: `${today.slice(0, 7)}-01`, to: today };
   }
   return { from: dateFrom ?? today, to: dateTo ?? today };
 }
@@ -547,7 +561,7 @@ Deno.serve(async (req) => {
       const { count: currentlyStudying } = await db.from("bookings")
         .select("*", { count: "exact", head: true })
         .eq("branch_id", branchId).eq("status", "active").eq("is_paused", false)
-        .gte("created_at", today + "T00:00:00Z").lte("created_at", today + "T23:59:59Z");
+        .gte("created_at", istDayStart(today)).lte("created_at", istDayEnd(today));
 
       const { data: alerts } = await db.from("alerts").select("*, students(name, phone)")
         .eq("branch_id", branchId).eq("status", "pending").order("due_date").limit(10);
@@ -563,7 +577,7 @@ Deno.serve(async (req) => {
       const { count: checkedInToday } = await db.from("bookings")
         .select("*", { count: "exact", head: true })
         .eq("branch_id", branchId)
-        .gte("created_at", today + "T00:00:00Z").lte("created_at", today + "T23:59:59Z");
+        .gte("created_at", istDayStart(today)).lte("created_at", istDayEnd(today));
 
       return json({
         seats: { free, occupied, reserved, total: desks?.length ?? 0 },
@@ -594,8 +608,12 @@ Deno.serve(async (req) => {
       // Same range logic as get_daily_report — staff only ever see a single day; the
       // owner's Day/Week/Month/Custom picker at the top of Reports scopes this too.
       const range = period && isOwner(staff) ? dateRange(period, dateFrom, dateTo) : { from: date ?? todayISO(), to: date ?? todayISO() };
-      const fromTs = range.from + "T00:00:00Z";
-      const toTs = range.to + "T23:59:59Z";
+      const fromTs = istDayStart(range.from);
+      const toTs = istDayEnd(range.to);
+      // Instant bounds for the in-JS re-check below (fromTs/toTs carry +05:30 while DB
+      // timestamps come back as Z, so they must be compared as parsed instants, not strings).
+      const fromMs = new Date(fromTs).getTime();
+      const toMs = new Date(toTs).getTime();
 
       const [{ data: recentBookings }, { data: recentMemberships }, { data: recentTxns }, { data: recentCashbacks }, { data: recentPayouts }] = await Promise.all([
         db.from("bookings").select("id, booking_type, status, created_at, students(name, phone)")
@@ -617,14 +635,14 @@ Deno.serve(async (req) => {
       const cashbackFeed: Record<string, unknown>[] = [];
       for (const c of recentCashbacks ?? []) {
         const valueLabel = c.cashback_type === "percent" ? `${c.cashback_value}%` : `₹${Number(c.cashback_value)}`;
-        if (c.created_at >= fromTs && c.created_at <= toTs) {
+        if (new Date(c.created_at).getTime() >= fromMs && new Date(c.created_at).getTime() <= toMs) {
           cashbackFeed.push({
             id: `cashback-grant-${c.id}`, kind: "cashback", label: `Cashback granted (${valueLabel})`,
             studentName: c.students?.name, studentPhone: c.students?.phone,
             time: c.created_at, status: "pending", amount: c.cashback_type === "fixed" ? Number(c.cashback_value) : null,
           });
         }
-        if (c.redeemed_at && c.status !== "pending" && c.redeemed_at >= fromTs && c.redeemed_at <= toTs) {
+        if (c.redeemed_at && c.status !== "pending" && new Date(c.redeemed_at).getTime() >= fromMs && new Date(c.redeemed_at).getTime() <= toMs) {
           cashbackFeed.push({
             id: `cashback-${c.status}-${c.id}`, kind: "cashback", label: `Cashback ${c.status}`,
             studentName: c.students?.name, studentPhone: c.students?.phone,
@@ -694,7 +712,7 @@ Deno.serve(async (req) => {
         const { count: currentlyStudying } = await db.from("bookings")
           .select("*", { count: "exact", head: true })
           .eq("branch_id", b.id).eq("status", "active").eq("is_paused", false)
-          .gte("created_at", today + "T00:00:00Z").lte("created_at", today + "T23:59:59Z");
+          .gte("created_at", istDayStart(today)).lte("created_at", istDayEnd(today));
         const { count: activeMemberships } = await db.from("memberships")
           .select("*", { count: "exact", head: true }).eq("branch_id", b.id).eq("is_active", true).gte("end_date", today);
         const { count: temporary } = await db.from("memberships")
@@ -791,7 +809,7 @@ Deno.serve(async (req) => {
 
     // ─── WALK-IN ───
     if (action === "create_walkin") {
-      const { branchId, name, phone, hours, paymentMode, startTime: startTimeStr, deskId: manualDeskId } = payload;
+      const { branchId, name, phone, hours, paymentMode, cashAmount, upiAmount, startTime: startTimeStr, deskId: manualDeskId } = payload;
       if (!requireBranch(staff, branchId)) return err("Branch access denied", 403);
       if (!name || !phone || !hours) return err("Name, phone, and hours required");
 
@@ -813,18 +831,18 @@ Deno.serve(async (req) => {
       const { data: booking, error: bErr } = await db.from("bookings").insert({
         student_id: studentId, branch_id: branchId, desk_id: desk?.id ?? null,
         booking_type: "walkin", start_time: startTime, end_time: endTime,
-        hours: Number(hours), scheduled_hours: Number(hours), amount, status: "active", payment_mode: paymentMode ?? "cash",
-        created_by_staff_id: staff.id,
+        hours: Number(hours), scheduled_hours: Number(hours), amount, status: "active",
+        payment_mode: storedPaymentMode(paymentMode), created_by_staff_id: staff.id,
       }).select("id").single();
       if (bErr) return err(bErr.message);
 
       if (desk) {
         await db.from("desks").update({ status: "occupied", current_booking_id: booking!.id }).eq("id", desk.id);
       }
-      await db.from("transactions").insert({
+      await insertPaymentTransactions(db, {
         student_id: studentId, branch_id: branchId, booking_id: booking!.id,
-        category: "desk", amount, payment_mode: paymentMode ?? "cash", created_by_staff_id: staff.id,
-      });
+        category: "desk", created_by_staff_id: staff.id,
+      }, paymentMode, amount, cashAmount, upiAmount);
       const { data: st } = await db.from("students").select("total_visits, total_hours_studied").eq("id", studentId).single();
       await db.from("students").update({
         total_visits: (st?.total_visits ?? 0) + 1,
@@ -842,6 +860,7 @@ Deno.serve(async (req) => {
         paymentMode, cashAmount, upiAmount, course, lockerNo, withLocker,
         advanceAmount, emergencyContact, referralSource, startDate: customStartDate,
         isCustomPlan, customAmount, weekendHours,
+        isCustomDays, customDays, customDaysAmount,
       } = payload;
       if (!requireBranch(staff, branchId)) return err("Branch access denied", 403);
       if (!emergencyContact) return err("Emergency contact is required");
@@ -874,17 +893,39 @@ Deno.serve(async (req) => {
         weekdayHoursValue = Number(hoursPerDay);
       }
 
-      const months = Number(monthsPaid) || 1;
-      const discount = multiMonthDiscount(months);
-      const gross = monthlyFee * months;
+      // A custom day count bypasses the whole-month billing model entirely — end date is
+      // exactly startDate + days (inclusive), fee is auto-prorated from the plan's monthly
+      // rate but staff can override it, and no multi-month discount applies since it isn't a
+      // whole-month plan. months_paid still needs an integer for the column (and is reused
+      // elsewhere as a rough multiplier, e.g. cashback base) — a rounded month-equivalent is
+      // stored there; the actual money and end date come from the exact day count, not this.
+      const isCustomDaysPlan = !!isCustomDays;
+      let months: number;
+      let discount: number;
+      let gross: number;
+      let customDaysCount: number | null = null;
+      if (isCustomDaysPlan) {
+        customDaysCount = Number(customDays);
+        if (!(customDaysCount > 0)) return err("Enter a valid number of days");
+        months = Math.max(1, Math.round(customDaysCount / 30));
+        discount = 0;
+        gross = customDaysAmount != null && customDaysAmount !== ""
+          ? Number(customDaysAmount)
+          : Math.round((monthlyFee / 30) * customDaysCount);
+        if (!(gross > 0)) return err("Enter a valid amount collected");
+      } else {
+        months = Number(monthsPaid) || 1;
+        discount = multiMonthDiscount(months);
+        gross = monthlyFee * months;
+      }
       const totalPaid = gross * (1 - discount / 100);
       const startDate = isOwner(staff) && customStartDate ? customStartDate : todayISO();
       if (startDate > todayISO()) return err("Start date cannot be in the future");
-      const endDate = endDateForMonths(startDate, months);
+      const endDate = isCustomDaysPlan ? addDays(startDate, customDaysCount! - 1) : endDateForMonths(startDate, months);
       // Derived the same clamp-aware way as endDate (not a raw addMonths) so a start date
       // on the 29th/30th/31st can't make dueDate collide with a 1-month endDate instead of
       // landing the day after it.
-      const dueDate = addDays(endDateForMonths(startDate, 1), 1);
+      const dueDate = isCustomDaysPlan ? addDays(endDate, 1) : addDays(endDateForMonths(startDate, 1), 1);
       const seatType = category === "permanent" ? "fixed" : "floating";
       let deskId = null;
       let cabinNo = null;
@@ -1064,6 +1105,25 @@ Deno.serve(async (req) => {
       return json({ ok: true });
     }
 
+    // Reassigns which physical locker number is on record for this student (e.g. staff
+    // typo'd the number when adding it, or the student is moved to a different locker) —
+    // doesn't touch fee/due-date/deposit, purely a label swap onto a still-free number.
+    if (action === "update_locker_number") {
+      const { lockerId, lockerNo } = payload;
+      if (!lockerNo) return err("Locker number is required");
+      const { data: locker } = await db.from("lockers").select("*").eq("id", lockerId).single();
+      if (!locker) return err("Locker not found");
+      if (!requireBranch(staff, locker.branch_id)) return err("Branch access denied", 403);
+      if (lockerNo === locker.locker_no) return err("That's already this locker's number");
+
+      const { data: existing } = await db.from("lockers").select("id")
+        .eq("branch_id", locker.branch_id).eq("locker_no", lockerNo).eq("is_active", true).maybeSingle();
+      if (existing) return err(`Locker ${lockerNo} is already assigned to another student`);
+
+      await db.from("lockers").update({ locker_no: lockerNo }).eq("id", lockerId);
+      return json({ ok: true });
+    }
+
     // ─── MEMBER CHECK-IN (attendance) ───
     if (action === "check_in_member") {
       const { branchId, studentId, deskId: passedDeskId, startTime: startTimeStr } = payload;
@@ -1109,8 +1169,8 @@ Deno.serve(async (req) => {
         .eq("student_id", studentId)
         .in("booking_type", ["temporary", "permanent"])
         .eq("status", "completed")
-        .gte("created_at", today + "T00:00:00Z")
-        .lte("created_at", today + "T23:59:59Z");
+        .gte("created_at", istDayStart(today))
+        .lte("created_at", istDayEnd(today));
       const usedMinutesToday = (todaysSessions ?? []).reduce((sum: number, b: { start_time: string; end_time: string }) => {
         return sum + Math.max(0, (new Date(b.end_time).getTime() - new Date(b.start_time).getTime()) / 60_000);
       }, 0);
@@ -1864,11 +1924,11 @@ Deno.serve(async (req) => {
       if (!requireBranch(staff, branchId)) return err("Branch access denied", 403);
 
       if (period === "month") {
-        const d = new Date();
-        const monthStart = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-01`;
+        // First of the current IST month (todayISO() is already IST), not the server's UTC month.
+        const monthStart = `${todayISO().slice(0, 7)}-01`;
         const { data: bookings } = await db.from("bookings")
           .select("student_id, hours, students(id, name, phone, course)")
-          .eq("branch_id", branchId).gte("created_at", monthStart + "T00:00:00Z");
+          .eq("branch_id", branchId).gte("created_at", istDayStart(monthStart));
         const byStudent = new Map<string, { id: string; name: string; phone: string; course: string | null; visits: number; hours: number }>();
         for (const b of bookings ?? []) {
           const s = b.students as unknown as { id: string; name: string; phone: string; course: string | null } | null;
@@ -2303,7 +2363,7 @@ Deno.serve(async (req) => {
       const { branchId, dateFrom, dateTo } = payload;
       if (!requireBranch(staff, branchId)) return err("Branch access denied", 403);
       const { data } = await db.from("food_bills").select("*, food_bill_items(*)").eq("branch_id", branchId)
-        .gte("created_at", dateFrom + "T00:00:00Z").lte("created_at", dateTo + "T23:59:59Z")
+        .gte("created_at", istDayStart(dateFrom)).lte("created_at", istDayEnd(dateTo))
         .order("created_at", { ascending: false });
       return json({ bills: data ?? [] });
     }
@@ -2325,8 +2385,8 @@ Deno.serve(async (req) => {
 
       const { data: txns } = await db.from("transactions").select("*")
         .in("branch_id", branchFilter)
-        .gte("created_at", range.from + "T00:00:00Z")
-        .lte("created_at", range.to + "T23:59:59Z");
+        .gte("created_at", istDayStart(range.from))
+        .lte("created_at", istDayEnd(range.to));
 
       const cats = { desk: 0, membership: 0, food: 0, locker: 0, overtime: 0, fine: 0 };
       const modes = { cash: 0, upi: 0, other: 0 };
@@ -2336,10 +2396,11 @@ Deno.serve(async (req) => {
       }
       const total = Object.values(cats).reduce((a, b) => a + b, 0);
 
-      // Daily trend
+      // Daily trend — bucket by the IST calendar day each transaction falls on, not its raw
+      // UTC date (a payment just after IST midnight would otherwise land on the day before).
       const byDay: Record<string, number> = {};
       for (const t of txns ?? []) {
-        const day = t.created_at.slice(0, 10);
+        const day = toISTDateStr(t.created_at);
         byDay[day] = (byDay[day] ?? 0) + Number(t.amount);
       }
       const trend = Object.entries(byDay).sort(([a], [b]) => a.localeCompare(b)).map(([date, amount]) => ({ date, amount }));
@@ -2362,8 +2423,8 @@ Deno.serve(async (req) => {
       // to students aren't revenue transactions — net them out to show the real final figure.
       const { data: payouts } = await db.from("payouts").select("payout_type, amount")
         .in("branch_id", branchFilter)
-        .gte("created_at", range.from + "T00:00:00Z")
-        .lte("created_at", range.to + "T23:59:59Z");
+        .gte("created_at", istDayStart(range.from))
+        .lte("created_at", istDayEnd(range.to));
       const payoutTotals = { cashback: 0, locker_deposit: 0, food_pass_refund: 0, membership_refund: 0 };
       for (const p of payouts ?? []) {
         payoutTotals[p.payout_type as keyof typeof payoutTotals] = (payoutTotals[p.payout_type as keyof typeof payoutTotals] ?? 0) + Number(p.amount);
@@ -2410,8 +2471,13 @@ Deno.serve(async (req) => {
       const range = dateRange(period ?? "month", dateFrom, dateTo);
       const bid = branchId ?? staff.branch_id;
       if (!bid || !requireBranch(staff, bid)) return err("Branch access denied", 403);
-      const fromTs = range.from + "T00:00:00Z";
-      const toTs = range.to + "T23:59:59Z";
+      const fromTs = istDayStart(range.from);
+      const toTs = istDayEnd(range.to);
+      // Numeric instant bounds for the in-JS re-check below — fromTs/toTs carry a +05:30
+      // offset while DB timestamps come back as Z/+00:00, so they can't be compared as raw
+      // strings (different suffixes); compare parsed instants instead.
+      const fromMs = new Date(fromTs).getTime();
+      const toMs = new Date(toTs).getTime();
 
       const wantCashbacks = !category || category === "cashback";
       const wantMembershipRefunds = !category || category === "membership_refund";
@@ -2444,14 +2510,14 @@ Deno.serve(async (req) => {
       const cashbackFeed: Record<string, unknown>[] = [];
       for (const c of (cashbackRows as CbRow[] ?? [])) {
         const valueLabel = c.cashback_type === "percent" ? `${c.cashback_value}%` : `₹${Number(c.cashback_value)}`;
-        if (c.created_at >= fromTs && c.created_at <= toTs) {
+        if (new Date(c.created_at).getTime() >= fromMs && new Date(c.created_at).getTime() <= toMs) {
           cashbackFeed.push({
             id: `cashback-grant-${c.id}`, category: `Cashback granted (${valueLabel})`,
             amount: c.cashback_type === "fixed" ? Number(c.cashback_value) : null,
             payment_mode: null, created_at: c.created_at, students: c.students, branches: c.branches,
           });
         }
-        if (c.redeemed_at && c.status !== "pending" && c.redeemed_at >= fromTs && c.redeemed_at <= toTs) {
+        if (c.redeemed_at && c.status !== "pending" && new Date(c.redeemed_at).getTime() >= fromMs && new Date(c.redeemed_at).getTime() <= toMs) {
           cashbackFeed.push({
             id: `cashback-${c.status}-${c.id}`, category: `Cashback ${c.status}`,
             amount: c.redeemed_amount != null ? Number(c.redeemed_amount) : null,
@@ -2482,8 +2548,8 @@ Deno.serve(async (req) => {
       // Staff only ever see a single day; the owner can additionally pick week/month/custom
       // (period-based) to see the same stats aggregated over a range.
       const range = period && isOwner(staff) ? dateRange(period, dateFrom, dateTo) : { from: date ?? todayISO(), to: date ?? todayISO() };
-      const fromTs = range.from + "T00:00:00Z";
-      const toTs = range.to + "T23:59:59Z";
+      const fromTs = istDayStart(range.from);
+      const toTs = istDayEnd(range.to);
 
       const { data: walkins } = await db.from("bookings").select("*, students(name)")
         .eq("branch_id", branchId).eq("booking_type", "walkin")
@@ -2521,12 +2587,12 @@ Deno.serve(async (req) => {
         attendanceTrend = buckets.map(b => ({
           label: b.label,
           count: new Set(
-            rangeBookings.filter(r => { const d = r.created_at.slice(0, 10); return d >= b.start && d <= b.end; }).map(r => r.student_id),
+            rangeBookings.filter(r => { const d = toISTDateStr(r.created_at); return d >= b.start && d <= b.end; }).map(r => r.student_id),
           ).size,
         }));
         registrationsTrend = buckets.map(b => ({
           label: b.label,
-          count: (newMembers ?? []).filter((m: { created_at: string }) => { const d = m.created_at.slice(0, 10); return d >= b.start && d <= b.end; }).length,
+          count: (newMembers ?? []).filter((m: { created_at: string }) => { const d = toISTDateStr(m.created_at); return d >= b.start && d <= b.end; }).length,
         }));
       }
 
@@ -2803,7 +2869,7 @@ Deno.serve(async (req) => {
           }
           continue;
         }
-        const anchor = t.due_date ?? t.created_at.slice(0, 10);
+        const anchor = t.due_date ?? toISTDateStr(t.created_at);
         let cursor = anchor > windowStart ? anchor : windowStart;
         while (cursor < today) {
           if (isTaskDueOn(t, cursor) && !completedSet.has(`${t.id}:${cursor}`)) {
@@ -3108,11 +3174,11 @@ Deno.serve(async (req) => {
         branchIds = [branchId];
       }
       const { data } = await db.from("memberships")
-        .select("id, branch_id, category, hours_per_day, start_date, end_date, cabin_no, is_paused, hold_days, fee_due, total_paid, students(id, name, phone), branches(name)")
+        .select("id, branch_id, category, hours_per_day, hours_per_day_weekend, monthly_fee, start_date, end_date, cabin_no, is_paused, hold_days, fee_due, total_paid, students(id, name, phone), branches(name)")
         .in("branch_id", branchIds)
         .eq("is_active", true)
         .order("end_date");
-      type MemRow = { id: string; branch_id: string; category: string; hours_per_day: number; start_date: string; end_date: string; cabin_no: string | null; is_paused: boolean; hold_days: number; fee_due: number; total_paid: number; students: { id: string; name: string; phone: string } | null; branches: { name: string } | null };
+      type MemRow = { id: string; branch_id: string; category: string; hours_per_day: number; hours_per_day_weekend: number | null; monthly_fee: number; start_date: string; end_date: string; cabin_no: string | null; is_paused: boolean; hold_days: number; fee_due: number; total_paid: number; students: { id: string; name: string; phone: string } | null; branches: { name: string } | null };
       const studentIds = (data as MemRow[] ?? []).map(m => m.students?.id).filter((id): id is string => !!id);
       const { data: pendingCashbacks } = studentIds.length
         ? await db.from("cashbacks").select("student_id, cashback_type, cashback_value").in("student_id", studentIds).eq("status", "pending")
@@ -3128,6 +3194,8 @@ Deno.serve(async (req) => {
         student_phone: m.students?.phone,
         category: m.category,
         hours_per_day: m.hours_per_day,
+        hours_per_day_weekend: m.hours_per_day_weekend,
+        monthly_fee: m.monthly_fee,
         cabin_no: m.cabin_no,
         start_date: m.start_date,
         end_date: m.end_date,
@@ -3296,6 +3364,7 @@ Deno.serve(async (req) => {
       const {
         membershipId, monthsPaid, paymentMode, cashAmount, upiAmount, advanceAmount, category, hoursPerDay,
         isCustomPlan, customAmount, weekendHours,
+        isCustomDays, customDays, customDaysAmount,
       } = payload;
       const { data: mem } = await db.from("memberships").select("*").eq("id", membershipId).single();
       if (!mem) return err("Membership not found");
@@ -3327,9 +3396,27 @@ Deno.serve(async (req) => {
         monthlyFee = pkgFee;
       }
 
-      const months = Number(monthsPaid) || 1;
-      const discount = multiMonthDiscount(months);
-      const gross = monthlyFee * months;
+      // Same custom-day-count model as create_membership — bypasses the whole-month billing
+      // entirely, auto-prorated from monthlyFee but overridable via customDaysAmount.
+      const isCustomDaysPlan = !!isCustomDays;
+      let months: number;
+      let discount: number;
+      let gross: number;
+      let customDaysCount: number | null = null;
+      if (isCustomDaysPlan) {
+        customDaysCount = Number(customDays);
+        if (!(customDaysCount > 0)) return err("Enter a valid number of days");
+        months = Math.max(1, Math.round(customDaysCount / 30));
+        discount = 0;
+        gross = customDaysAmount != null && customDaysAmount !== ""
+          ? Number(customDaysAmount)
+          : Math.round((monthlyFee / 30) * customDaysCount);
+        if (!(gross > 0)) return err("Enter a valid amount collected");
+      } else {
+        months = Number(monthsPaid) || 1;
+        discount = multiMonthDiscount(months);
+        gross = monthlyFee * months;
+      }
       const totalBeforeCashback = gross * (1 - discount / 100);
 
       const { cashbackAmount, contribs: cashbackContribs } = await settlePendingCashbacks(db, mem.student_id, totalBeforeCashback);
@@ -3353,8 +3440,8 @@ Deno.serve(async (req) => {
       // current end_date is already the last day the student is covered through under the
       // inclusive-end convention above, so starting there again would double-count it.
       const startDate = mem.end_date < today ? today : addDays(mem.end_date, 1);
-      const endDate = endDateForMonths(startDate, months);
-      const dueDate = addDays(endDateForMonths(startDate, 1), 1);
+      const endDate = isCustomDaysPlan ? addDays(startDate, customDaysCount! - 1) : endDateForMonths(startDate, months);
+      const dueDate = isCustomDaysPlan ? addDays(endDate, 1) : addDays(endDateForMonths(startDate, 1), 1);
       const monthLabel = new Date(startDate).toLocaleString("en-US", { month: "long", year: "numeric" });
 
       // Plan can change on renewal — reassign the cabin/seat if the category changed

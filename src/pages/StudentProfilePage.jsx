@@ -338,6 +338,8 @@ export default function StudentProfilePage() {
   const [lockerError, setLockerError] = useState('')
   const [editingLockerDue, setEditingLockerDue] = useState(false)
   const [lockerDueDate, setLockerDueDate] = useState('')
+  const [editingLockerNo, setEditingLockerNo] = useState(false)
+  const [lockerNoEdit, setLockerNoEdit] = useState('')
   const [tempPackages, setTempPackages] = useState(DEFAULT_TEMP_PACKAGES)
   const [permPackages, setPermPackages] = useState(DEFAULT_PERM_PACKAGES)
   const [renewOpen, setRenewOpen] = useState(false)
@@ -346,7 +348,9 @@ export default function StudentProfilePage() {
   const [renewCustomAmount, setRenewCustomAmount] = useState('')
   const [renewCustomWeekdayHours, setRenewCustomWeekdayHours] = useState('')
   const [renewCustomWeekendHours, setRenewCustomWeekendHours] = useState('')
-  const [renewMonths, setRenewMonths] = useState(1)
+  const [renewMonths, setRenewMonths] = useState(1) // number, or the string 'custom' for a custom day count
+  const [renewCustomDays, setRenewCustomDays] = useState('')
+  const [renewCustomDaysAmount, setRenewCustomDaysAmount] = useState('')
   const [renewPayMode, setRenewPayMode] = useState({ mode: 'cash', cashAmount: '', upiAmount: '' })
   const [renewPayType, setRenewPayType] = useState('full')
   const [renewAdvance, setRenewAdvance] = useState('')
@@ -469,6 +473,20 @@ export default function StudentProfilePage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [renewCategory, renewOpen])
 
+  // Auto-prorate the custom-day renewal amount from the selected plan's monthly rate
+  // whenever the day count changes — staff can still freely edit the amount afterward.
+  useEffect(() => {
+    if (renewMonths !== 'custom') return
+    const days = Number(renewCustomDays) || 0
+    const pkgs = renewCategory === 'permanent' ? permPackages : tempPackages
+    const pkg = pkgs.find(p => p.hours === renewHoursPerDay) ?? pkgs[0]
+    const monthlyFee = renewHoursPerDay === 'custom' ? (Number(renewCustomAmount) || 0) : (pkg?.fee ?? 0)
+    if (days > 0 && monthlyFee > 0) {
+      setRenewCustomDaysAmount(String(Math.round((monthlyFee / 30) * days)))
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [renewCustomDays, renewMonths, renewHoursPerDay, renewCustomAmount, renewCategory])
+
   const handleAddLocker = async () => {
     setLockerLoading(true)
     setLockerError('')
@@ -511,6 +529,21 @@ export default function StudentProfilePage() {
     try {
       await api('update_locker_due_date', { lockerId, dueDate: lockerDueDate })
       setEditingLockerDue(false)
+      refresh()
+    } catch (err) {
+      setLockerError(err.message)
+    } finally {
+      setLockerLoading(false)
+    }
+  }
+
+  const handleEditLockerNo = async (lockerId) => {
+    if (!lockerNoEdit) return
+    setLockerLoading(true)
+    setLockerError('')
+    try {
+      await api('update_locker_number', { lockerId, lockerNo: lockerNoEdit })
+      setEditingLockerNo(false)
       refresh()
     } catch (err) {
       setLockerError(err.message)
@@ -621,7 +654,9 @@ export default function StudentProfilePage() {
     setRenewCustomWeekdayHours(wasCustomPlan ? String(mem.hours_per_day) : '')
     setRenewCustomWeekendHours(wasCustomPlan ? String(mem.hours_per_day_weekend) : '')
     setRenewMonths(1)
-    setRenewPayMode('cash')
+    setRenewCustomDays('')
+    setRenewCustomDaysAmount('')
+    setRenewPayMode({ mode: 'cash', cashAmount: '', upiAmount: '' })
     setRenewPayType('full')
     setRenewAdvance('')
     setRenewError('')
@@ -629,8 +664,11 @@ export default function StudentProfilePage() {
 
   const handleRenewSubmit = async (membershipId) => {
     const renewIsCustomPlan = renewHoursPerDay === 'custom'
+    const renewIsCustomDays = renewMonths === 'custom'
     if (renewIsCustomPlan && !(Number(renewCustomAmount) > 0)) return setRenewError('Enter a valid custom amount')
     if (renewIsCustomPlan && !(Number(renewCustomWeekdayHours) > 0)) return setRenewError('Enter valid weekday hours')
+    if (renewIsCustomDays && !(Number(renewCustomDays) > 0)) return setRenewError('Enter a valid number of days')
+    if (renewIsCustomDays && !(Number(renewCustomDaysAmount) > 0)) return setRenewError('Enter a valid amount collected')
     const renewAmountNow = renewPayType === 'partial' ? renewAdvanceNum : renewPayType === 'pending' ? 0 : renewTotal
     if (renewAmountNow > 0 && !isSplitValid(renewPayMode, renewAmountNow)) return setRenewError('Cash + UPI must add up to the amount paid now')
     setRenewLoading(true)
@@ -640,13 +678,16 @@ export default function StudentProfilePage() {
         membershipId,
         category: renewCategory,
         hoursPerDay: renewIsCustomPlan ? Number(renewCustomWeekdayHours) : renewHoursPerDay,
-        monthsPaid: renewMonths,
+        monthsPaid: renewIsCustomDays ? undefined : renewMonths,
         paymentMode: renewPayMode.mode,
         cashAmount: renewPayMode.cashAmount, upiAmount: renewPayMode.upiAmount,
         advanceAmount: renewPayType === 'partial' ? (Number(renewAdvance) || null) : renewPayType === 'pending' ? 0 : null,
         isCustomPlan: renewIsCustomPlan || undefined,
         customAmount: renewIsCustomPlan ? Number(renewCustomAmount) : undefined,
         weekendHours: renewIsCustomPlan ? (Number(renewCustomWeekendHours) || Number(renewCustomWeekdayHours)) : undefined,
+        isCustomDays: renewIsCustomDays || undefined,
+        customDays: renewIsCustomDays ? Number(renewCustomDays) : undefined,
+        customDaysAmount: renewIsCustomDays ? Number(renewCustomDaysAmount) : undefined,
       })
       setRenewOpen(false)
       if (res.cashbackApplied || res.overtimeCharged) {
@@ -756,11 +797,12 @@ export default function StudentProfilePage() {
 
   // Renewal pricing — plan (category/hours) is editable at renewal time
   const renewIsCustomPlan = renewHoursPerDay === 'custom'
+  const renewIsCustomDays = renewMonths === 'custom'
   const renewPackages = renewCategory === 'permanent' ? permPackages : tempPackages
   const renewPkg = renewPackages.find(p => p.hours === renewHoursPerDay) ?? renewPackages[0]
   const renewMonthlyFee = renewIsCustomPlan ? (Number(renewCustomAmount) || 0) : (renewPkg?.fee ?? 0)
-  const renewDiscount = getMultiMonthDiscount(renewMonths)
-  const renewGross = renewMonthlyFee * renewMonths
+  const renewDiscount = renewIsCustomDays ? 0 : getMultiMonthDiscount(renewMonths)
+  const renewGross = renewIsCustomDays ? (Number(renewCustomDaysAmount) || 0) : renewMonthlyFee * renewMonths
   const renewBeforeCashback = renewGross * (1 - renewDiscount / 100)
   const renewCashbackAmount = pendingCashback
     ? Math.min(
@@ -1196,6 +1238,39 @@ export default function StudentProfilePage() {
                   onClick={() => { setLockerDueDate(locker.locker_due_date); setEditingLockerDue(true) }}
                 >
                   ✏️ Edit Due Date
+                </button>
+              )}
+              {editingLockerNo ? (
+                <div style={{ marginBottom: '0.75rem' }}>
+                  <div className="form-group">
+                    <label>Locker Number</label>
+                    <select value={lockerNoEdit} onChange={(e) => setLockerNoEdit(e.target.value)}>
+                      <option value="">Select a locker number</option>
+                      {(lockerStatus?.availableNumbers ?? []).map(n => <option key={n} value={n}>Locker {n}</option>)}
+                    </select>
+                  </div>
+                  {lockerError && <p className="error-msg">{lockerError}</p>}
+                  <div style={{ display: 'flex', gap: '0.5rem' }}>
+                    <button
+                      type="button" className="btn btn-ghost" style={{ flex: 1 }}
+                      onClick={() => { setEditingLockerNo(false); setLockerError('') }}
+                    >
+                      Cancel
+                    </button>
+                    <button
+                      type="button" className="btn btn-primary" style={{ flex: 1 }}
+                      onClick={() => handleEditLockerNo(locker.id)} disabled={lockerLoading || !lockerNoEdit}
+                    >
+                      {lockerLoading ? 'Saving…' : 'Save'}
+                    </button>
+                  </div>
+                </div>
+              ) : (
+                <button
+                  type="button" className="btn btn-ghost" style={{ width: '100%', fontSize: '0.85rem', marginBottom: '0.75rem' }}
+                  onClick={() => { setLockerNoEdit(''); setEditingLockerNo(true) }}
+                >
+                  ✏️ Edit Locker Number
                 </button>
               )}
               {Number(locker.fee_due) > 0 ? (
@@ -1660,12 +1735,28 @@ export default function StudentProfilePage() {
 
             <div className="form-group">
               <label>Months</label>
-              <select value={renewMonths} onChange={(e) => setRenewMonths(Number(e.target.value))}>
+              <select value={renewMonths} onChange={(e) => setRenewMonths(e.target.value === 'custom' ? 'custom' : Number(e.target.value))}>
                 {[1, 2, 3, 6].map(m => (
                   <option key={m} value={m}>{m} month{m > 1 ? 's' : ''}{getMultiMonthDiscount(m) ? ` (${getMultiMonthDiscount(m)}% off)` : ''}</option>
                 ))}
+                <option value="custom">Custom (enter number of days)</option>
               </select>
             </div>
+            {renewIsCustomDays && (
+              <div className="form-group">
+                <label>Custom Duration</label>
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
+                  <input
+                    type="number" min={1} placeholder="Number of Days"
+                    value={renewCustomDays} onChange={(e) => setRenewCustomDays(e.target.value)}
+                  />
+                  <input
+                    type="number" min={0} placeholder="Amount Collected (₹) — auto-calculated, editable"
+                    value={renewCustomDaysAmount} onChange={(e) => setRenewCustomDaysAmount(e.target.value)}
+                  />
+                </div>
+              </div>
+            )}
 
             {renewPayType !== 'pending' && (
               <div className="form-group">

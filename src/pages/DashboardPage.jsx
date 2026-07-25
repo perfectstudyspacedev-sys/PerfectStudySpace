@@ -384,39 +384,53 @@ export default function DashboardPage() {
       </div>
 
       <div className="card">
-        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', flexWrap: 'wrap', gap: '0.5rem' }}>
-          <h2 style={{ color: 'var(--accent)', marginBottom: '0.5rem' }}>Seat Map</h2>
-          {seatMap?.summary && (
-            <span style={{ fontSize: '0.85rem', color: 'var(--text-muted)' }}>
-              <strong style={{ color: 'var(--accent)' }}>{seatMap.summary.free}</strong> Free ·{' '}
-              <strong style={{ color: '#a0a0a0' }}>{seatMap.summary.permanent}</strong> Permanent
-            </span>
-          )}
-        </div>
-        <p style={{ color: 'var(--text-muted)', fontSize: '0.85rem', marginBottom: '0.75rem' }}>
-          <span style={{ color: 'var(--accent)' }}>■</span> Free &nbsp;
-          <span style={{ color: '#666' }}>■</span> Permanent (reserved)
-        </p>
-        {seatMap && (
-          <div className="seat-map">
-            {seatMap.desks.map(desk => {
-              const isReserved = desk.status === 'reserved'
-              return (
-                <div
-                  key={desk.id}
-                  className={`seat-cell ${desk.status}`}
-                  onClick={isReserved ? () => setSelectedDesk(desk) : undefined}
-                  style={!isReserved ? { cursor: 'default' } : undefined}
-                >
-                  {desk.label}
-                  {isReserved && desk.students?.name && (
-                    <span className="seat-tooltip">{desk.students.name}</span>
-                  )}
+        {(() => {
+          // "temp" is a staging desk used only to shuffle seat assignments around behind the
+          // scenes — a real, manageable desk everywhere else (Branch Settings, check-in), but
+          // it shouldn't clutter or skew the Dashboard's visual seat map / free-seat count.
+          const visibleDesks = (seatMap?.desks ?? []).filter(d => d.label.trim().toLowerCase() !== 'temp')
+          const visibleSummary = seatMap ? {
+            free: visibleDesks.length - visibleDesks.filter(d => d.status === 'reserved').length,
+            permanent: visibleDesks.filter(d => d.status === 'reserved').length,
+          } : null
+          return (
+            <>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', flexWrap: 'wrap', gap: '0.5rem' }}>
+                <h2 style={{ color: 'var(--accent)', marginBottom: '0.5rem' }}>Seat Map</h2>
+                {visibleSummary && (
+                  <span style={{ fontSize: '0.85rem', color: 'var(--text-muted)' }}>
+                    <strong style={{ color: 'var(--accent)' }}>{visibleSummary.free}</strong> Free ·{' '}
+                    <strong style={{ color: '#a0a0a0' }}>{visibleSummary.permanent}</strong> Permanent
+                  </span>
+                )}
+              </div>
+              <p style={{ color: 'var(--text-muted)', fontSize: '0.85rem', marginBottom: '0.75rem' }}>
+                <span style={{ color: 'var(--accent)' }}>■</span> Free &nbsp;
+                <span style={{ color: '#666' }}>■</span> Permanent (reserved)
+              </p>
+              {seatMap && (
+                <div className="seat-map">
+                  {visibleDesks.map(desk => {
+                    const isReserved = desk.status === 'reserved'
+                    return (
+                      <div
+                        key={desk.id}
+                        className={`seat-cell ${desk.status}`}
+                        onClick={isReserved ? () => setSelectedDesk(desk) : undefined}
+                        style={!isReserved ? { cursor: 'default' } : undefined}
+                      >
+                        {desk.label}
+                        {isReserved && desk.students?.name && (
+                          <span className="seat-tooltip">{desk.students.name}</span>
+                        )}
+                      </div>
+                    )
+                  })}
                 </div>
-              )
-            })}
-          </div>
-        )}
+              )}
+            </>
+          )
+        })()}
       </div>
 
       {selectedDesk && (

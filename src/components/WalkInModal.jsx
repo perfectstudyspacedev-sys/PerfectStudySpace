@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback } from 'react'
 import { api } from '../lib/api'
 import { nowTimeStr, localTimeStrToISO, formatCurrency, openWhatsApp, getWelcomeTemplate } from '../lib/utils'
+import PaymentModeSelector, { isSplitValid } from './PaymentModeSelector'
 
 // Fallback used only until live fee config loads from the backend.
 const FALLBACK_FEES = { 3: 35, 4: 45, 5: 55, 6: 60, 7: 70, 8: 80, 9: 90, 12: 100 }
@@ -11,7 +12,7 @@ export default function WalkInModal({ branchId, onClose, onDone }) {
   const [name, setName] = useState('')
   const [phone, setPhone] = useState('')
   const [hours, setHours] = useState(3)
-  const [paymentMode, setPaymentMode] = useState('cash')
+  const [paymentMode, setPaymentMode] = useState({ mode: 'cash', cashAmount: '', upiAmount: '' })
   const [startTime, setStartTime] = useState(nowTimeStr)
   const [error, setError] = useState('')
   const [loading, setLoading] = useState(false)
@@ -75,11 +76,13 @@ export default function WalkInModal({ branchId, onClose, onDone }) {
   const handleSubmit = async (e) => {
     e.preventDefault()
     if (!/^\d{10}$/.test(phone)) return setError('Phone must be 10 digits')
+    if (!isSplitValid(paymentMode, walkinFee(hours))) return setError('Cash + UPI must add up to the total')
     setLoading(true)
     setError('')
     try {
       const result = await api('create_walkin', {
-        branchId, name, phone, hours, paymentMode,
+        branchId, name, phone, hours, paymentMode: paymentMode.mode,
+        cashAmount: paymentMode.cashAmount, upiAmount: paymentMode.upiAmount,
         startTime: localTimeStrToISO(startTime),
       })
       setReceipt(result.booking)
@@ -103,7 +106,11 @@ export default function WalkInModal({ branchId, onClose, onDone }) {
             <h2 style={{ color: 'var(--accent)' }}>Walk-in Confirmed</h2>
             <p><strong>{name}</strong></p>
             <p className="mono">{hours} hours · {formatCurrency(receipt.amount ?? walkinFee(hours))}</p>
-            <p style={{ color: 'var(--text-muted)', fontSize: '0.85rem' }}>Payment: {paymentMode.toUpperCase()}</p>
+            <p style={{ color: 'var(--text-muted)', fontSize: '0.85rem' }}>
+              Payment: {paymentMode.mode === 'split'
+                ? `Cash ₹${paymentMode.cashAmount} + UPI ₹${paymentMode.upiAmount}`
+                : paymentMode.mode.toUpperCase()}
+            </p>
             {isNewStudent && (
               <div style={{ marginTop: '0.75rem', paddingTop: '0.75rem', borderTop: '1px solid var(--border)' }}>
                 <p style={{ color: waSent ? '#4ade80' : 'var(--text-muted)', fontSize: '0.82rem', marginBottom: '0.6rem' }}>
@@ -178,22 +185,7 @@ export default function WalkInModal({ branchId, onClose, onDone }) {
               </div>
               <div className="form-group">
                 <label>Payment Mode</label>
-                <div style={{ display: 'flex', gap: '0.5rem' }}>
-                  {[{ value: 'cash', label: '💵 Cash' }, { value: 'upi', label: '📱 UPI' }].map(({ value, label }) => (
-                    <button
-                      key={value} type="button"
-                      onClick={() => setPaymentMode(value)}
-                      style={{
-                        flex: 1, padding: '0.6rem',
-                        border: `1px solid ${paymentMode === value ? 'var(--accent)' : '#333'}`,
-                        borderRadius: 999,
-                        background: paymentMode === value ? 'rgba(255,215,0,0.08)' : '#141414',
-                        color: paymentMode === value ? 'var(--accent)' : 'var(--text-muted)',
-                        cursor: 'pointer', fontWeight: 600, fontSize: '0.9rem',
-                      }}
-                    >{label}</button>
-                  ))}
-                </div>
+                <PaymentModeSelector value={paymentMode} onChange={setPaymentMode} total={walkinFee(hours)} />
               </div>
               <p className="mono" style={{ marginBottom: '1rem', color: 'var(--accent)' }}>
                 Bill: {formatCurrency(walkinFee(hours))}

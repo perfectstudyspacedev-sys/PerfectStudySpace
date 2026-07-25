@@ -33,8 +33,13 @@ function ActiveMembersTab({ branchId, tempPackages, permPackages }) {
   const [pillFilter, setPillFilter] = useState(null)
   const [renewModal, setRenewModal] = useState(null)
   const [renewCategory, setRenewCategory] = useState('temporary')
-  const [renewHoursPerDay, setRenewHoursPerDay] = useState(4)
-  const [renewMonths, setRenewMonths] = useState(1)
+  const [renewHoursPerDay, setRenewHoursPerDay] = useState(4) // number for a package, or the string 'custom'
+  const [renewCustomAmount, setRenewCustomAmount] = useState('')
+  const [renewCustomWeekdayHours, setRenewCustomWeekdayHours] = useState('')
+  const [renewCustomWeekendHours, setRenewCustomWeekendHours] = useState('')
+  const [renewMonths, setRenewMonths] = useState(1) // number, or the string 'custom' for a custom day count
+  const [renewCustomDays, setRenewCustomDays] = useState('')
+  const [renewCustomDaysAmount, setRenewCustomDaysAmount] = useState('')
   const [renewPayMode, setRenewPayMode] = useState({ mode: 'cash', cashAmount: '', upiAmount: '' })
   const [renewPayType, setRenewPayType] = useState('full')
   const [renewAdvance, setRenewAdvance] = useState('')
@@ -61,13 +66,27 @@ function ActiveMembersTab({ branchId, tempPackages, permPackages }) {
 
   // Keep the selected hours-per-day valid whenever the renewal category changes
   useEffect(() => {
-    if (!renewModal) return
+    if (!renewModal || renewHoursPerDay === 'custom') return
     const pkgs = renewCategory === 'permanent' ? permPackages : tempPackages
     if (pkgs.length && !pkgs.some(p => p.hours === renewHoursPerDay)) {
       setRenewHoursPerDay(pkgs[0].hours)
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [renewCategory, renewModal])
+
+  // Auto-prorate the custom-day renewal amount from the selected plan's monthly rate
+  // whenever the day count changes — staff can still freely edit the amount afterward.
+  useEffect(() => {
+    if (renewMonths !== 'custom') return
+    const days = Number(renewCustomDays) || 0
+    const pkgs = renewCategory === 'permanent' ? permPackages : tempPackages
+    const pkg = pkgs.find(p => p.hours === renewHoursPerDay) ?? pkgs[0]
+    const monthlyFee = renewHoursPerDay === 'custom' ? (Number(renewCustomAmount) || 0) : (pkg?.fee ?? 0)
+    if (days > 0 && monthlyFee > 0) {
+      setRenewCustomDaysAmount(String(Math.round((monthlyFee / 30) * days)))
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [renewCustomDays, renewMonths, renewHoursPerDay, renewCustomAmount, renewCategory])
 
   // DD/MM/YYYY, matching the study-report template's date format
   const fmtDMY = (d) => `${String(d.getDate()).padStart(2, '0')}/${String(d.getMonth() + 1).padStart(2, '0')}/${d.getFullYear()}`
@@ -153,10 +172,16 @@ function ActiveMembersTab({ branchId, tempPackages, permPackages }) {
   }
 
   const openRenewModal = (m) => {
+    const wasCustomPlan = m.hours_per_day_weekend != null
     setRenewModal({ membershipId: m.membership_id, studentName: m.student_name, pendingCashback: m.pending_cashback })
     setRenewCategory(m.category)
-    setRenewHoursPerDay(m.hours_per_day)
+    setRenewHoursPerDay(wasCustomPlan ? 'custom' : m.hours_per_day)
+    setRenewCustomAmount(wasCustomPlan ? String(m.monthly_fee) : '')
+    setRenewCustomWeekdayHours(wasCustomPlan ? String(m.hours_per_day) : '')
+    setRenewCustomWeekendHours(wasCustomPlan ? String(m.hours_per_day_weekend) : '')
     setRenewMonths(1)
+    setRenewCustomDays('')
+    setRenewCustomDaysAmount('')
     setRenewPayMode({ mode: 'cash', cashAmount: '', upiAmount: '' })
     setRenewPayType('full')
     setRenewAdvance('')
@@ -195,6 +220,12 @@ function ActiveMembersTab({ branchId, tempPackages, permPackages }) {
 
   const handleRenewSubmit = async () => {
     if (!renewModal) return
+    const renewIsCustomPlan = renewHoursPerDay === 'custom'
+    const renewIsCustomDays = renewMonths === 'custom'
+    if (renewIsCustomPlan && !(Number(renewCustomAmount) > 0)) return setRenewError('Enter a valid custom amount')
+    if (renewIsCustomPlan && !(Number(renewCustomWeekdayHours) > 0)) return setRenewError('Enter valid weekday hours')
+    if (renewIsCustomDays && !(Number(renewCustomDays) > 0)) return setRenewError('Enter a valid number of days')
+    if (renewIsCustomDays && !(Number(renewCustomDaysAmount) > 0)) return setRenewError('Enter a valid amount collected')
     const renewAmountNow = renewPayType === 'partial' ? renewAdvanceNum : renewPayType === 'pending' ? 0 : renewTotal
     if (renewAmountNow > 0 && !isSplitValid(renewPayMode, renewAmountNow)) return setRenewError('Cash + UPI must add up to the amount paid now')
     setActionLoading(renewModal.membershipId + ':renew')
@@ -203,11 +234,17 @@ function ActiveMembersTab({ branchId, tempPackages, permPackages }) {
       const res = await api('renew_membership', {
         membershipId: renewModal.membershipId,
         category: renewCategory,
-        hoursPerDay: renewHoursPerDay,
-        monthsPaid: renewMonths,
+        hoursPerDay: renewIsCustomPlan ? Number(renewCustomWeekdayHours) : renewHoursPerDay,
+        monthsPaid: renewIsCustomDays ? undefined : renewMonths,
         paymentMode: renewPayMode.mode,
         cashAmount: renewPayMode.cashAmount, upiAmount: renewPayMode.upiAmount,
         advanceAmount: renewPayType === 'partial' ? (Number(renewAdvance) || null) : renewPayType === 'pending' ? 0 : null,
+        isCustomPlan: renewIsCustomPlan || undefined,
+        customAmount: renewIsCustomPlan ? Number(renewCustomAmount) : undefined,
+        weekendHours: renewIsCustomPlan ? (Number(renewCustomWeekendHours) || Number(renewCustomWeekdayHours)) : undefined,
+        isCustomDays: renewIsCustomDays || undefined,
+        customDays: renewIsCustomDays ? Number(renewCustomDays) : undefined,
+        customDaysAmount: renewIsCustomDays ? Number(renewCustomDaysAmount) : undefined,
       })
       setRenewModal(null)
       if (res.cashbackApplied || res.overtimeCharged) {
@@ -247,10 +284,13 @@ function ActiveMembersTab({ branchId, tempPackages, permPackages }) {
   })
 
   // Compute renewal fee for the renewal modal — plan (category/hours) is editable at renewal time
+  const renewIsCustomPlan = renewHoursPerDay === 'custom'
+  const renewIsCustomDays = renewMonths === 'custom'
   const renewPackages = renewCategory === 'permanent' ? permPackages : tempPackages
   const renewPkg = renewPackages.find(p => p.hours === renewHoursPerDay) ?? renewPackages[0]
-  const renewDiscount = getMultiMonthDiscount(renewMonths)
-  const renewGross = renewPkg ? renewPkg.fee * renewMonths : 0
+  const renewMonthlyFee = renewIsCustomPlan ? (Number(renewCustomAmount) || 0) : (renewPkg?.fee ?? 0)
+  const renewDiscount = renewIsCustomDays ? 0 : getMultiMonthDiscount(renewMonths)
+  const renewGross = renewIsCustomDays ? (Number(renewCustomDaysAmount) || 0) : renewMonthlyFee * renewMonths
   const renewBeforeCashback = renewGross * (1 - renewDiscount / 100)
   const renewPendingCashback = renewModal?.pendingCashback ?? null
   const renewCashbackAmount = renewPendingCashback
@@ -458,21 +498,57 @@ function ActiveMembersTab({ branchId, tempPackages, permPackages }) {
 
             <div className="form-group">
               <label>Hours per Day</label>
-              <select value={renewHoursPerDay} onChange={(e) => setRenewHoursPerDay(Number(e.target.value))}>
+              <select value={renewHoursPerDay} onChange={(e) => setRenewHoursPerDay(e.target.value === 'custom' ? 'custom' : Number(e.target.value))}>
                 {renewPackages.map(p => (
                   <option key={p.hours} value={p.hours}>{p.hours} hrs/day — {formatCurrency(p.fee)}/mo</option>
                 ))}
+                <option value="custom">Custom Plan</option>
               </select>
             </div>
+            {renewIsCustomPlan && (
+              <div className="form-group">
+                <label>Custom Plan Details</label>
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
+                  <input
+                    type="number" min={0} placeholder="Amount Collected (₹/mo)"
+                    value={renewCustomAmount} onChange={(e) => setRenewCustomAmount(e.target.value)}
+                  />
+                  <input
+                    type="number" min={0} step={0.5} placeholder="Weekday Hours"
+                    value={renewCustomWeekdayHours} onChange={(e) => setRenewCustomWeekdayHours(e.target.value)}
+                  />
+                  <input
+                    type="number" min={0} step={0.5} placeholder="Weekend Hours (defaults to weekday if left blank)"
+                    value={renewCustomWeekendHours} onChange={(e) => setRenewCustomWeekendHours(e.target.value)}
+                  />
+                </div>
+              </div>
+            )}
 
             <div className="form-group">
               <label>Months</label>
-              <select value={renewMonths} onChange={(e) => setRenewMonths(Number(e.target.value))}>
+              <select value={renewMonths} onChange={(e) => setRenewMonths(e.target.value === 'custom' ? 'custom' : Number(e.target.value))}>
                 {[1, 2, 3, 6].map(m => (
                   <option key={m} value={m}>{m} month{m > 1 ? 's' : ''}{(m >= 2 ? [2, 5, 10][m <= 2 ? 0 : m <= 3 ? 1 : 2] : 0) > 0 ? ` (${[0, 0, 2, 5, 0, 0, 10][m]}% off)` : ''}</option>
                 ))}
+                <option value="custom">Custom (enter number of days)</option>
               </select>
             </div>
+            {renewIsCustomDays && (
+              <div className="form-group">
+                <label>Custom Duration</label>
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
+                  <input
+                    type="number" min={1} placeholder="Number of Days"
+                    value={renewCustomDays} onChange={(e) => setRenewCustomDays(e.target.value)}
+                  />
+                  <input
+                    type="number" min={0} placeholder="Amount Collected (₹) — auto-calculated, editable"
+                    value={renewCustomDaysAmount} onChange={(e) => setRenewCustomDaysAmount(e.target.value)}
+                  />
+                </div>
+              </div>
+            )}
 
             {renewPayType !== 'pending' && (
               <div className="form-group">
@@ -695,7 +771,9 @@ function NewMembershipForm({ branchId, onCreated, tempPackages, permPackages }) 
   const [customAmount, setCustomAmount] = useState('')
   const [customWeekdayHours, setCustomWeekdayHours] = useState('')
   const [customWeekendHours, setCustomWeekendHours] = useState('')
-  const [monthsPaid, setMonthsPaid] = useState(1)
+  const [monthsPaid, setMonthsPaid] = useState(1) // number, or the string 'custom' for a custom day count
+  const [customDays, setCustomDays] = useState('')
+  const [customDaysAmount, setCustomDaysAmount] = useState('')
   const [startDate, setStartDate] = useState(todayISO())
   const [paymentMode, setPaymentMode] = useState({ mode: 'cash', cashAmount: '', upiAmount: '' })
   const [paymentType, setPaymentType] = useState('full')
@@ -778,14 +856,27 @@ function NewMembershipForm({ branchId, onCreated, tempPackages, permPackages }) 
   }, [withLocker, lockerStatus, lockerNo])
 
   const monthlyFee = isCustomPlan ? (Number(customAmount) || 0) : (packages.find(p => p.hours === hoursPerDay)?.fee ?? 0)
-  const discount = getMultiMonthDiscount(monthsPaid)
-  const gross = monthlyFee * monthsPaid
+  const isCustomDays = monthsPaid === 'custom'
+  const discount = isCustomDays ? 0 : getMultiMonthDiscount(monthsPaid)
+  const gross = isCustomDays ? (Number(customDaysAmount) || 0) : monthlyFee * monthsPaid
   const total = gross * (1 - discount / 100)
   const lockerExtra = withLocker ? 200 : 0
   const grandTotal = total + lockerExtra
   const advanceNum = Number(advanceAmount) || 0
   const amountPaid = paymentType === 'full' ? grandTotal : paymentType === 'partial' ? advanceNum : 0
   const amountRemaining = Math.max(grandTotal - amountPaid, 0)
+
+  // Auto-prorate the custom-day amount from the selected plan's monthly rate whenever the
+  // day count changes — staff can still freely edit the amount afterward if the negotiated
+  // price differs from the straight proration.
+  useEffect(() => {
+    if (!isCustomDays) return
+    const days = Number(customDays) || 0
+    if (days > 0 && monthlyFee > 0) {
+      setCustomDaysAmount(String(Math.round((monthlyFee / 30) * days)))
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [customDays, monthlyFee, isCustomDays])
 
   const handleSubmit = async (e) => {
     e.preventDefault()
@@ -799,6 +890,8 @@ function NewMembershipForm({ branchId, onCreated, tempPackages, permPackages }) 
     }
     if (isCustomPlan && !(Number(customAmount) > 0)) return setError('Enter a valid custom amount')
     if (isCustomPlan && !(Number(customWeekdayHours) > 0)) return setError('Enter valid weekday hours')
+    if (isCustomDays && !(Number(customDays) > 0)) return setError('Enter a valid number of days')
+    if (isCustomDays && !(Number(customDaysAmount) > 0)) return setError('Enter a valid amount collected')
     if (amountPaid > 0 && !isSplitValid(paymentMode, amountPaid)) return setError('Cash + UPI must add up to the amount paid now')
     setLoading(true)
     setError('')
@@ -806,7 +899,7 @@ function NewMembershipForm({ branchId, onCreated, tempPackages, permPackages }) 
       const result = await api('create_membership', {
         branchId, name, phone, category,
         hoursPerDay: isCustomPlan ? Number(customWeekdayHours) : hoursPerDay,
-        monthsPaid, paymentMode: paymentMode.mode,
+        monthsPaid: isCustomDays ? undefined : monthsPaid, paymentMode: paymentMode.mode,
         cashAmount: paymentMode.cashAmount, upiAmount: paymentMode.upiAmount, course,
         emergencyContact, referralSource,
         withLocker, lockerNo: withLocker ? lockerNo : null,
@@ -815,6 +908,9 @@ function NewMembershipForm({ branchId, onCreated, tempPackages, permPackages }) 
         isCustomPlan: isCustomPlan || undefined,
         customAmount: isCustomPlan ? Number(customAmount) : undefined,
         weekendHours: isCustomPlan ? (Number(customWeekendHours) || Number(customWeekdayHours)) : undefined,
+        isCustomDays: isCustomDays || undefined,
+        customDays: isCustomDays ? Number(customDays) : undefined,
+        customDaysAmount: isCustomDays ? Number(customDaysAmount) : undefined,
       })
       setReceipt({ ...result, name, phone, total: grandTotal, amountPaid, amountRemaining })
       openWhatsApp(phone, waTemplate.replace(/\{name\}/gi, name))
@@ -962,12 +1058,28 @@ function NewMembershipForm({ branchId, onCreated, tempPackages, permPackages }) 
         )}
         <div className="form-group">
           <label>Months Paid Upfront</label>
-          <select value={monthsPaid} onChange={(e) => setMonthsPaid(Number(e.target.value))}>
+          <select value={monthsPaid} onChange={(e) => setMonthsPaid(e.target.value === 'custom' ? 'custom' : Number(e.target.value))}>
             {[1, 2, 3, 6].map(m => (
               <option key={m} value={m}>{m} month{m > 1 ? 's' : ''}{getMultiMonthDiscount(m) ? ` (${getMultiMonthDiscount(m)}% off)` : ''}</option>
             ))}
+            <option value="custom">Custom (enter number of days)</option>
           </select>
         </div>
+        {isCustomDays && (
+          <div className="form-group">
+            <label>Custom Duration</label>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
+              <input
+                type="number" min={1} placeholder="Number of Days"
+                value={customDays} onChange={(e) => setCustomDays(e.target.value)}
+              />
+              <input
+                type="number" min={0} placeholder="Amount Collected (₹) — auto-calculated, editable"
+                value={customDaysAmount} onChange={(e) => setCustomDaysAmount(e.target.value)}
+              />
+            </div>
+          </div>
+        )}
         {isOwner && (
           <div className="form-group">
             <label>Start Date</label>
@@ -1049,7 +1161,11 @@ function NewMembershipForm({ branchId, onCreated, tempPackages, permPackages }) 
           </div>
         )}
         <div className="card" style={{ marginBottom: '1rem', background: 'rgba(255,215,0,0.05)' }}>
-          <p className="mono">Monthly: {formatCurrency(monthlyFee)} × {monthsPaid} = {formatCurrency(gross)}</p>
+          <p className="mono">
+            {isCustomDays
+              ? `${customDays || 0} day${Number(customDays) === 1 ? '' : 's'} = ${formatCurrency(gross)}`
+              : `Monthly: ${formatCurrency(monthlyFee)} × ${monthsPaid} = ${formatCurrency(gross)}`}
+          </p>
           {discount > 0 && <p className="mono" style={{ color: '#4ade80' }}>Discount: {discount}% (−{formatCurrency(gross - total)})</p>}
           {withLocker && <p className="mono">Locker: +{formatCurrency(lockerExtra)}</p>}
           <p className="mono" style={{ color: 'var(--accent)', fontSize: '1.1rem', marginTop: '0.5rem' }}>
