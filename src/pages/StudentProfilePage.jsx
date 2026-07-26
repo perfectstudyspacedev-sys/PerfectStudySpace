@@ -340,6 +340,14 @@ export default function StudentProfilePage() {
   const [lockerDueDate, setLockerDueDate] = useState('')
   const [editingLockerNo, setEditingLockerNo] = useState(false)
   const [lockerNoEdit, setLockerNoEdit] = useState('')
+  const [renewingLocker, setRenewingLocker] = useState(false)
+  const [renewLockerPayType, setRenewLockerPayType] = useState('now')
+  const [renewLockerPayMode, setRenewLockerPayMode] = useState({ mode: 'cash', cashAmount: '', upiAmount: '' })
+  const [removeLockerOpen, setRemoveLockerOpen] = useState(false)
+  const [removeLockerSummary, setRemoveLockerSummary] = useState(null)
+  const [removeLockerPayMode, setRemoveLockerPayMode] = useState({ mode: 'cash', cashAmount: '', upiAmount: '' })
+  const [removeLockerError, setRemoveLockerError] = useState('')
+  const [withholdLockerDepositOnRemove, setWithholdLockerDepositOnRemove] = useState(false)
   const [tempPackages, setTempPackages] = useState(DEFAULT_TEMP_PACKAGES)
   const [permPackages, setPermPackages] = useState(DEFAULT_PERM_PACKAGES)
   const [renewOpen, setRenewOpen] = useState(false)
@@ -522,6 +530,27 @@ export default function StudentProfilePage() {
     }
   }
 
+  const handleRenewLocker = async (lockerId) => {
+    setLockerLoading(true)
+    setLockerError('')
+    try {
+      await api('renew_locker', {
+        lockerId,
+        payLater: renewLockerPayType === 'later',
+        paymentMode: renewLockerPayMode.mode,
+        cashAmount: renewLockerPayMode.cashAmount, upiAmount: renewLockerPayMode.upiAmount,
+      })
+      setRenewingLocker(false)
+      setRenewLockerPayType('now')
+      setRenewLockerPayMode({ mode: 'cash', cashAmount: '', upiAmount: '' })
+      refresh()
+    } catch (err) {
+      setLockerError(err.message)
+    } finally {
+      setLockerLoading(false)
+    }
+  }
+
   const handleEditLockerDueDate = async (lockerId) => {
     if (!lockerDueDate) return
     setLockerLoading(true)
@@ -552,15 +581,44 @@ export default function StudentProfilePage() {
     }
   }
 
-  const handleRemoveLocker = async (lockerId) => {
-    if (!window.confirm('Remove this locker?')) return
-    setLockerLoading(true)
-    setLockerError('')
+  const openRemoveLocker = async (lockerId) => {
+    setRemoveLockerError('')
+    setRemoveLockerSummary(null)
+    setRemoveLockerPayMode({ mode: 'cash', cashAmount: '', upiAmount: '' })
+    setWithholdLockerDepositOnRemove(false)
+    setRemoveLockerOpen(lockerId)
     try {
-      await api('remove_locker', { lockerId })
+      const summary = await api('get_locker_removal_summary', { lockerId })
+      setRemoveLockerSummary(summary)
+    } catch (err) {
+      setRemoveLockerError(err.message)
+    }
+  }
+
+  // Withholding the deposit removes it from the credit side, which shifts the net amount —
+  // recomputed client-side so the button/payment-mode gating reflect the checkbox instantly.
+  const removeLockerEffectiveNet = removeLockerSummary
+    ? removeLockerSummary.netAmount + (withholdLockerDepositOnRemove ? removeLockerSummary.depositRefund : 0)
+    : 0
+
+  const handleRemoveLocker = async (lockerId) => {
+    if (removeLockerEffectiveNet > 0 && !isSplitValid(removeLockerPayMode, removeLockerEffectiveNet)) {
+      return setRemoveLockerError('Cash + UPI must add up to the amount collected')
+    }
+    setLockerLoading(true)
+    setRemoveLockerError('')
+    try {
+      await api('remove_locker', {
+        lockerId,
+        withholdDeposit: withholdLockerDepositOnRemove || undefined,
+        paymentMode: removeLockerEffectiveNet > 0 ? removeLockerPayMode.mode : undefined,
+        cashAmount: removeLockerEffectiveNet > 0 ? removeLockerPayMode.cashAmount : undefined,
+        upiAmount: removeLockerEffectiveNet > 0 ? removeLockerPayMode.upiAmount : undefined,
+      })
+      setRemoveLockerOpen(false)
       refresh()
     } catch (err) {
-      setLockerError(err.message)
+      setRemoveLockerError(err.message)
     } finally {
       setLockerLoading(false)
     }
@@ -1295,15 +1353,64 @@ export default function StudentProfilePage() {
                   </button>
                 </div>
               ) : (
-                <p style={{ fontSize: '0.82rem', color: '#4ade80', marginBottom: '0.75rem' }}>✓ Paid in full</p>
+                <div style={{ marginBottom: '0.75rem' }}>
+                  <p style={{ fontSize: '0.82rem', color: '#4ade80', marginBottom: '0.5rem' }}>✓ Paid in full</p>
+                  {renewingLocker ? (
+                    <div className="card" style={{ background: 'rgba(255,215,0,0.05)' }}>
+                      <p style={{ fontSize: '0.8rem', color: 'var(--text-muted)', marginBottom: '0.6rem' }}>
+                        Extends due date by 1 month · {formatCurrency(locker.monthly_fee)}
+                      </p>
+                      <div className="form-group">
+                        <label>Payment</label>
+                        <div style={{ display: 'flex', gap: '0.5rem' }}>
+                          {[{ value: 'now', label: 'Pay Now' }, { value: 'later', label: 'Pay Later' }].map(({ value, label }) => (
+                            <button
+                              key={value} type="button" onClick={() => setRenewLockerPayType(value)}
+                              style={{ flex: 1, padding: '0.5rem', border: `1px solid ${renewLockerPayType === value ? 'var(--accent)' : '#333'}`, borderRadius: 999, background: renewLockerPayType === value ? 'rgba(255,215,0,0.08)' : '#141414', color: renewLockerPayType === value ? 'var(--accent)' : 'var(--text-muted)', cursor: 'pointer', fontWeight: 600, fontSize: '0.85rem' }}
+                            >{label}</button>
+                          ))}
+                        </div>
+                      </div>
+                      {renewLockerPayType === 'now' && (
+                        <div className="form-group">
+                          <label>Mode</label>
+                          <PaymentModeSelector value={renewLockerPayMode} onChange={setRenewLockerPayMode} total={locker.monthly_fee} />
+                        </div>
+                      )}
+                      {lockerError && <p className="error-msg">{lockerError}</p>}
+                      <div style={{ display: 'flex', gap: '0.5rem' }}>
+                        <button
+                          type="button" className="btn btn-ghost" style={{ flex: 1 }}
+                          onClick={() => { setRenewingLocker(false); setLockerError('') }}
+                        >
+                          Cancel
+                        </button>
+                        <button
+                          type="button" className="btn btn-primary" style={{ flex: 1 }}
+                          onClick={() => handleRenewLocker(locker.id)}
+                          disabled={lockerLoading || (renewLockerPayType === 'now' && !isSplitValid(renewLockerPayMode, locker.monthly_fee))}
+                        >
+                          {lockerLoading ? 'Renewing…' : 'Confirm Renewal'}
+                        </button>
+                      </div>
+                    </div>
+                  ) : (
+                    <button
+                      type="button" className="btn btn-ghost" style={{ width: '100%', fontSize: '0.85rem' }}
+                      onClick={() => setRenewingLocker(true)}
+                    >
+                      🔄 Renew Locker (+1 month)
+                    </button>
+                  )}
+                </div>
               )}
               <button
                 type="button"
                 style={{ width: '100%', padding: '0.6rem', fontWeight: 700, cursor: 'pointer', background: 'rgba(255,60,60,0.08)', border: '1px solid rgba(255,60,60,0.4)', color: '#ff8888', borderRadius: 4 }}
-                onClick={() => handleRemoveLocker(locker.id)}
+                onClick={() => openRemoveLocker(locker.id)}
                 disabled={lockerLoading}
               >
-                {lockerLoading ? 'Removing…' : '✕ Remove Locker'}
+                ✕ Remove Locker
               </button>
             </>
           ) : (
@@ -1990,6 +2097,86 @@ export default function StudentProfilePage() {
                   : deleteSummary?.netAmount > 0 ? `Collect ${formatCurrency(deleteSummary.netAmount)} & Delete`
                   : deleteSummary?.netAmount < 0 ? `Pay Back ${formatCurrency(-deleteSummary.netAmount)} & Delete`
                   : 'Confirm Delete'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {removeLockerOpen && (
+        <div className="modal-overlay" onClick={() => setRemoveLockerOpen(false)}>
+          <div className="modal" style={{ maxWidth: 400 }} onClick={(e) => e.stopPropagation()}>
+            <h2 style={{ color: '#ff8888', marginBottom: '0.5rem' }}>✕ Remove Locker</h2>
+            <p style={{ color: 'var(--text-muted)', fontSize: '0.82rem', marginBottom: '0.75rem' }}>
+              Locker-only settlement — this doesn't touch their membership fee or any other pending balance.
+            </p>
+
+            {removeLockerError && <p className="error-msg">{removeLockerError}</p>}
+
+            {!removeLockerSummary ? (
+              !removeLockerError && <p>Checking locker settlement…</p>
+            ) : (
+              <>
+                <div className="card" style={{ marginBottom: '0.75rem', background: 'rgba(255,255,255,0.03)' }}>
+                  <p className="mono" style={{ fontSize: '0.85rem' }}>Locker {removeLockerSummary.lockerNo}</p>
+                  {removeLockerSummary.rentDue > 0 && (
+                    <p className="mono" style={{ fontSize: '0.85rem' }}>Pending rent: {formatCurrency(removeLockerSummary.rentDue)}</p>
+                  )}
+                  {removeLockerSummary.depositRefund > 0 && (
+                    <p className="mono" style={{ fontSize: '0.85rem', textDecoration: withholdLockerDepositOnRemove ? 'line-through' : 'none', color: withholdLockerDepositOnRemove ? 'var(--text-muted)' : undefined }}>
+                      Deposit refund: {formatCurrency(removeLockerSummary.depositRefund)}
+                    </p>
+                  )}
+                  {removeLockerEffectiveNet > 0 ? (
+                    <p className="mono" style={{ fontWeight: 700, marginTop: '0.3rem', color: 'var(--accent)' }}>
+                      Collect {formatCurrency(removeLockerEffectiveNet)} from the student
+                    </p>
+                  ) : removeLockerEffectiveNet < 0 ? (
+                    <p className="mono" style={{ fontWeight: 700, marginTop: '0.3rem', color: '#4ade80' }}>
+                      Pay back {formatCurrency(-removeLockerEffectiveNet)} to the student
+                    </p>
+                  ) : (
+                    <p className="mono" style={{ fontWeight: 700, marginTop: '0.3rem', color: '#4ade80' }}>
+                      Fully settled — nothing to collect or refund
+                    </p>
+                  )}
+                </div>
+
+                {removeLockerSummary.depositRefund > 0 && (
+                  <label style={{ display: 'flex', alignItems: 'flex-start', gap: '0.5rem', marginBottom: '0.75rem', fontSize: '0.8rem', cursor: 'pointer' }}>
+                    <input
+                      type="checkbox" checked={withholdLockerDepositOnRemove}
+                      onChange={(e) => setWithholdLockerDepositOnRemove(e.target.checked)}
+                      style={{ marginTop: '0.15rem' }}
+                    />
+                    <span>Don't refund the locker deposit (e.g. locker damage) — it's forfeited instead of paid back.</span>
+                  </label>
+                )}
+
+                {removeLockerEffectiveNet > 0 && (
+                  <div className="form-group">
+                    <label>Payment Mode</label>
+                    <PaymentModeSelector value={removeLockerPayMode} onChange={setRemoveLockerPayMode} total={removeLockerEffectiveNet} />
+                  </div>
+                )}
+              </>
+            )}
+
+            <div className="modal-actions">
+              <button type="button" className="btn btn-ghost" onClick={() => setRemoveLockerOpen(false)}>Cancel</button>
+              <button
+                type="button"
+                style={{
+                  padding: '0.55rem 1.1rem', fontWeight: 700, cursor: 'pointer',
+                  background: '#ff8888', border: 'none', color: '#1a0000', borderRadius: 999,
+                }}
+                onClick={() => handleRemoveLocker(removeLockerOpen)}
+                disabled={!removeLockerSummary || lockerLoading}
+              >
+                {lockerLoading ? 'Removing…'
+                  : removeLockerEffectiveNet > 0 ? `Collect ${formatCurrency(removeLockerEffectiveNet)} & Remove`
+                  : removeLockerEffectiveNet < 0 ? `Pay Back ${formatCurrency(-removeLockerEffectiveNet)} & Remove`
+                  : 'Confirm Remove'}
               </button>
             </div>
           </div>

@@ -398,6 +398,17 @@ async function insertPaymentTransactions(
   }
 }
 
+// Any flow that ends, pauses, or relocates a membership must not run while the student is
+// physically still checked in: the booking would be left status='active' forever with its
+// membership gone (orphaning the row, and keeping a desk tied up), and any overtime/food
+// owed for that session would never be billed because checkout never happens. Callers gate
+// on this and tell staff to check the student out first.
+async function hasOpenSession(db: ReturnType<typeof adminClient>, studentId: string) {
+  const { data } = await db.from("bookings").select("id")
+    .eq("student_id", studentId).eq("status", "active").limit(1);
+  return !!data?.length;
+}
+
 async function createAlert(db: ReturnType<typeof adminClient>, studentId: string, branchId: string, type: string, dueDate: string, message: string) {
   const { data: existing } = await db.from("alerts").select("id")
     .eq("student_id", studentId).eq("alert_type", type).eq("status", "pending").maybeSingle();
@@ -1087,6 +1098,16 @@ Deno.serve(async (req) => {
       return json({ capacity, used: used.length, available: capacity - used.length, availableNumbers });
     }
 
+    // Full list of currently-assigned lockers at a branch, for the Membership page's Locker tab.
+    if (action === "list_lockers") {
+      const { branchId } = payload;
+      if (!requireBranch(staff, branchId)) return err("Branch access denied", 403);
+      const { data } = await db.from("lockers")
+        .select("id, student_id, locker_no, created_at, locker_due_date, fee_due, students(name, phone)")
+        .eq("branch_id", branchId).eq("is_active", true);
+      return json({ lockers: data ?? [] });
+    }
+
     if (action === "add_locker") {
       const { studentId, branchId, lockerNo, paymentMode, cashAmount, upiAmount, payLater } = payload;
       if (!requireBranch(staff, branchId)) return err("Branch access denied", 403);
@@ -1108,11 +1129,12 @@ Deno.serve(async (req) => {
       const daysRemaining = Math.max(1, Math.ceil((new Date(endDate + "T12:00:00").getTime() - new Date(today + "T12:00:00").getTime()) / 86_400_000));
       const proratedFee = Math.round((100 / 30) * daysRemaining);
       const deposit = 100;
+      const totalDue = deposit + proratedFee;
 
-      // The ₹100 caution deposit is mandatory and collected upfront, always — a locker is
-      // never assigned without it. Only the prorated monthly rent can be deferred.
-      const amountPaid = deposit + (payLater ? 0 : proratedFee);
-      const feeDue = payLater ? proratedFee : 0;
+      // Pay Later defers the whole thing — deposit included — into fee_due; nothing is
+      // collected or recorded as a transaction at assignment time in that case.
+      const amountPaid = payLater ? 0 : totalDue;
+      const feeDue = payLater ? totalDue : 0;
 
       const { data: locker, error: lErr } = await db.from("lockers").insert({
         branch_id: branchId, student_id: studentId, locker_no: lockerNo,
@@ -1121,25 +1143,64 @@ Deno.serve(async (req) => {
       }).select("*").single();
       if (lErr) return err(lErr.message);
 
-      await insertPaymentTransactions(db, {
-        student_id: studentId, branch_id: branchId, category: "locker",
-        notes: payLater
-          ? `Locker deposit (₹${deposit}) — rent (₹${proratedFee} for ${daysRemaining}d) deferred`
-          : `Locker — prorated ${daysRemaining}d rent (₹${proratedFee}) + deposit (₹${deposit})`,
-        created_by_staff_id: staff.id,
-      }, paymentMode, amountPaid, cashAmount, upiAmount);
+      if (amountPaid > 0) {
+        await insertPaymentTransactions(db, {
+          student_id: studentId, branch_id: branchId, category: "locker",
+          notes: `Locker — prorated ${daysRemaining}d rent (₹${proratedFee}) + deposit (₹${deposit})`,
+          created_by_staff_id: staff.id,
+        }, paymentMode, amountPaid, cashAmount, upiAmount);
+      }
 
-      return json({ ok: true, locker, amountCharged: amountPaid, proratedFee, deposit, daysRemaining, payLater: !!payLater });
+      return json({ ok: true, locker, amountCharged: amountPaid, proratedFee, deposit, totalDue, daysRemaining, payLater: !!payLater });
     }
 
-    if (action === "remove_locker") {
+    // Preview for the Remove Locker confirmation — locker-only money, deliberately excludes
+    // membership fee_due or any other pending balance the student might have.
+    if (action === "get_locker_removal_summary") {
       const { lockerId } = payload;
       const { data: locker } = await db.from("lockers").select("*").eq("id", lockerId).single();
       if (!locker) return err("Locker not found");
       if (!requireBranch(staff, locker.branch_id)) return err("Branch access denied", 403);
 
-      await db.from("lockers").update({ is_active: false, deposit_returned: true }).eq("id", lockerId);
-      return json({ ok: true });
+      const rentDue = Number(locker.fee_due ?? 0);
+      const depositRefund = locker.deposit_returned ? 0 : Number(locker.deposit_amount ?? 0);
+      // Positive = still owed to the branch (rent exceeds the deposit that would offset it).
+      // Negative = owed back to the student (deposit exceeds any pending rent).
+      const netAmount = rentDue - depositRefund;
+      return json({ lockerNo: locker.locker_no, rentDue, depositRefund, netAmount });
+    }
+
+    if (action === "remove_locker") {
+      const { lockerId, paymentMode, cashAmount, upiAmount, withholdDeposit } = payload;
+      const { data: locker } = await db.from("lockers").select("*").eq("id", lockerId).single();
+      if (!locker) return err("Locker not found");
+      if (!requireBranch(staff, locker.branch_id)) return err("Branch access denied", 403);
+
+      // withholdDeposit forfeits the caution deposit instead of refunding it (e.g. the
+      // locker was damaged) — the locker is still freed either way, just not paid back.
+      const rentDue = Number(locker.fee_due ?? 0);
+      const depositRefund = locker.deposit_returned || withholdDeposit ? 0 : Number(locker.deposit_amount ?? 0);
+      const netAmount = rentDue - depositRefund;
+
+      await db.from("lockers").update({ is_active: false, fee_due: 0, deposit_returned: true }).eq("id", lockerId);
+
+      if (netAmount > 0) {
+        // Owed rent exceeds the deposit that would offset it — collect just the difference.
+        await insertPaymentTransactions(db, {
+          student_id: locker.student_id, branch_id: locker.branch_id, category: "locker",
+          notes: `Locker removed — outstanding rent (₹${rentDue}) net of deposit (₹${depositRefund})`,
+          created_by_staff_id: staff.id,
+        }, paymentMode, netAmount, cashAmount, upiAmount);
+      } else if (netAmount < 0) {
+        // Deposit refund exceeds any owed rent — the branch owes the student the difference.
+        await db.from("payouts").insert({
+          student_id: locker.student_id, branch_id: locker.branch_id, payout_type: "locker_deposit",
+          amount: -netAmount, notes: "Locker caution deposit returned — locker removed",
+          created_by_staff_id: staff.id,
+        });
+      }
+
+      return json({ ok: true, rentDue, depositRefund, netAmount });
     }
 
     if (action === "update_locker_due_date") {
@@ -1529,6 +1590,9 @@ Deno.serve(async (req) => {
       if (!mem) return err("Membership not found");
       if (!requireBranch(staff, mem.branch_id)) return err("Branch access denied", 403);
       if (mem.is_paused) return err("Membership is already on hold");
+      if (await hasOpenSession(db, mem.student_id)) {
+        return err("This student is currently checked in — check them out before putting the membership on hold.");
+      }
       const pausedAtNow = new Date().toISOString();
 
       // A permanent member's cabin sits idle while they're on hold — free it up so it can
@@ -1886,6 +1950,10 @@ Deno.serve(async (req) => {
       const { data: newBranch } = await db.from("branches").select("id").eq("id", newBranchId).eq("is_active", true).maybeSingle();
       if (!newBranch) return err("Destination branch not found");
 
+      if (await hasOpenSession(db, studentId)) {
+        return err("This student is currently checked in — check them out before transferring them to another branch.");
+      }
+
       const { data: activeMem } = await db.from("memberships").select("id, desk_id, category").eq("student_id", studentId).eq("is_active", true).maybeSingle();
 
       let newDesk: { id: string; label: string } | null = null;
@@ -1914,12 +1982,41 @@ Deno.serve(async (req) => {
         if (memErr) return err(memErr.message);
       }
 
-      await db.from("lockers").update({ is_active: false, deposit_returned: true }).eq("student_id", studentId).eq("is_active", true);
+      // A locker is physically tied to its branch, so it's surrendered on transfer. That's a
+      // real settlement, not a silent flag flip: any unpaid rent is carried onto the
+      // membership's fee_due (so it's still collected rather than vanishing), and the caution
+      // deposit is genuinely refunded via a payouts row — previously this line just marked
+      // deposit_returned = true with no money moving and wrote off pending rent entirely.
+      const { data: transferLocker } = await db.from("lockers").select("*")
+        .eq("student_id", studentId).eq("is_active", true).maybeSingle();
+      let lockerRentCarried = 0;
+      let lockerDepositRefunded = 0;
+      if (transferLocker) {
+        lockerRentCarried = Number(transferLocker.fee_due ?? 0);
+        lockerDepositRefunded = transferLocker.deposit_returned ? 0 : Number(transferLocker.deposit_amount ?? 0);
+
+        await db.from("lockers").update({ is_active: false, fee_due: 0, deposit_returned: true })
+          .eq("id", transferLocker.id);
+
+        if (lockerDepositRefunded > 0) {
+          await db.from("payouts").insert({
+            student_id: studentId, branch_id: transferLocker.branch_id, payout_type: "locker_deposit",
+            amount: lockerDepositRefunded, notes: "Locker caution deposit returned — student transferred branch",
+            created_by_staff_id: staff.id,
+          });
+        }
+        if (lockerRentCarried > 0 && activeMem) {
+          const { data: memRow } = await db.from("memberships").select("fee_due").eq("id", activeMem.id).single();
+          await db.from("memberships")
+            .update({ fee_due: Number(memRow?.fee_due ?? 0) + lockerRentCarried })
+            .eq("id", activeMem.id);
+        }
+      }
 
       const { error } = await db.from("students").update({ branch_id: newBranchId }).eq("id", studentId);
       if (error) return err(error.message);
 
-      return json({ ok: true });
+      return json({ ok: true, lockerRentCarried, lockerDepositRefunded });
     }
 
     // One-off owner-triggered repair for rows written before the addMonths/addDays
@@ -2209,6 +2306,48 @@ Deno.serve(async (req) => {
       }, paymentMode, Number(amount), cashAmount, upiAmount);
 
       return json({ ok: true });
+    }
+
+    // One-click locker renewal — the previous manual workaround required staff to remember
+    // to separately edit the due date AND type in the right amount to "pay", with nothing
+    // linking the two (fee_due only ever decreased via record_locker_payment, never
+    // increased for a new cycle). This does both atomically: extends the due date by one
+    // month and charges the standard monthly fee for it, Pay Now or Pay Later.
+    if (action === "renew_locker") {
+      const { lockerId, paymentMode, cashAmount, upiAmount, payLater } = payload;
+      const { data: locker } = await db.from("lockers").select("*").eq("id", lockerId).single();
+      if (!locker) return err("Locker not found");
+      if (!requireBranch(staff, locker.branch_id)) return err("Branch access denied", 403);
+      if (!locker.is_active) return err("Locker is not active");
+      if (Number(locker.fee_due) > 0) {
+        return err(`This locker still has ₹${Number(locker.fee_due)} pending — clear it before renewing.`);
+      }
+
+      const monthlyFee = Number(locker.monthly_fee) || 100;
+      const today = todayISO();
+      // A renewal made before the current due date lapses extends from that due date (so
+      // renewing early doesn't lose already-paid-for time) — same rule as membership renewal.
+      const newDueDate = locker.locker_due_date && locker.locker_due_date >= today
+        ? addMonths(locker.locker_due_date, 1)
+        : addMonths(today, 1);
+
+      const feeDue = payLater ? monthlyFee : 0;
+      const amountPaidNow = payLater ? 0 : monthlyFee;
+
+      await db.from("lockers").update({
+        locker_due_date: newDueDate,
+        fee_due: feeDue,
+        amount_paid: Number(locker.amount_paid) + amountPaidNow,
+      }).eq("id", lockerId);
+
+      if (!payLater) {
+        await insertPaymentTransactions(db, {
+          student_id: locker.student_id, branch_id: locker.branch_id,
+          category: "locker", notes: "Locker renewal", created_by_staff_id: staff.id,
+        }, paymentMode, monthlyFee, cashAmount, upiAmount);
+      }
+
+      return json({ ok: true, newDueDate, amountCharged: monthlyFee, payLater: !!payLater });
     }
 
     // ─── FOOD PASS (prepaid wallet) ───
@@ -3680,6 +3819,9 @@ Deno.serve(async (req) => {
       if (!mem) return err("Membership not found");
       if (!requireBranch(staff, mem.branch_id)) return err("Branch access denied", 403);
       if (!mem.is_active) return err("Membership is not active");
+      if (await hasOpenSession(db, mem.student_id)) {
+        return err("This student is currently checked in — check them out before deleting the membership.");
+      }
 
       const s = await computeDeleteSettlement(mem);
 
@@ -3688,6 +3830,12 @@ Deno.serve(async (req) => {
       }
 
       await db.from("memberships").update({ is_active: false, fee_due: 0 }).eq("id", membershipId);
+
+      // Deleting while on hold would otherwise leave the hold row open forever, showing
+      // "Still on hold" in Hold History for a membership that no longer exists.
+      await db.from("membership_holds")
+        .update({ resumed_at: new Date().toISOString(), days_paused: 0 })
+        .eq("membership_id", membershipId).is("resumed_at", null);
 
       if (mem.desk_id) {
         await db.from("desks").update({ status: "free", seat_type: "floating", assigned_student_id: null }).eq("id", mem.desk_id);
@@ -3763,7 +3911,7 @@ Deno.serve(async (req) => {
     }
 
     if (action === "close_membership") {
-      const { membershipId, paymentMode } = payload;
+      const { membershipId, paymentMode, withholdLockerDeposit } = payload;
       const { data: mem } = await db.from("memberships").select("*").eq("id", membershipId).single();
       if (!mem) return err("Membership not found");
       if (!requireBranch(staff, mem.branch_id)) return err("Branch access denied", 403);
@@ -3775,11 +3923,17 @@ Deno.serve(async (req) => {
       const { data: unbilledOvertime } = await db.from("overtime_sessions").select("id, overtime_minutes, billed_amount")
         .eq("student_id", mem.student_id).is("billed_at", null).eq("excluded", false);
 
+      if (await hasOpenSession(db, mem.student_id)) {
+        return err("This student is currently checked in — check them out before quitting the membership.");
+      }
+
       // Final settlement: what's owed to the business nets against what's owed back to
       // the student (locker deposit, unredeemed Food Pass balance, unredeemed cashback).
+      // withholdLockerDeposit lets staff forfeit the caution deposit instead of refunding it
+      // (e.g. locker damage) — it's still deactivated and freed either way, just not paid back.
       const membershipDue = Number(mem.fee_due ?? 0);
       const lockerDue = Number(locker?.fee_due ?? 0);
-      const lockerDepositRefund = locker && !locker.deposit_returned ? Number(locker.deposit_amount ?? 0) : 0;
+      const lockerDepositRefund = locker && !locker.deposit_returned && !withholdLockerDeposit ? Number(locker.deposit_amount ?? 0) : 0;
       const foodPassBalance = Number(foodPass?.balance ?? 0);
       const foodPassRefund = Math.max(foodPassBalance, 0);
       const foodPassOwed = Math.max(-foodPassBalance, 0);
@@ -3797,6 +3951,12 @@ Deno.serve(async (req) => {
       }
 
       await db.from("memberships").update({ is_active: false, fee_due: 0 }).eq("id", membershipId);
+
+      // Quitting while on hold would otherwise leave the hold row open forever, showing
+      // "Still on hold" in Hold History for a membership that's already ended.
+      await db.from("membership_holds")
+        .update({ resumed_at: new Date().toISOString(), days_paused: 0 })
+        .eq("membership_id", membershipId).is("resumed_at", null);
 
       if (unbilledOvertime?.length) {
         // billed_amount is already correct per-row (set at checkout time) — only mark

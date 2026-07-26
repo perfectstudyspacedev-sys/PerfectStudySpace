@@ -48,6 +48,7 @@ function ActiveMembersTab({ branchId, tempPackages, permPackages }) {
   const [closeSummary, setCloseSummary] = useState(null)
   const [closeLoading, setCloseLoading] = useState(false)
   const [closePayMode, setClosePayMode] = useState('cash')
+  const [withholdLockerDeposit, setWithholdLockerDeposit] = useState(false)
   const [cashbackNotice, setCashbackNotice] = useState(null)
   const [settlementNotice, setSettlementNotice] = useState(null)
   const [waLoadingId, setWaLoadingId] = useState(null)
@@ -192,11 +193,19 @@ function ActiveMembersTab({ branchId, tempPackages, permPackages }) {
     setCloseModal({ membershipId, studentName })
     setCloseSummary(null)
     setClosePayMode('cash')
+    setWithholdLockerDeposit(false)
     try {
       const summary = await api('get_membership_closure_summary', { membershipId })
       setCloseSummary(summary)
     } catch { /* ignore */ }
   }
+
+  // Withholding the deposit removes it from what's owed back to the student, which shifts
+  // the net settlement — recomputed here so the confirm button and payment-mode gating
+  // reflect the checkbox instantly, without a second round trip to the server.
+  const closeEffectiveNetAmount = closeSummary
+    ? closeSummary.netAmount + (withholdLockerDeposit ? closeSummary.lockerDepositRefund : 0)
+    : 0
 
   const confirmClose = async () => {
     if (!closeModal) return
@@ -204,7 +213,8 @@ function ActiveMembersTab({ branchId, tempPackages, permPackages }) {
     try {
       const res = await api('close_membership', {
         membershipId: closeModal.membershipId,
-        paymentMode: closeSummary?.netAmount > 0 ? closePayMode : undefined,
+        paymentMode: closeEffectiveNetAmount > 0 ? closePayMode : undefined,
+        withholdLockerDeposit: withholdLockerDeposit || undefined,
       })
       setCloseModal(null)
       if (res.refundAmount > 0) {
@@ -643,21 +653,38 @@ function ActiveMembersTab({ branchId, tempPackages, permPackages }) {
 
                 <div className="card" style={{ marginBottom: '1rem', background: 'rgba(74,222,128,0.05)' }}>
                   <h3 style={{ color: '#4ade80', fontSize: '0.9rem', marginBottom: '0.5rem' }}>Owed Back to the Student</h3>
-                  {closeSummary.lockerDepositRefund > 0 && <p className="mono" style={{ fontSize: '0.85rem' }}>Locker deposit: {formatCurrency(closeSummary.lockerDepositRefund)}</p>}
+                  {closeSummary.lockerDepositRefund > 0 && (
+                    <p className="mono" style={{ fontSize: '0.85rem', textDecoration: withholdLockerDeposit ? 'line-through' : 'none', color: withholdLockerDeposit ? 'var(--text-muted)' : undefined }}>
+                      Locker deposit: {formatCurrency(closeSummary.lockerDepositRefund)}
+                    </p>
+                  )}
                   {closeSummary.foodPassRefund > 0 && <p className="mono" style={{ fontSize: '0.85rem' }}>Food Pass balance: {formatCurrency(closeSummary.foodPassRefund)}</p>}
                   {closeSummary.cashbackAmount > 0 && <p className="mono" style={{ fontSize: '0.85rem' }}>Unredeemed cashback: {formatCurrency(closeSummary.cashbackAmount)}</p>}
                   {closeSummary.totalCredit <= 0 && <p style={{ fontSize: '0.82rem', color: 'var(--text-muted)' }}>Nothing owed back.</p>}
-                  <p className="mono" style={{ fontWeight: 700, marginTop: '0.3rem' }}>Total: {formatCurrency(closeSummary.totalCredit)}</p>
+                  <p className="mono" style={{ fontWeight: 700, marginTop: '0.3rem' }}>
+                    Total: {formatCurrency(closeSummary.totalCredit - (withholdLockerDeposit ? closeSummary.lockerDepositRefund : 0))}
+                  </p>
                 </div>
 
+                {closeSummary.lockerDepositRefund > 0 && (
+                  <label style={{ display: 'flex', alignItems: 'flex-start', gap: '0.5rem', marginBottom: '1rem', fontSize: '0.82rem', cursor: 'pointer' }}>
+                    <input
+                      type="checkbox" checked={withholdLockerDeposit}
+                      onChange={(e) => setWithholdLockerDeposit(e.target.checked)}
+                      style={{ marginTop: '0.15rem' }}
+                    />
+                    <span>Don't refund the locker deposit (e.g. locker damage) — it's forfeited instead of paid back.</span>
+                  </label>
+                )}
+
                 <div className="card" style={{ marginBottom: '1rem', background: 'rgba(255,255,255,0.03)' }}>
-                  {closeSummary.netAmount > 0 ? (
+                  {closeEffectiveNetAmount > 0 ? (
                     <p className="mono" style={{ fontWeight: 700, fontSize: '1.05rem', color: 'var(--accent)' }}>
-                      Collect {formatCurrency(closeSummary.netAmount)} from the student
+                      Collect {formatCurrency(closeEffectiveNetAmount)} from the student
                     </p>
-                  ) : closeSummary.netAmount < 0 ? (
+                  ) : closeEffectiveNetAmount < 0 ? (
                     <p className="mono" style={{ fontWeight: 700, fontSize: '1.05rem', color: '#4ade80' }}>
-                      Pay back {formatCurrency(-closeSummary.netAmount)} to the student
+                      Pay back {formatCurrency(-closeEffectiveNetAmount)} to the student
                     </p>
                   ) : (
                     <p className="mono" style={{ fontWeight: 700, fontSize: '1.05rem', color: '#4ade80' }}>
@@ -666,7 +693,7 @@ function ActiveMembersTab({ branchId, tempPackages, permPackages }) {
                   )}
                 </div>
 
-                {closeSummary.netAmount > 0 && (
+                {closeEffectiveNetAmount > 0 && (
                   <div className="form-group">
                     <label>Payment Mode</label>
                     <div style={{ display: 'flex', gap: '0.5rem' }}>
@@ -689,8 +716,8 @@ function ActiveMembersTab({ branchId, tempPackages, permPackages }) {
                 onClick={confirmClose}
               >
                 {closeLoading ? 'Quitting…'
-                  : closeSummary?.netAmount > 0 ? `Collect ${formatCurrency(closeSummary.netAmount)} & Quit`
-                  : closeSummary?.netAmount < 0 ? `Pay Back ${formatCurrency(-closeSummary.netAmount)} & Quit`
+                  : closeEffectiveNetAmount > 0 ? `Collect ${formatCurrency(closeEffectiveNetAmount)} & Quit`
+                  : closeEffectiveNetAmount < 0 ? `Pay Back ${formatCurrency(-closeEffectiveNetAmount)} & Quit`
                   : 'Confirm Quit'}
               </button>
             </div>
@@ -1394,6 +1421,65 @@ function WaitlistTab({ branchId }) {
   )
 }
 
+// ── Locker tab ──────────────────────────────────────────────────────────────
+function LockerTab({ branchId }) {
+  const navigate = useNavigate()
+  const [lockers, setLockers] = useState([])
+  const [loading, setLoading] = useState(true)
+
+  const load = useCallback(async () => {
+    if (!branchId) return
+    setLoading(true)
+    try {
+      const data = await api('list_lockers', { branchId })
+      setLockers(data.lockers ?? [])
+    } catch (e) { console.error(e) }
+    finally { setLoading(false) }
+  }, [branchId])
+
+  useEffect(() => { load() }, [load])
+
+  const sorted = [...lockers].sort((a, b) =>
+    (Number(a.locker_no) - Number(b.locker_no)) || a.locker_no.localeCompare(b.locker_no))
+
+  return (
+    <div className="card">
+      <h2 style={{ color: 'var(--accent)', marginBottom: '1rem' }}>Lockers ({sorted.length})</h2>
+      {loading ? (
+        <p style={{ color: 'var(--text-muted)' }}>Loading…</p>
+      ) : sorted.length === 0 ? (
+        <p style={{ color: 'var(--text-muted)' }}>No lockers currently assigned at this branch.</p>
+      ) : (
+        <table className="data-table">
+          <thead>
+            <tr><th>Locker No</th><th>Student</th><th>Phone</th><th>Start Date</th><th>Due Date</th><th>Status</th></tr>
+          </thead>
+          <tbody>
+            {sorted.map(l => (
+              <tr
+                key={l.id}
+                style={{ cursor: l.student_id ? 'pointer' : 'default' }}
+                onClick={() => l.student_id && navigate(`/students/${l.student_id}`)}
+              >
+                <td className="mono">{l.locker_no}</td>
+                <td>{l.students?.name ?? '—'}</td>
+                <td className="mono">{l.students?.phone ?? '—'}</td>
+                <td className="mono">{formatDate(l.created_at)}</td>
+                <td className="mono">{formatDate(l.locker_due_date)}</td>
+                <td>
+                  <span className={`badge ${Number(l.fee_due) > 0 ? 'badge-pending' : 'badge-active'}`}>
+                    {Number(l.fee_due) > 0 ? `Pending ${formatCurrency(l.fee_due)}` : 'Paid'}
+                  </span>
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      )}
+    </div>
+  )
+}
+
 // ── Page ───────────────────────────────────────────────────────────────────
 export default function MembershipPage() {
   const { branchId } = useAuth()
@@ -1425,6 +1511,7 @@ export default function MembershipPage() {
       <div className="tabs">
         <button type="button" className={tab === 'active' ? 'active' : ''} onClick={() => setTab('active')}>Active Members</button>
         <button type="button" className={tab === 'new' ? 'active' : ''} onClick={() => setTab('new')}>New Registration</button>
+        <button type="button" className={tab === 'locker' ? 'active' : ''} onClick={() => setTab('locker')}>Locker</button>
         <button
           type="button"
           className="btn btn-primary"
@@ -1443,6 +1530,7 @@ export default function MembershipPage() {
           tempPackages={tempPackages} permPackages={permPackages}
         />
       )}
+      {tab === 'locker' && <LockerTab branchId={branchId} />}
       {tab === 'waitlist' && <WaitlistTab branchId={branchId} />}
     </>
   )
