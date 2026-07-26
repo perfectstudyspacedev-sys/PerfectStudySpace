@@ -351,23 +351,34 @@ async function upsertStudent(db: ReturnType<typeof adminClient>, name: string, p
 }
 
 
+// The single source of truth for what a student's status *is*, given their current
+// membership and locker. Deliberately pure and date-driven: the stored students.status
+// column only changes when some event calls refreshStudentStatus(), so a membership that
+// merely lapses overnight (nobody pays, renews or checks in) would otherwise keep reading
+// "Active" forever — which is exactly how 42 lapsed students came to look settled. Anything
+// displaying a status derives it through here against today's date rather than trusting
+// the stored value, so it can never go stale again.
+function computeStudentStatus(
+  mem: { fee_due: number; due_date: string; end_date: string } | null | undefined,
+  locker: { locker_due_date: string | null } | null | undefined,
+  today: string,
+) {
+  if (!mem) return "inactive";
+  if (Number(mem.fee_due) > 0 || mem.due_date < today) return "pending";
+  if (mem.end_date < today) return "inactive";
+  // An otherwise-active membership still reads as Pending if the student's locker rent is
+  // overdue — a student shouldn't look fully settled while they owe locker money.
+  if (locker?.locker_due_date && locker.locker_due_date < today) return "pending";
+  return "active";
+}
+
 async function refreshStudentStatus(db: ReturnType<typeof adminClient>, studentId: string) {
   const today = todayISO();
   const { data: mem } = await db.from("memberships").select("*")
     .eq("student_id", studentId).eq("is_active", true).order("end_date", { ascending: false }).limit(1).maybeSingle();
-  let status = "inactive";
-  if (mem) {
-    if (mem.fee_due > 0 || mem.due_date < today) status = "pending";
-    else if (mem.end_date >= today) status = "active";
-    else status = "inactive";
-  }
-  // An otherwise-active membership still reads as Pending if the student's locker rent is
-  // overdue — a student shouldn't look fully settled while they owe locker money.
-  if (status === "active") {
-    const { data: locker } = await db.from("lockers").select("locker_due_date")
-      .eq("student_id", studentId).eq("is_active", true).maybeSingle();
-    if (locker?.locker_due_date && locker.locker_due_date < today) status = "pending";
-  }
+  const { data: locker } = await db.from("lockers").select("locker_due_date")
+    .eq("student_id", studentId).eq("is_active", true).maybeSingle();
+  const status = computeStudentStatus(mem, locker, today);
   await db.from("students").update({ status, updated_at: new Date().toISOString() }).eq("id", studentId);
 }
 
@@ -406,6 +417,20 @@ async function insertPaymentTransactions(
 async function hasOpenSession(db: ReturnType<typeof adminClient>, studentId: string) {
   const { data } = await db.from("bookings").select("id")
     .eq("student_id", studentId).eq("status", "active").limit(1);
+  return !!data?.length;
+}
+
+// Claims a desk for a student, atomically. Picking a free desk and then reserving it are two
+// separate statements, so two registrations landing in the same moment could both read the
+// same desk as free and both "claim" it — the second silently overwriting the first and
+// leaving two students on one cabin. Constraining the UPDATE to rows still status='free' and
+// checking what came back means exactly one caller can win; the loser is told to retry.
+// Returns true if this call actually claimed the desk.
+async function claimDesk(db: ReturnType<typeof adminClient>, deskId: string, studentId: string) {
+  const { data } = await db.from("desks")
+    .update({ status: "reserved", seat_type: "fixed", assigned_student_id: studentId })
+    .eq("id", deskId).eq("status", "free")
+    .select("id");
   return !!data?.length;
 }
 
@@ -993,11 +1018,11 @@ Deno.serve(async (req) => {
         const { data: freeDesk } = await db.from("desks").select("*")
           .eq("branch_id", branchId).eq("status", "free").order("sort_order").limit(1).maybeSingle();
         if (!freeDesk) return err("No cabin available for permanent membership — add them to the Waitlist tab instead");
+        if (!(await claimDesk(db, freeDesk.id, studentId))) {
+          return err("That cabin was just taken by another registration — please try again.");
+        }
         deskId = freeDesk.id;
         cabinNo = freeDesk.label;
-        await db.from("desks").update({
-          status: "reserved", seat_type: "fixed", assigned_student_id: studentId,
-        }).eq("id", deskId);
       }
 
       const monthLabel = new Date().toLocaleString("en-US", { month: "long" }).toUpperCase();
@@ -1632,8 +1657,9 @@ Deno.serve(async (req) => {
         const { data: desk } = await db.from("desks").select("*").eq("id", deskId).eq("branch_id", mem.branch_id).single();
         if (!desk) return err("Cabin not found");
         if (desk.status !== "free") return err("Selected cabin is not available");
-        const { error: deskErr } = await db.from("desks").update({ status: "reserved", seat_type: "fixed", assigned_student_id: mem.student_id }).eq("id", deskId);
-        if (deskErr) return err(deskErr.message);
+        if (!(await claimDesk(db, deskId, mem.student_id))) {
+          return err("That cabin was just taken — pick another one.");
+        }
         newDeskId = deskId;
         newCabinNo = desk.label;
       }
@@ -1665,6 +1691,14 @@ Deno.serve(async (req) => {
       const { data: booking } = await db.from("bookings").select("*").eq("id", bookingId).single();
       if (!booking) return err("Booking not found");
       if (!requireBranch(staff, booking.branch_id)) return err("Branch access denied", 403);
+      // Checkout moves real money (overtime billing, Food Pass deduction, shortfall
+      // collection) and stamps end_time, none of it idempotent — so a repeat submission
+      // (double-click, retry on a slow network, two staff on two devices) would charge
+      // everything twice and rewrite the recorded session length. Only an open session
+      // can be checked out; every comparable action guards its state the same way.
+      if (booking.status !== "active") {
+        return err("This session has already been checked out.");
+      }
 
       const isMember = booking.booking_type !== "walkin";
       const FOOD_CARRY_DAYS = 3;
@@ -1862,9 +1896,12 @@ Deno.serve(async (req) => {
       const memByStudent = new Map(memberships?.map(m => [m.student_id, m]) ?? []);
       const lockerByStudent = new Map(lockers?.map(l => [l.student_id, l]) ?? []);
 
+      const listToday = todayISO();
       const rows = (students ?? []).map((s, i) => {
         const mem = memByStudent.get(s.id);
         const locker = lockerByStudent.get(s.id);
+        // Derived live rather than read from s.status — see computeStudentStatus().
+        const liveStatus = computeStudentStatus(mem, locker, listToday);
         return {
           sNo: s.s_no ?? i + 1,
           id: s.id,
@@ -1879,9 +1916,9 @@ Deno.serve(async (req) => {
           lockerDue: locker?.locker_due_date ?? "-",
           course: s.course ?? "-",
           contact: s.phone,
-          status: s.status,
-          isOverdue: mem ? mem.due_date < todayISO() && mem.fee_due > 0 : false,
-          lockerOverdue: locker ? locker.locker_due_date && locker.locker_due_date < todayISO() : false,
+          status: liveStatus,
+          isOverdue: mem ? mem.due_date < listToday && mem.fee_due > 0 : false,
+          lockerOverdue: locker ? locker.locker_due_date && locker.locker_due_date < listToday : false,
           totalVisits: s.total_visits,
           totalHours: s.total_hours_studied,
         };
@@ -1965,13 +2002,14 @@ Deno.serve(async (req) => {
         newDesk = desk;
       }
 
+      // Claim the destination cabin BEFORE releasing the current one: if the claim loses a
+      // race, the student keeps the seat they already had instead of ending up with none.
+      if (newDesk && !(await claimDesk(db, newDesk.id, studentId))) {
+        return err("That cabin was just taken at the destination branch — pick another one.");
+      }
       if (activeMem?.desk_id) {
         const { error: releaseErr } = await db.from("desks").update({ status: "free", seat_type: "floating", assigned_student_id: null }).eq("id", activeMem.desk_id);
         if (releaseErr) return err(releaseErr.message);
-      }
-      if (newDesk) {
-        const { error: reserveErr } = await db.from("desks").update({ status: "reserved", seat_type: "fixed", assigned_student_id: studentId }).eq("id", newDesk.id);
-        if (reserveErr) return err(reserveErr.message);
       }
       if (activeMem) {
         const { error: memErr } = await db.from("memberships").update({
@@ -2109,18 +2147,31 @@ Deno.serve(async (req) => {
       if (!mem) return err("Membership not found");
       if (!requireBranch(staff, mem.branch_id)) return err("Branch access denied", 403);
 
-      const newDue = Math.max(Number(mem.fee_due) - Number(amount), 0);
+      // An amount is only ever meaningful against a real outstanding balance. Without these
+      // guards a typo'd overpayment was clamped away silently (recorded as revenue but
+      // credited to nothing), and a negative amount would *increase* what's owed while
+      // filing a negative transaction. Same positive-amount rule the Food Pass top-up,
+      // locker, and cashback actions already enforce.
+      const payAmount = Number(amount);
+      const currentDue = Number(mem.fee_due ?? 0);
+      if (!(payAmount > 0)) return err("Payment amount must be greater than 0");
+      if (currentDue <= 0) return err("This membership has no pending dues — nothing to collect.");
+      if (payAmount > currentDue) {
+        return err(`Payment exceeds the pending due of ₹${currentDue} — collect at most that amount.`);
+      }
+
+      const newDue = Math.max(currentDue - payAmount, 0);
       // Only push the due date forward once the balance is fully cleared — otherwise a
       // partial payment would make a still-overdue membership vanish from overdue views.
       const newDueDate = newDue === 0 ? addMonths(mem.due_date, 1) : mem.due_date;
       await db.from("memberships").update({
-        fee_due: newDue, due_date: newDueDate, total_paid: Number(mem.total_paid) + Number(amount),
+        fee_due: newDue, due_date: newDueDate, total_paid: Number(mem.total_paid) + payAmount,
       }).eq("id", membershipId);
 
       await insertPaymentTransactions(db, {
         student_id: mem.student_id, branch_id: mem.branch_id, membership_id: membershipId,
         category: "membership", created_by_staff_id: staff.id,
-      }, paymentMode, Number(amount), cashAmount, upiAmount);
+      }, paymentMode, payAmount, cashAmount, upiAmount);
 
       if (newDue === 0) {
         await db.from("alerts").update({ status: "resolved" }).eq("student_id", mem.student_id).eq("alert_type", "payment_due").eq("status", "pending");
@@ -2295,15 +2346,26 @@ Deno.serve(async (req) => {
       if (!locker) return err("Locker not found");
       if (!requireBranch(staff, locker.branch_id)) return err("Branch access denied", 403);
 
-      const newDue = Math.max(Number(locker.fee_due) - Number(amount), 0);
+      // Same guards as record_payment — an overpayment was previously clamped away silently
+      // (booked as revenue but credited to nothing) and a negative amount would have raised
+      // the balance owed while filing a negative transaction.
+      const payAmount = Number(amount);
+      const currentDue = Number(locker.fee_due ?? 0);
+      if (!(payAmount > 0)) return err("Payment amount must be greater than 0");
+      if (currentDue <= 0) return err("This locker has no pending dues — nothing to collect.");
+      if (payAmount > currentDue) {
+        return err(`Payment exceeds the pending due of ₹${currentDue} — collect at most that amount.`);
+      }
+
+      const newDue = Math.max(currentDue - payAmount, 0);
       await db.from("lockers").update({
-        fee_due: newDue, amount_paid: Number(locker.amount_paid) + Number(amount),
+        fee_due: newDue, amount_paid: Number(locker.amount_paid) + payAmount,
       }).eq("id", lockerId);
 
       await insertPaymentTransactions(db, {
         student_id: locker.student_id, branch_id: locker.branch_id,
         category: "locker", notes: "Locker pending payment", created_by_staff_id: staff.id,
-      }, paymentMode, Number(amount), cashAmount, upiAmount);
+      }, paymentMode, payAmount, cashAmount, upiAmount);
 
       return json({ ok: true });
     }
@@ -3452,9 +3514,11 @@ Deno.serve(async (req) => {
           const { data: freeDesk } = await db.from("desks").select("*")
             .eq("branch_id", mem.branch_id).eq("status", "free").order("sort_order").limit(1).maybeSingle();
           if (!freeDesk) return err("No cabin available for permanent membership");
+          if (!(await claimDesk(db, freeDesk.id, mem.student_id))) {
+            return err("That cabin was just taken — please try again.");
+          }
           deskId = freeDesk.id;
           cabinNo = freeDesk.label;
-          await db.from("desks").update({ status: "reserved", seat_type: "fixed", assigned_student_id: mem.student_id }).eq("id", deskId);
         }
       }
 
@@ -3524,10 +3588,14 @@ Deno.serve(async (req) => {
       if (!newDesk) return err("Desk not found");
       if (newDesk.status !== "free") return err("Selected cabin is not available");
 
+      // Claim the new cabin before releasing the old one — losing the race must leave them
+      // on their existing seat rather than with none at all.
+      if (!(await claimDesk(db, newDesk.id, mem.student_id))) {
+        return err("That cabin was just taken — pick another one.");
+      }
       if (mem.desk_id) {
         await db.from("desks").update({ status: "free", seat_type: "floating", assigned_student_id: null }).eq("id", mem.desk_id);
       }
-      await db.from("desks").update({ status: "reserved", seat_type: "fixed", assigned_student_id: mem.student_id }).eq("id", newDesk.id);
       await db.from("memberships").update({ desk_id: newDesk.id, cabin_no: newDesk.label }).eq("id", membershipId);
       await db.from("membership_edits").insert({
         membership_id: membershipId, student_id: mem.student_id, branch_id: mem.branch_id,
@@ -3646,9 +3714,11 @@ Deno.serve(async (req) => {
           const { data: freeDesk } = await db.from("desks").select("*")
             .eq("branch_id", mem.branch_id).eq("status", "free").order("sort_order").limit(1).maybeSingle();
           if (!freeDesk) return err("No cabin available for permanent membership");
+          if (!(await claimDesk(db, freeDesk.id, mem.student_id))) {
+            return err("That cabin was just taken — please try again.");
+          }
           deskId = freeDesk.id;
           cabinNo = freeDesk.label;
-          await db.from("desks").update({ status: "reserved", seat_type: "fixed", assigned_student_id: mem.student_id }).eq("id", deskId);
         }
       }
 

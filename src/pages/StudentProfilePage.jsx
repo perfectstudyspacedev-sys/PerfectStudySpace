@@ -1087,9 +1087,20 @@ export default function StudentProfilePage() {
           <div className="modal-overlay" onClick={() => setOpenPanel(null)}>
           <div className="modal" style={{ maxWidth: 420 }} onClick={(e) => e.stopPropagation()}>
             <h2 style={{ color: 'var(--accent)', marginBottom: '0.75rem' }}>Record Payment</h2>
+            <p className="mono" style={{ fontSize: '0.85rem', color: '#ff8888', marginBottom: '0.6rem' }}>
+              Pending: {formatCurrency(activeMem.fee_due)}
+            </p>
             <div className="form-group">
               <label>Amount (₹)</label>
-              <input type="number" value={payAmount} onChange={(e) => setPayAmount(e.target.value)} />
+              <input
+                type="number" min={0} max={Number(activeMem.fee_due)}
+                value={payAmount} onChange={(e) => setPayAmount(e.target.value)}
+              />
+              {Number(payAmount) > Number(activeMem.fee_due) && (
+                <p style={{ fontSize: '0.76rem', color: '#ff8888', marginTop: '0.3rem' }}>
+                  Can't collect more than the {formatCurrency(activeMem.fee_due)} pending.
+                </p>
+              )}
             </div>
             <div className="form-group">
               <label>Mode</label>
@@ -1099,7 +1110,11 @@ export default function StudentProfilePage() {
               <button type="button" className="btn btn-ghost" onClick={() => setOpenPanel(null)}>Cancel</button>
               <button
                 type="button" className="btn btn-primary"
-                disabled={!payAmount || !isSplitValid(payMode, payAmount)}
+                disabled={
+                  !payAmount || !isSplitValid(payMode, payAmount)
+                  || !(Number(payAmount) > 0)
+                  || Number(payAmount) > Number(activeMem.fee_due)
+                }
                 onClick={() => handlePayment(activeMem.id)}
               >Record</button>
             </div>
@@ -1338,7 +1353,15 @@ export default function StudentProfilePage() {
                   </p>
                   <div className="form-group">
                     <label>Amount (₹)</label>
-                    <input type="number" value={lockerPayAmount} onChange={(e) => setLockerPayAmount(e.target.value)} />
+                    <input
+                      type="number" min={0} max={Number(locker.fee_due)}
+                      value={lockerPayAmount} onChange={(e) => setLockerPayAmount(e.target.value)}
+                    />
+                    {Number(lockerPayAmount) > Number(locker.fee_due) && (
+                      <p style={{ fontSize: '0.76rem', color: '#ff8888', marginTop: '0.3rem' }}>
+                        Can't collect more than the {formatCurrency(Number(locker.fee_due))} pending.
+                      </p>
+                    )}
                   </div>
                   <div className="form-group">
                     <label>Mode</label>
@@ -1347,7 +1370,11 @@ export default function StudentProfilePage() {
                   <button
                     type="button" className="btn btn-primary" style={{ width: '100%' }}
                     onClick={() => handleLockerPayment(locker.id)}
-                    disabled={lockerLoading || !lockerPayAmount || !isSplitValid(lockerPayMode, lockerPayAmount)}
+                    disabled={
+                      lockerLoading || !lockerPayAmount || !isSplitValid(lockerPayMode, lockerPayAmount)
+                      || !(Number(lockerPayAmount) > 0)
+                      || Number(lockerPayAmount) > Number(locker.fee_due)
+                    }
                   >
                     Record Locker Payment
                   </button>
