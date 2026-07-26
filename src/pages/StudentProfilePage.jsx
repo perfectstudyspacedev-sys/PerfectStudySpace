@@ -387,6 +387,7 @@ export default function StudentProfilePage() {
   const [transferBranchId, setTransferBranchId] = useState('')
   const [transferDeskId, setTransferDeskId] = useState('')
   const [transferDesks, setTransferDesks] = useState(null)
+  const [transferBranches, setTransferBranches] = useState([])
   const [transferLoading, setTransferLoading] = useState(false)
   const [transferError, setTransferError] = useState('')
   const [resumeCabinOpen, setResumeCabinOpen] = useState(false)
@@ -430,14 +431,25 @@ export default function StudentProfilePage() {
 
   // A permanent membership needs a specific free cabin picked at the destination branch
   // before a transfer is allowed, so re-fetch its seat map whenever the chosen branch changes.
+  // The auth context's `branches` only contains this staff member's own branch, so the
+  // destination list is fetched separately (owners see the same thing either way).
+  useEffect(() => {
+    if (!transferOpen) return
+    api('list_transfer_branches')
+      .then(d => setTransferBranches(d.branches ?? []))
+      .catch(() => setTransferBranches([]))
+  }, [transferOpen])
+
   useEffect(() => {
     setTransferDeskId('')
     if (!transferOpen || !transferBranchId) { setTransferDesks(null); return }
     const isPermanent = (data?.memberships ?? []).find(m => m.is_active)?.category === 'permanent'
     if (!isPermanent) { setTransferDesks(null); return }
     setTransferDesks(null)
-    api('get_seat_map', { branchId: transferBranchId })
-      .then(d => setTransferDesks((d.desks ?? []).filter(x => x.status === 'free')))
+    // list_transfer_desks (not get_seat_map) — the destination branch may not be one this
+    // staff member belongs to, and this returns only free desk ids/labels, no occupancy.
+    api('list_transfer_desks', { branchId: transferBranchId })
+      .then(d => setTransferDesks(d.desks ?? []))
       .catch(() => setTransferDesks([]))
   }, [transferOpen, transferBranchId, data?.memberships])
 
@@ -879,7 +891,7 @@ export default function StudentProfilePage() {
       <div className="page-header">
         <h1>{student.name}</h1>
         <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap' }}>
-          {isOwner && (memberships ?? []).length > 0 && (
+          {(memberships ?? []).length > 0 && (
             <button
               type="button" className="btn btn-ghost"
               onClick={() => { setTransferBranchId(''); setTransferError(''); setTransferOpen(true) }}
@@ -1999,7 +2011,7 @@ export default function StudentProfilePage() {
               <label>Destination Branch</label>
               <select value={transferBranchId} onChange={(e) => setTransferBranchId(e.target.value)}>
                 <option value="">Select branch…</option>
-                {branches.filter(b => b.id !== student.branch_id).map(b => (
+                {transferBranches.filter(b => b.id !== student.branch_id).map(b => (
                   <option key={b.id} value={b.id}>{b.name}</option>
                 ))}
               </select>

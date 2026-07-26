@@ -535,6 +535,27 @@ Deno.serve(async (req) => {
       return json({ branches: data ?? [] });
     }
 
+    // Destination options for Transfer Branch. list_branches deliberately narrows staff to
+    // their own branch (it drives branch pickers everywhere else), so transferring needed a
+    // dedicated read: every branch is returned, but only id/name — no desk counts, capacity
+    // or config that staff have no business seeing for a branch they don't work at.
+    if (action === "list_transfer_branches") {
+      const { data } = await db.from("branches").select("id, name")
+        .eq("is_active", true).order("name");
+      return json({ branches: data ?? [] });
+    }
+
+    // Free cabins at a transfer destination. get_seat_map is branch-gated (correctly — it
+    // exposes who is sitting where, including student names), so this returns the bare
+    // minimum a transfer needs: the id and label of unoccupied desks, nothing about people.
+    if (action === "list_transfer_desks") {
+      const { branchId } = payload;
+      if (!branchId) return err("Branch is required");
+      const { data } = await db.from("desks").select("id, label")
+        .eq("branch_id", branchId).eq("status", "free").order("sort_order");
+      return json({ desks: data ?? [] });
+    }
+
     if (action === "update_branch") {
       if (!isOwner(staff)) return err("Owner only", 403);
       const { branchId, deskCount, shiftConfig, lockerCapacity } = payload;
@@ -1976,13 +1997,15 @@ Deno.serve(async (req) => {
     // a specific free desk at the destination branch instead, and the transfer is refused
     // outright if none are available, rather than silently leaving them without a seat.
     if (action === "transfer_student_branch") {
-      if (!isOwner(staff)) return err("Owner only", 403);
       const { studentId, newBranchId, deskId } = payload;
       if (!studentId || !newBranchId) return err("Student and destination branch are required");
 
       const { data: student } = await db.from("students").select("id, branch_id").eq("id", studentId).single();
       if (!student) return err("Student not found");
       if (student.branch_id === newBranchId) return err("Student is already at this branch");
+      // Staff can transfer, but only students who are currently at their own branch — they
+      // can't reach into another branch and move someone out of it. Owners are unrestricted.
+      if (!requireBranch(staff, student.branch_id!)) return err("Branch access denied", 403);
 
       const { data: newBranch } = await db.from("branches").select("id").eq("id", newBranchId).eq("is_active", true).maybeSingle();
       if (!newBranch) return err("Destination branch not found");
