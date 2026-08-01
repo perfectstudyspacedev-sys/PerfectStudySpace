@@ -2207,7 +2207,6 @@ Deno.serve(async (req) => {
     // off their currently pending membership fee. No money changes hands — this only
     // reduces fee_due — so it's tracked in its own audited table, not `transactions`.
     if (action === "apply_loyalty_discount") {
-      if (!isOwner(staff)) return err("Owner only", 403);
       const { membershipId, discountType, discountValue, remarks } = payload;
       if (!["percent", "fixed"].includes(discountType)) return err("Invalid discount type");
       const value = Number(discountValue);
@@ -3889,7 +3888,6 @@ Deno.serve(async (req) => {
     // Preview for the Delete Membership confirmation modal — same shape/checks as
     // get_membership_closure_summary, plus the proratedRefund/remainingDays/totalDays lines.
     if (action === "get_membership_delete_summary") {
-      if (!isOwner(staff)) return err("Owner only", 403);
       const { membershipId } = payload;
       const { data: mem } = await db.from("memberships").select("*").eq("id", membershipId).single();
       if (!mem) return err("Membership not found");
@@ -3906,8 +3904,12 @@ Deno.serve(async (req) => {
     // A positive net still owed blocks the delete until a payment mode is chosen, exactly
     // like close_membership; a negative net pays out each credit as its own ledger entry.
     if (action === "delete_membership") {
-      if (!isOwner(staff)) return err("Owner only", 403);
-      const { membershipId, paymentMode } = payload;
+      const { membershipId, paymentMode, reason } = payload;
+      // Delete Membership is the most destructive membership action in the app —
+      // irreversible, moves real money via prorated refunds/payouts. Open to all staff
+      // (not owner-only), but a reason is mandatory and logged to membership_edits
+      // alongside cabin/end-date/attendance edits, so every deletion is attributable.
+      if (!reason || !reason.trim()) return err("A reason is required to delete a membership");
       const { data: mem } = await db.from("memberships").select("*").eq("id", membershipId).single();
       if (!mem) return err("Membership not found");
       if (!requireBranch(staff, mem.branch_id)) return err("Branch access denied", 403);
@@ -3923,6 +3925,12 @@ Deno.serve(async (req) => {
       }
 
       await db.from("memberships").update({ is_active: false, fee_due: 0 }).eq("id", membershipId);
+
+      await db.from("membership_edits").insert({
+        membership_id: membershipId, student_id: mem.student_id, branch_id: mem.branch_id,
+        edit_type: "delete_membership", old_value: "active", new_value: reason.trim(),
+        changed_by_staff_id: staff.id,
+      });
 
       // Deleting while on hold would otherwise leave the hold row open forever, showing
       // "Still on hold" in Hold History for a membership that no longer exists.

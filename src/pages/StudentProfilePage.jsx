@@ -397,6 +397,7 @@ export default function StudentProfilePage() {
   const [deleteMembershipNotice, setDeleteMembershipNotice] = useState(null)
   const [deleteSummary, setDeleteSummary] = useState(null)
   const [deletePayMode, setDeletePayMode] = useState('cash')
+  const [deleteReason, setDeleteReason] = useState('')
 
   const refresh = useCallback(() => {
     setLoading(true)
@@ -775,6 +776,7 @@ export default function StudentProfilePage() {
     setDeleteMembershipError('')
     setDeleteSummary(null)
     setDeletePayMode('cash')
+    setDeleteReason('')
     setOpenPanel(null) // don't stack this modal on top of the still-open Membership Control one
     setDeleteMembershipOpen(true)
     try {
@@ -786,12 +788,14 @@ export default function StudentProfilePage() {
   }
 
   const handleDeleteMembership = async (membershipId) => {
+    if (!deleteReason.trim()) return setDeleteMembershipError('Enter a reason for deleting this membership')
     setDeleteMembershipLoading(true)
     setDeleteMembershipError('')
     try {
       const res = await api('delete_membership', {
         membershipId,
         paymentMode: deleteSummary?.netAmount > 0 ? deletePayMode : undefined,
+        reason: deleteReason.trim(),
       })
       setDeleteMembershipOpen(false)
       setOpenPanel(null)
@@ -975,7 +979,7 @@ export default function StudentProfilePage() {
           {activeMem?.fee_due > 0 && (
             <button type="button" className="btn btn-ghost btn-glass" style={{ width: '100%', flex: 1, maxHeight: 60 }} onClick={() => setOpenPanel('payment')}>💳 Record Payment</button>
           )}
-          {isOwner && activeMem && (
+          {activeMem && (
             <button type="button" className="btn btn-ghost btn-glass" style={{ width: '100%', flex: 1, maxHeight: 60 }} onClick={() => setOpenPanel('discount')}>🏷️ Discount</button>
           )}
           {activeMem && pendingCashback && (
@@ -1074,19 +1078,17 @@ export default function StudentProfilePage() {
                 Renew this membership to change its plan or cabin.
               </p>
             )}
-            {isOwner && (
-              <button
-                type="button"
-                style={{
-                  width: '100%', padding: '0.6rem', fontWeight: 700, cursor: 'pointer', marginTop: '0.5rem',
-                  background: 'rgba(255,60,60,0.08)', border: '1px solid rgba(255,60,60,0.4)',
-                  color: '#ff8888', borderRadius: 999,
-                }}
-                onClick={() => openDeleteMembership(activeMem.id)}
-              >
-                🗑️ Delete Membership
-              </button>
-            )}
+            <button
+              type="button"
+              style={{
+                width: '100%', padding: '0.6rem', fontWeight: 700, cursor: 'pointer', marginTop: '0.5rem',
+                background: 'rgba(255,60,60,0.08)', border: '1px solid rgba(255,60,60,0.4)',
+                color: '#ff8888', borderRadius: 999,
+              }}
+              onClick={() => openDeleteMembership(activeMem.id)}
+            >
+              🗑️ Delete Membership
+            </button>
             <div className="modal-actions">
               <button type="button" className="btn btn-ghost" onClick={() => setOpenPanel(null)}>Close</button>
             </div>
@@ -1134,9 +1136,9 @@ export default function StudentProfilePage() {
           </div>
         )}
 
-        {/* Loyalty Discount — owner only. Available on any active membership; if there's no
+        {/* Loyalty Discount — available to all staff on any active membership; if there's no
             pending fee (or the discount exceeds it), the excess is banked as a cashback. */}
-        {isOwner && activeMem && openPanel === 'discount' && (
+        {activeMem && openPanel === 'discount' && (
           <div className="modal-overlay" onClick={() => setOpenPanel(null)}>
           <div className="modal" style={{ maxWidth: 420 }} onClick={(e) => e.stopPropagation()}>
             <h2 style={{ color: 'var(--accent)', marginBottom: '0.5rem' }}>🏷️ Discount</h2>
@@ -2118,6 +2120,16 @@ export default function StudentProfilePage() {
                     </div>
                   </div>
                 )}
+
+                <div className="form-group">
+                  <label>Reason for deletion (required)</label>
+                  <textarea
+                    value={deleteReason}
+                    onChange={(e) => setDeleteReason(e.target.value)}
+                    placeholder="Why is this membership being deleted?"
+                    rows={2}
+                  />
+                </div>
               </>
             )}
 
