@@ -539,7 +539,7 @@ function ActiveMembersTab({ branchId, tempPackages, permPackages }) {
               <label>Months</label>
               <select value={renewMonths} onChange={(e) => setRenewMonths(e.target.value === 'custom' ? 'custom' : Number(e.target.value))}>
                 {[1, 2, 3, 6].map(m => (
-                  <option key={m} value={m}>{m} month{m > 1 ? 's' : ''}{(m >= 2 ? [2, 5, 10][m <= 2 ? 0 : m <= 3 ? 1 : 2] : 0) > 0 ? ` (${[0, 0, 2, 5, 0, 0, 10][m]}% off)` : ''}</option>
+                  <option key={m} value={m}>{m} month{m > 1 ? 's' : ''}{getMultiMonthDiscount(m) ? ` (${getMultiMonthDiscount(m)}% off)` : ''}</option>
                 ))}
                 <option value="custom">Custom (enter number of days)</option>
               </select>
