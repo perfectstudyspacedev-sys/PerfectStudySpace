@@ -1804,7 +1804,10 @@ Deno.serve(async (req) => {
 
       // Membership students without a pass can carry an unpaid food bill for up to 3 days
       // across sessions — check by student, not just this booking, since each day is a new booking.
-      const { data: memberUnpaidBills } = isMember && !foodPass
+      // Skipped entirely when staff opted to settle the food bill now (settleFoodNow): that
+      // path pays it off below regardless of age, so the age check would otherwise block a
+      // checkout that's about to resolve the exact debt it's complaining about.
+      const { data: memberUnpaidBills } = isMember && !foodPass && !settleFoodNow
         ? await db.from("food_bills").select("id, total, created_at").eq("student_id", booking.student_id).eq("paid", false)
         : { data: null };
       if (memberUnpaidBills?.length) {
