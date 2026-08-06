@@ -234,6 +234,82 @@ function ChangePlanModal({ membership, tempPackages, permPackages, onClose, onDo
   )
 }
 
+// Manually log a payment that no automated flow produced — cash taken outside the app, a
+// correction for a past date, a one-off charge. Records that money moved; it deliberately
+// does not settle any membership/locker balance (the dedicated pay actions do that).
+function AddPaymentModal({ studentId, studentName, onClose, onDone }) {
+  const [date, setDate] = useState(todayISO())
+  const [reason, setReason] = useState('')
+  const [amount, setAmount] = useState('')
+  const [paymentMode, setPaymentMode] = useState({ mode: 'cash', cashAmount: '', upiAmount: '' })
+  const [loading, setLoading] = useState(false)
+  const [error, setError] = useState('')
+
+  const amountNum = Number(amount) || 0
+
+  const handleSubmit = async () => {
+    if (!(amountNum > 0)) return setError('Enter an amount greater than ₹0')
+    if (!reason.trim()) return setError('Enter a reason for this payment')
+    if (date > todayISO()) return setError('Payment date cannot be in the future')
+    if (!isSplitValid(paymentMode, amountNum)) return setError('Cash + UPI must add up to the amount')
+    setLoading(true)
+    setError('')
+    try {
+      await api('add_manual_payment', {
+        studentId, date, reason: reason.trim(), amount: amountNum,
+        paymentMode: paymentMode.mode,
+        cashAmount: paymentMode.cashAmount, upiAmount: paymentMode.upiAmount,
+      })
+      onDone()
+    } catch (err) {
+      setError(err.message)
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  return (
+    <div className="modal-overlay" onClick={onClose}>
+      <div className="modal" style={{ maxWidth: 420 }} onClick={(e) => e.stopPropagation()}>
+        <h2>Add Payment History</h2>
+        <p style={{ color: 'var(--text-muted)', fontSize: '0.85rem', marginBottom: '1rem' }}>
+          Logs a payment for {studentName} that wasn't recorded automatically. This does not
+          clear any pending membership or locker fee — use those screens to settle a balance.
+        </p>
+        <div className="form-group">
+          <label>Date</label>
+          <input type="date" value={date} max={todayISO()} onChange={(e) => setDate(e.target.value)} />
+        </div>
+        <div className="form-group">
+          <label>Reason *</label>
+          <input
+            type="text" value={reason} onChange={(e) => setReason(e.target.value)}
+            placeholder="e.g. Cash collected for damaged chair"
+          />
+        </div>
+        <div className="form-group">
+          <label>Amount (₹) *</label>
+          <input
+            type="number" min={1} value={amount}
+            onChange={(e) => setAmount(e.target.value)} placeholder="e.g. 500"
+          />
+        </div>
+        <div className="form-group">
+          <label>Payment Mode</label>
+          <PaymentModeSelector value={paymentMode} onChange={setPaymentMode} total={amountNum} />
+        </div>
+        {error && <p className="error-msg">{error}</p>}
+        <div className="modal-actions">
+          <button type="button" className="btn btn-ghost" onClick={onClose}>Cancel</button>
+          <button type="button" className="btn btn-primary" disabled={loading} onClick={handleSubmit}>
+            {loading ? 'Saving…' : 'Add Payment'}
+          </button>
+        </div>
+      </div>
+    </div>
+  )
+}
+
 function ChangeCabinModal({ membership, branchId, onClose, onDone }) {
   const [desks, setDesks] = useState(null)
   const [selectedDesk, setSelectedDesk] = useState('')
@@ -406,6 +482,7 @@ export default function StudentProfilePage() {
   const [overtimeToggleLoading, setOvertimeToggleLoading] = useState(null)
   const [planChangeOpen, setPlanChangeOpen] = useState(false)
   const [cabinChangeOpen, setCabinChangeOpen] = useState(false)
+  const [addPaymentOpen, setAddPaymentOpen] = useState(false)
   const [transferOpen, setTransferOpen] = useState(false)
   const [transferBranchId, setTransferBranchId] = useState('')
   const [transferDeskId, setTransferDeskId] = useState('')
@@ -1852,16 +1929,28 @@ export default function StudentProfilePage() {
       )}
 
       <div className="card" style={{ marginTop: '1rem' }}>
-        <h3 style={{ color: 'var(--accent)', marginBottom: '0.75rem' }}>Payment History</h3>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.75rem', gap: '0.75rem', flexWrap: 'wrap' }}>
+          <h3 style={{ color: 'var(--accent)', margin: 0 }}>Payment History</h3>
+          <button type="button" className="btn btn-ghost" style={{ fontSize: '0.85rem' }} onClick={() => setAddPaymentOpen(true)}>
+            ➕ Add Payment History
+          </button>
+        </div>
         <table className="data-table">
           <thead>
             <tr><th>Date</th><th>Category</th><th>Amount</th><th>Mode</th></tr>
           </thead>
           <tbody>
-            {(transactions ?? []).map(t => (
+            {(transactions ?? []).length === 0 ? (
+              <tr><td colSpan={4} style={{ color: 'var(--text-muted)', fontSize: '0.85rem' }}>No payments recorded yet.</td></tr>
+            ) : (transactions ?? []).map(t => (
               <tr key={t.id}>
                 <td className="mono">{formatDate(t.created_at)}</td>
-                <td className="cap">{t.category}</td>
+                <td>
+                  <span className="cap">{t.category}</span>
+                  {t.notes && (
+                    <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>{t.notes}</div>
+                  )}
+                </td>
                 <td className="mono">{formatCurrency(t.amount)}</td>
                 <td>{paymentModeLabel(t.payment_mode)}</td>
               </tr>
@@ -1869,6 +1958,15 @@ export default function StudentProfilePage() {
           </tbody>
         </table>
       </div>
+
+      {addPaymentOpen && (
+        <AddPaymentModal
+          studentId={student.id}
+          studentName={student.name}
+          onClose={() => setAddPaymentOpen(false)}
+          onDone={() => { setAddPaymentOpen(false); refresh() }}
+        />
+      )}
 
       {renewOpen && activeMem && (
         <div className="modal-overlay" onClick={() => setRenewOpen(false)}>

@@ -2448,6 +2448,48 @@ Deno.serve(async (req) => {
       return json({ ok: true });
     }
 
+    // Manually record a payment that no automated flow produced — a cash settlement taken
+    // outside the app, a correction for a past date, a one-off charge. Every other
+    // transaction here is written as a side effect of some action (checkout, renewal,
+    // locker); this is the escape hatch for the rest, so the student's Payment History can
+    // be made complete rather than only covering what the software happened to handle.
+    // Deliberately does NOT touch fee_due or any membership/locker balance: it records that
+    // money moved, it doesn't settle a specific debt. Use the dedicated pay actions for that.
+    if (action === "add_manual_payment") {
+      const { studentId, date, reason, amount, paymentMode, cashAmount, upiAmount } = payload;
+      const { data: student } = await db.from("students").select("id, branch_id").eq("id", studentId).single();
+      if (!student) return err("Student not found");
+      if (!requireBranch(staff, student.branch_id)) return err("Branch access denied", 403);
+
+      const payAmount = Number(amount);
+      if (!(payAmount > 0)) return err("Enter an amount greater than ₹0");
+      if (!reason || !String(reason).trim()) return err("Enter a reason for this payment");
+      // Backdating is allowed (that's much of the point — logging what was collected last
+      // week), but a future-dated payment would mean money that hasn't been received yet.
+      const entryDate = date || todayISO();
+      if (entryDate > todayISO()) return err("Payment date cannot be in the future");
+
+      // Stamped at noon IST on the chosen day so the row lands on that IST calendar date in
+      // every report — istDayStart/istDayEnd bucket by IST, and a raw midnight would sit on
+      // the boundary and risk being counted against the neighbouring day.
+      const createdAt = entryDate === todayISO()
+        ? new Date().toISOString()
+        : new Date(`${entryDate}T12:00:00+05:30`).toISOString();
+
+      // "fine" rather than a new "other" enum value: transactions.category is the Postgres
+      // enum transaction_category ('desk','food','membership','locker','fine'), so anything
+      // outside it fails the insert at runtime. "fine" is the only member no automated flow
+      // writes, which leaves it free for manual entries — the reason text below is what
+      // actually carries the meaning, and the UI shows it in place of the bare category.
+      await insertPaymentTransactions(db, {
+        student_id: studentId, branch_id: student.branch_id,
+        category: "fine", notes: String(reason).trim(),
+        created_by_staff_id: staff.id, created_at: createdAt,
+      }, paymentMode, payAmount, cashAmount, upiAmount);
+
+      return json({ ok: true });
+    }
+
     // One-click locker renewal — the previous manual workaround required staff to remember
     // to separately edit the due date AND type in the right amount to "pay", with nothing
     // linking the two (fee_due only ever decreased via record_locker_payment, never
