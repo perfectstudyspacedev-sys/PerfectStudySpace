@@ -74,10 +74,14 @@ export default function RevenuePage() {
 
   const loadTransactions = useCallback(async () => {
     const data = await api('list_transactions', {
-      branchId, period, category: categoryFilter || undefined, search: search || undefined,
+      branchId,
+      period: period === 'custom' && customApplied ? undefined : period,
+      dateFrom: period === 'custom' && customApplied ? customFrom : undefined,
+      dateTo: period === 'custom' && customApplied ? customTo : undefined,
+      category: categoryFilter || undefined, search: search || undefined,
     })
     setTransactions(data.transactions ?? [])
-  }, [branchId, period, categoryFilter, search])
+  }, [branchId, period, customFrom, customTo, customApplied, categoryFilter, search])
 
   useEffect(() => { loadRevenue() }, [loadRevenue])
   useEffect(() => { loadReferralStats() }, [loadReferralStats])
