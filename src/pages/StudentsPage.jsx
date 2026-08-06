@@ -18,6 +18,16 @@ const COLUMNS = [
   { key: 'contact', label: 'Contact' },
 ]
 
+// The text a cell actually renders. Column filters have to match against this, not the raw
+// row value: a date is stored "2026-10-23" but displayed "23-10-26", so typing what you see
+// ("23-10") found nothing. Both forms are searched, so the ISO value still matches too.
+function cellText(row, col) {
+  const raw = row[col?.key]
+  if (raw == null || raw === '-') return ''
+  if (col?.isDate) return `${formatDate(raw)} ${raw}`
+  return String(raw)
+}
+
 export default function StudentsPage() {
   const { branchId, isOwner: isOwnerRole } = useAuth()
   // Dev-mode: staff get the same Students spreadsheet access as owner, code-level only.
@@ -71,23 +81,49 @@ export default function StudentsPage() {
     }
     if (statusFilter) rows = rows.filter(r => r.status === statusFilter)
     if (courseFilter) rows = rows.filter(r => r.course === courseFilter)
-    Object.entries(filters).forEach(([key, val]) => {
-      if (val) rows = rows.filter(r => String(r[key] ?? '').toLowerCase().includes(val.toLowerCase()))
+    Object.entries(filters).forEach(([key, rawVal]) => {
+      const val = rawVal.trim().toLowerCase()
+      if (!val) return
+      const col = COLUMNS.find(c => c.key === key)
+      rows = rows.filter(r => cellText(r, col).toLowerCase().includes(val))
     })
     rows.sort((a, b) => {
-      const av = a[sortKey] ?? ''
-      const bv = b[sortKey] ?? ''
-      const cmp = typeof av === 'number' ? av - bv : String(av).localeCompare(String(bv))
+      const av = a[sortKey]
+      const bv = b[sortKey]
+      // Placeholder "-" cells always sink to the bottom regardless of direction — a student
+      // with no locker isn't "before" or "after" locker 1, they just have nothing to compare,
+      // and letting "-" sort as text put them above every real value in ascending order.
+      const aBlank = av == null || av === '-' || av === ''
+      const bBlank = bv == null || bv === '-' || bv === ''
+      if (aBlank || bBlank) return aBlank && bBlank ? 0 : aBlank ? 1 : -1
+      let cmp
+      if (typeof av === 'number' && typeof bv === 'number') {
+        cmp = av - bv
+      } else {
+        // Numeric strings (S.No, locker no, hours) must compare as numbers or "10" lands
+        // between "1" and "2". Dates stay on their ISO value, which is already sortable.
+        const an = Number(av)
+        const bn = Number(bv)
+        cmp = !Number.isNaN(an) && !Number.isNaN(bn) && String(av).trim() !== '' && String(bv).trim() !== ''
+          ? an - bn
+          : String(av).localeCompare(String(bv), undefined, { numeric: true, sensitivity: 'base' })
+      }
       return sortDir === 'asc' ? cmp : -cmp
     })
     return rows
   }, [students, search, statusFilter, courseFilter, filters, sortKey, sortDir])
 
+  // Ten filter boxes sit in one scrolling row, so a stray character in an off-screen column
+  // could empty the table with nothing on screen explaining why. Surface the count and a
+  // one-click reset.
+  const activeFilterCount = Object.values(filters).filter(v => v && v.trim()).length
+
   const handleExport = () => {
     exportToCSV(
       `students-${branchId?.slice(0, 8)}.csv`,
       COLUMNS.map(c => c.label),
-      filtered.map(r => COLUMNS.map(c => r[c.key])),
+      // Export the dates in the same DD-MM-YY form the table shows, not the raw ISO value.
+      filtered.map(r => COLUMNS.map(c => (c.isDate && r[c.key] && r[c.key] !== '-' ? formatDate(r[c.key]) : r[c.key]))),
     )
   }
 
@@ -221,7 +257,19 @@ export default function StudentsPage() {
               </table>
             )}
             <p style={{ marginTop: '0.75rem', fontSize: '0.8rem', color: 'var(--text-muted)' }}>
-              {filtered.length} students · Red rows = overdue payment or locker
+              {filtered.length} of {students.length} students · Red rows = overdue payment or locker
+              {activeFilterCount > 0 && (
+                <>
+                  {' · '}
+                  <button
+                    type="button"
+                    onClick={() => setFilters({})}
+                    style={{ background: 'none', border: 'none', color: 'var(--accent)', cursor: 'pointer', fontSize: '0.8rem', padding: 0 }}
+                  >
+                    ✕ Clear {activeFilterCount} column filter{activeFilterCount === 1 ? '' : 's'}
+                  </button>
+                </>
+              )}
             </p>
           </div>
         </>

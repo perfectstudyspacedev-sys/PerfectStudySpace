@@ -132,6 +132,11 @@ function ChangePlanModal({ membership, tempPackages, permPackages, onClose, onDo
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState('')
 
+  // Expired memberships are date-edit only: proration runs over days remaining, which is
+  // zero or negative once expired, so a plan change here would bill a nonsense amount. The
+  // server enforces the same rule; this just stops the UI offering what it would reject.
+  const isExpiredMem = membership.end_date < todayISO()
+
   const packages = category === 'permanent' ? permPackages : tempPackages
   const pkg = packages.find(p => p.hours === hoursPerDay) ?? packages[0]
   const remainingDays = Math.max(1, Math.ceil((new Date(membership.end_date + 'T12:00:00') - new Date()) / 86_400_000))
@@ -160,37 +165,55 @@ function ChangePlanModal({ membership, tempPackages, permPackages, onClose, onDo
   return (
     <div className="modal-overlay" onClick={onClose}>
       <div className="modal" style={{ maxWidth: 420 }} onClick={(e) => e.stopPropagation()}>
-        <h2>Change Plan</h2>
-        <p style={{ color: 'var(--text-muted)', fontSize: '0.85rem', marginBottom: '1rem' }}>
-          Currently: <span className="cap">{membership.category}</span> · {membership.hours_per_day}h/day. Change takes effect immediately;
-          the {remainingDays} day{remainingDays === 1 ? '' : 's'} left on this membership are prorated at the new rate.
-        </p>
+        <h2>{isExpiredMem ? 'Edit Expiry Date' : 'Change Plan'}</h2>
+        {isExpiredMem ? (
+          <p style={{ color: 'var(--text-muted)', fontSize: '0.85rem', marginBottom: '1rem' }}>
+            Expired {formatDate(membership.end_date)}. Correcting the date here does not record a payment —
+            use Renew for that. Setting a future date makes the membership active again.
+          </p>
+        ) : (
+          <p style={{ color: 'var(--text-muted)', fontSize: '0.85rem', marginBottom: '1rem' }}>
+            Currently: <span className="cap">{membership.category}</span> · {membership.hours_per_day}h/day. Change takes effect immediately;
+            the {remainingDays} day{remainingDays === 1 ? '' : 's'} left on this membership are prorated at the new rate.
+          </p>
+        )}
+        {!isExpiredMem && (
+          <>
+            <div className="form-group">
+              <label>Category</label>
+              <div style={{ display: 'flex', gap: '0.5rem' }}>
+                {['temporary', 'permanent'].map(c => (
+                  <button
+                    key={c} type="button"
+                    onClick={() => { setCategory(c); const opts = c === 'permanent' ? permPackages : tempPackages; if (opts.length) setHoursPerDay(opts[0].hours) }}
+                    style={{
+                      flex: 1, padding: '0.55rem', textTransform: 'capitalize',
+                      border: `1px solid ${category === c ? 'var(--accent)' : '#333'}`, borderRadius: 999,
+                      background: category === c ? 'rgba(255,215,0,0.08)' : '#141414',
+                      color: category === c ? 'var(--accent)' : 'var(--text-muted)', cursor: 'pointer', fontWeight: 600,
+                    }}
+                  >{c}</button>
+                ))}
+              </div>
+            </div>
+            <div className="form-group">
+              <label>Hours / Day</label>
+              <select value={hoursPerDay} onChange={(e) => setHoursPerDay(Number(e.target.value))}>
+                {packages.map(p => <option key={p.hours} value={p.hours}>{p.hours}h/day — {formatCurrency(p.fee)}/mo</option>)}
+              </select>
+            </div>
+          </>
+        )}
         <div className="form-group">
-          <label>Category</label>
-          <div style={{ display: 'flex', gap: '0.5rem' }}>
-            {['temporary', 'permanent'].map(c => (
-              <button
-                key={c} type="button"
-                onClick={() => { setCategory(c); const opts = c === 'permanent' ? permPackages : tempPackages; if (opts.length) setHoursPerDay(opts[0].hours) }}
-                style={{
-                  flex: 1, padding: '0.55rem', textTransform: 'capitalize',
-                  border: `1px solid ${category === c ? 'var(--accent)' : '#333'}`, borderRadius: 999,
-                  background: category === c ? 'rgba(255,215,0,0.08)' : '#141414',
-                  color: category === c ? 'var(--accent)' : 'var(--text-muted)', cursor: 'pointer', fontWeight: 600,
-                }}
-              >{c}</button>
-            ))}
-          </div>
-        </div>
-        <div className="form-group">
-          <label>Hours / Day</label>
-          <select value={hoursPerDay} onChange={(e) => setHoursPerDay(Number(e.target.value))}>
-            {packages.map(p => <option key={p.hours} value={p.hours}>{p.hours}h/day — {formatCurrency(p.fee)}/mo</option>)}
-          </select>
-        </div>
-        <div className="form-group">
-          <label>End Date</label>
+          <label>{isExpiredMem ? 'New Expiry Date' : 'End Date'}</label>
           <input type="date" value={endDate} onChange={(e) => setEndDate(e.target.value)} />
+          {isExpiredMem && endDate !== membership.end_date && (
+            <p style={{ marginTop: '0.4rem', fontSize: '0.78rem', color: endDate >= todayISO() ? '#4ade80' : 'var(--text-muted)' }}>
+              {endDate >= todayISO()
+                ? `Membership becomes active again until ${formatDate(endDate)}.`
+                : `Still expired — ${formatDate(endDate)} is in the past.`}
+            </p>
+          )}
         </div>
         {(category !== membership.category || hoursPerDay !== membership.hours_per_day) && (
           <p className="mono" style={{ marginBottom: '1rem', color: proratedPreview >= 0 ? '#ff8888' : '#4ade80' }}>
@@ -203,7 +226,7 @@ function ChangePlanModal({ membership, tempPackages, permPackages, onClose, onDo
         <div className="modal-actions">
           <button type="button" className="btn btn-ghost" onClick={onClose}>Cancel</button>
           <button type="button" className="btn btn-primary" disabled={loading || noChange} onClick={handleSubmit}>
-            {loading ? 'Saving…' : 'Confirm Change'}
+            {loading ? 'Saving…' : isExpiredMem ? 'Save Date' : 'Confirm Change'}
           </button>
         </div>
       </div>
@@ -1074,9 +1097,18 @@ export default function StudentProfilePage() {
               </div>
             )}
             {!isPaused && isExpired && (
-              <p style={{ fontSize: '0.78rem', color: 'var(--text-muted)', marginTop: '0.25rem' }}>
-                Renew this membership to change its plan or cabin.
-              </p>
+              <>
+                <button
+                  type="button" className="btn btn-ghost"
+                  style={{ width: '100%', fontSize: '0.85rem', marginTop: '0.25rem' }}
+                  onClick={() => setPlanChangeOpen(true)}
+                >
+                  📅 Edit Expiry Date
+                </button>
+                <p style={{ fontSize: '0.78rem', color: 'var(--text-muted)', marginTop: '0.35rem' }}>
+                  Corrects a mistyped or lapsed date without recording a payment. Renew instead to change the plan or cabin.
+                </p>
+              </>
             )}
             <button
               type="button"

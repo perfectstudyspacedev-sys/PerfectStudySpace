@@ -79,9 +79,10 @@ export default function RevenuePage() {
       dateFrom: period === 'custom' && customApplied ? customFrom : undefined,
       dateTo: period === 'custom' && customApplied ? customTo : undefined,
       category: categoryFilter || undefined, search: search || undefined,
+      allBranches: isOwner && allBranches,
     })
     setTransactions(data.transactions ?? [])
-  }, [branchId, period, customFrom, customTo, customApplied, categoryFilter, search])
+  }, [branchId, period, customFrom, customTo, customApplied, categoryFilter, search, allBranches, isOwner])
 
   useEffect(() => { loadRevenue() }, [loadRevenue])
   useEffect(() => { loadReferralStats() }, [loadReferralStats])
@@ -112,7 +113,13 @@ export default function RevenuePage() {
     )
   }
 
-  const periodLabel = period === 'week' ? 'LAST 7 DAYS' : period === 'month' ? 'LAST 30 DAYS' : period === 'today' ? 'TODAY' : 'CUSTOM RANGE'
+  // A reversed range returns nothing from the server (created_at can't be >= from and <= to
+  // when from > to), which looked identical to "no revenue in this period" — call it out
+  // instead of letting an empty page imply zero earnings.
+  const customRangeInvalid = period === 'custom' && customFrom > customTo
+
+  const periodLabel = period === 'week' ? 'LAST 7 DAYS' : period === 'month' ? 'THIS MONTH' : period === 'today' ? 'TODAY'
+    : customApplied ? `${customFrom} → ${customTo}` : 'CUSTOM RANGE — PICK DATES & APPLY'
 
   return (
     <>
@@ -134,12 +141,30 @@ export default function RevenuePage() {
         ))}
         {period === 'custom' && (
           <>
-            <input type="date" value={customFrom} onChange={(e) => setCustomFrom(e.target.value)} />
-            <input type="date" value={customTo} onChange={(e) => setCustomTo(e.target.value)} />
-            <button type="button" className="btn btn-ghost" onClick={() => setCustomApplied(true)}>Apply</button>
+            <input type="date" value={customFrom} max={customTo} onChange={(e) => { setCustomFrom(e.target.value); setCustomApplied(false) }} />
+            <input type="date" value={customTo} min={customFrom} onChange={(e) => { setCustomTo(e.target.value); setCustomApplied(false) }} />
+            <button
+              type="button"
+              className={customApplied ? 'btn btn-ghost' : 'btn'}
+              disabled={customRangeInvalid}
+              onClick={() => setCustomApplied(true)}
+            >
+              {customApplied ? 'Applied' : 'Apply'}
+            </button>
           </>
         )}
       </div>
+
+      {customRangeInvalid && (
+        <p className="error-msg" style={{ marginBottom: '1rem' }}>
+          "From" date is after "To" date — swap them to see results.
+        </p>
+      )}
+      {period === 'custom' && !customApplied && !customRangeInvalid && (
+        <p style={{ color: 'var(--text-muted)', fontSize: '0.82rem', marginBottom: '1rem' }}>
+          Showing today's figures — pick a date range above and hit Apply.
+        </p>
+      )}
 
       <div className="tabs">
         <button type="button" className={tab === 'overview' ? 'active' : ''} onClick={() => setTab('overview')}>Overview</button>

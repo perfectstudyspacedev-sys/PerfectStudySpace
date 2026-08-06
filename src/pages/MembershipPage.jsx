@@ -808,6 +808,8 @@ function NewMembershipForm({ branchId, onCreated, tempPackages, permPackages }) 
   const [withLocker, setWithLocker] = useState(false)
   const [lockerNo, setLockerNo] = useState('')
   const [lockerStatus, setLockerStatus] = useState(null)
+  const [freeDesks, setFreeDesks] = useState([])
+  const [deskId, setDeskId] = useState('')
   const [error, setError] = useState('')
   const [loading, setLoading] = useState(false)
   const [receipt, setReceipt] = useState(null)
@@ -825,6 +827,24 @@ function NewMembershipForm({ branchId, onCreated, tempPackages, permPackages }) 
       .then(setLockerStatus)
       .catch(() => setLockerStatus(null))
   }, [branchId])
+
+  // Free cabins for the permanent-category picker. Refetched every time the category flips
+  // back to permanent so a cabin taken by another staff member in the meantime disappears
+  // from the list rather than failing at submit. Any previously picked cabin that's no longer
+  // free is cleared, so a stale selection can't be silently submitted.
+  useEffect(() => {
+    if (!branchId || category !== 'permanent') return
+    let cancelled = false
+    api('list_transfer_desks', { branchId })
+      .then(({ desks }) => {
+        if (cancelled) return
+        const available = desks ?? []
+        setFreeDesks(available)
+        setDeskId(prev => (available.some(d => d.id === prev) ? prev : ''))
+      })
+      .catch(() => { if (!cancelled) setFreeDesks([]) })
+    return () => { cancelled = true }
+  }, [branchId, category])
 
   const packages = category === 'permanent' ? permPackages : tempPackages
   const isCustomPlan = hoursPerDay === 'custom'
@@ -924,6 +944,7 @@ function NewMembershipForm({ branchId, onCreated, tempPackages, permPackages }) 
     if (!/^\d{10}$/.test(emergencyContact)) return setError('Emergency contact must be a 10 digit phone number')
     if (phone === emergencyContact) return setError('Emergency contact cannot be the same as the primary phone number')
     if (!referralSource) return setError('Please select how the student heard about us')
+    if (category === 'permanent' && !deskId) return setError('Select a cabin for this permanent membership')
     if (paymentType === 'partial' && (advanceNum <= 0 || advanceNum >= grandTotal)) {
       return setError('Partial payment must be more than ₹0 and less than the total — use Full Paid or Full Pending otherwise')
     }
@@ -937,6 +958,7 @@ function NewMembershipForm({ branchId, onCreated, tempPackages, permPackages }) 
     try {
       const result = await api('create_membership', {
         branchId, name, phone, category,
+        deskId: category === 'permanent' ? deskId : undefined,
         hoursPerDay: isCustomPlan ? Number(customWeekdayHours) : hoursPerDay,
         monthsPaid: isCustomDays ? undefined : monthsPaid, paymentMode: paymentMode.mode,
         cashAmount: paymentMode.cashAmount, upiAmount: paymentMode.upiAmount, course,
@@ -1106,6 +1128,20 @@ function NewMembershipForm({ branchId, onCreated, tempPackages, permPackages }) 
             <option value="permanent">Permanent (fixed cabin)</option>
           </select>
         </div>
+        {category === 'permanent' && (
+          <div className="form-group">
+            <label>Cabin *</label>
+            <select value={deskId} onChange={(e) => setDeskId(e.target.value)} required>
+              <option value="">Select a cabin</option>
+              {freeDesks.map(d => <option key={d.id} value={d.id}>{d.label}</option>)}
+            </select>
+            <p style={{ marginTop: '0.4rem', fontSize: '0.78rem', color: freeDesks.length ? 'var(--text-muted)' : '#ff8888' }}>
+              {freeDesks.length
+                ? `${freeDesks.length} cabin${freeDesks.length === 1 ? '' : 's'} free at this branch`
+                : 'No cabins free at this branch — add them to the Waitlist tab instead'}
+            </p>
+          </div>
+        )}
         <div className="form-group">
           <label>Hours per Day</label>
           <select value={hoursPerDay} onChange={(e) => setHoursPerDay(e.target.value === 'custom' ? 'custom' : Number(e.target.value))}>

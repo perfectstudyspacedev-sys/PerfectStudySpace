@@ -980,7 +980,7 @@ Deno.serve(async (req) => {
         paymentMode, cashAmount, upiAmount, course, lockerNo, withLocker,
         advanceAmount, emergencyContact, referralSource, startDate: customStartDate,
         isCustomPlan, customAmount, weekendHours,
-        isCustomDays, customDays, customDaysAmount,
+        isCustomDays, customDays, customDaysAmount, deskId: selectedDeskId,
       } = payload;
       if (!requireBranch(staff, branchId)) return err("Branch access denied", 403);
       if (!emergencyContact) return err("Emergency contact is required");
@@ -1082,14 +1082,21 @@ Deno.serve(async (req) => {
       let cabinNo = null;
 
       if (category === "permanent") {
-        const { data: freeDesk } = await db.from("desks").select("*")
-          .eq("branch_id", branchId).eq("status", "free").order("sort_order").limit(1).maybeSingle();
-        if (!freeDesk) return err("No cabin available for permanent membership — add them to the Waitlist tab instead");
-        if (!(await claimDesk(db, freeDesk.id, studentId))) {
-          return err("That cabin was just taken by another registration — please try again.");
+        // The cabin is chosen explicitly at registration rather than auto-assigned to the
+        // lowest free sort_order — staff seat people deliberately (near a window, away from
+        // the door, next to a friend), and silently picking for them meant a reassignment
+        // straight after almost every permanent signup. Same claim-then-verify race guard as
+        // every other cabin assignment path.
+        if (!selectedDeskId) return err("Select a cabin for this permanent membership");
+        const { data: chosenDesk } = await db.from("desks").select("id, label, status")
+          .eq("id", selectedDeskId).eq("branch_id", branchId).maybeSingle();
+        if (!chosenDesk) return err("Cabin not found at this branch");
+        if (chosenDesk.status !== "free") return err("Selected cabin is no longer available — pick another one");
+        if (!(await claimDesk(db, chosenDesk.id, studentId))) {
+          return err("That cabin was just taken by another registration — pick another one.");
         }
-        deskId = freeDesk.id;
-        cabinNo = freeDesk.label;
+        deskId = chosenDesk.id;
+        cabinNo = chosenDesk.label;
       }
 
       const monthLabel = new Date().toLocaleString("en-US", { month: "long" }).toUpperCase();
@@ -2787,10 +2794,23 @@ Deno.serve(async (req) => {
     }
 
     if (action === "list_transactions") {
-      const { branchId, period, dateFrom, dateTo, category, search } = payload;
-      const range = dateRange(period ?? "month", dateFrom, dateTo);
-      const bid = branchId ?? staff.branch_id;
-      if (!bid || !requireBranch(staff, bid)) return err("Branch access denied", 403);
+      const { branchId, period, dateFrom, dateTo, category, search, allBranches } = payload;
+      // Defaults to "today" to match get_revenue — the Revenue page drives both handlers from
+      // one period toggle, so a different fallback here made the Overview and Transactions
+      // tabs silently disagree about which window they were showing.
+      const range = dateRange(period ?? "today", dateFrom, dateTo);
+      // Owner "All branches (consolidated)" applies here exactly as it does in get_revenue;
+      // without it the Transactions tab stayed pinned to one branch while the Overview totals
+      // above it were consolidated, which read as the filter working only intermittently.
+      let branchFilter: string[] = [];
+      if (allBranches && isOwner(staff)) {
+        const { data: bs } = await db.from("branches").select("id");
+        branchFilter = bs?.map(b => b.id) ?? [];
+      } else {
+        const bid = branchId ?? staff.branch_id;
+        if (!bid || !requireBranch(staff, bid)) return err("Branch access denied", 403);
+        branchFilter = [bid];
+      }
       const fromTs = istDayStart(range.from);
       const toTs = istDayEnd(range.to);
       // Numeric instant bounds for the in-JS re-check below — fromTs/toTs carry a +05:30
@@ -2804,7 +2824,7 @@ Deno.serve(async (req) => {
       const wantTxns = !category || (category !== "cashback" && category !== "membership_refund");
 
       let q = db.from("transactions").select("*, students(name, phone), branches(name)")
-        .eq("branch_id", bid).gte("created_at", fromTs).lte("created_at", toTs)
+        .in("branch_id", branchFilter).gte("created_at", fromTs).lte("created_at", toTs)
         .order("created_at", { ascending: false });
       if (category && wantTxns) q = q.eq("category", category);
 
@@ -2812,12 +2832,12 @@ Deno.serve(async (req) => {
         wantTxns ? q : Promise.resolve({ data: [] as unknown[] }),
         wantCashbacks
           ? db.from("cashbacks").select("id, cashback_type, cashback_value, status, redeemed_amount, created_at, redeemed_at, students(name, phone), branches(name)")
-            .eq("branch_id", bid)
+            .in("branch_id", branchFilter)
             .or(`and(created_at.gte.${fromTs},created_at.lte.${toTs}),and(redeemed_at.gte.${fromTs},redeemed_at.lte.${toTs})`)
           : Promise.resolve({ data: [] as unknown[] }),
         wantMembershipRefunds
           ? db.from("payouts").select("id, amount, created_at, students(name, phone), branches(name)")
-            .eq("branch_id", bid).eq("payout_type", "membership_refund")
+            .in("branch_id", branchFilter).eq("payout_type", "membership_refund")
             .gte("created_at", fromTs).lte("created_at", toTs)
           : Promise.resolve({ data: [] as unknown[] }),
       ]);
@@ -3553,7 +3573,6 @@ Deno.serve(async (req) => {
       if (!mem) return err("Membership not found");
       if (!requireBranch(staff, mem.branch_id)) return err("Branch access denied", 403);
       if (!mem.is_active) return err("Membership is not active");
-      if (mem.end_date < todayISO()) return err("Membership has expired — renew it before changing the plan");
 
       const newHours = Number(newHoursPerDay);
       const newMonthlyFee = await getMembershipPackage(db, newHours, newCategory);
@@ -3562,6 +3581,17 @@ Deno.serve(async (req) => {
       const wantsEndDateChange = newEndDate && newEndDate !== mem.end_date;
       if (planUnchanged && !wantsEndDateChange) {
         return err("That's already the current plan");
+      }
+
+      // An expired membership can still have its due/end date corrected — staff routinely fix
+      // a date that was mistyped at signup, or extend one that lapsed over a holiday, and
+      // forcing a renewal to do that would fabricate a payment that never happened. The plan
+      // itself stays locked though: proration is computed over days remaining, and on an
+      // expired membership that count is zero or negative, so a category/hours change here
+      // would bill a nonsense amount.
+      const alreadyExpired = mem.end_date < todayISO();
+      if (alreadyExpired && !planUnchanged) {
+        return err("Membership has expired — renew it before changing the plan. You can still correct the expiry date on its own.");
       }
 
       const today = todayISO();
