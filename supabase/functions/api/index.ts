@@ -111,17 +111,20 @@ async function authStaff(req: Request): Promise<StaffRow | null> {
 
 function isOwner(staff: StaffRow) { return staff.role === "owner"; }
 
-// Outranks owner: can do everything owner can (isOwner-gated checks below treat the two as
-// equivalent), plus edit/delete rows owner cannot touch at all (see the *_admin_edit actions),
-// and is deliberately excluded from every owner-facing staff listing/count — see the
-// getVisibleStaffFilter comment for why that's a real, if unusual, design choice here.
+// Outranks owner: can do everything owner can (every isOwnerOrAdmin(staff) gate below treats
+// the two as equivalent), plus edit/delete rows owner cannot touch at all (see the
+// *_admin_edit actions). Deliberately excluded from every owner-facing staff listing/count —
+// list_staff, get_staff_grid, list_branch_staff, list_staff_attendance all add their own
+// .neq("role", "admin") filter so this account never appears as a row owner can see or manage,
+// independent of the access gate below (which controls what admin itself can call, not what
+// owner can see).
 function isAdmin(staff: StaffRow) { return staff.role === "admin"; }
 
-// Wherever the code already checks isOwner() to gate an owner-only action, admin should pass
-// too — admin outranks owner, not sits beside it. Kept as its own helper (rather than
-// redefining isOwner) so every existing `isOwner(staff)` call site in this file — 30+ of
-// them — gains admin access by switching to this one function, without touching each site's
-// surrounding logic or its "Owner only" error text.
+// Wherever the code checks isOwner() to gate an owner-only action, admin should pass too —
+// admin outranks owner, not sits beside it. Every `isOwner(staff)` call site that gates a
+// capability (30+ of them) was switched to this function so admin inherits all of them at
+// once; isOwner itself stays untouched for the couple of spots that need to mean literally
+// "the owner role", not "owner-or-admin".
 function isOwnerOrAdmin(staff: StaffRow) { return isOwner(staff) || isAdmin(staff); }
 
 function requireBranch(staff: StaffRow, branchId: string) {
@@ -597,7 +600,7 @@ Deno.serve(async (req) => {
     // ─── BRANCHES ───
     if (action === "list_branches") {
       let q = db.from("branches").select("id, name, desk_count, shift_config, locker_capacity").eq("is_active", true).order("name");
-      if (!isOwner(staff)) q = q.eq("id", staff.branch_id!);
+      if (!isOwnerOrAdmin(staff)) q = q.eq("id", staff.branch_id!);
       const { data } = await q;
       return json({ branches: data ?? [] });
     }
@@ -624,7 +627,7 @@ Deno.serve(async (req) => {
     }
 
     if (action === "update_branch") {
-      if (!isOwner(staff)) return err("Owner only", 403);
+      if (!isOwnerOrAdmin(staff)) return err("Owner only", 403);
       const { branchId, deskCount, shiftConfig, lockerCapacity } = payload;
       const updates: Record<string, unknown> = {};
       if (deskCount !== undefined) updates.desk_count = deskCount;
@@ -639,7 +642,7 @@ Deno.serve(async (req) => {
     }
 
     if (action === "add_desk") {
-      if (!isOwner(staff)) return err("Owner only", 403);
+      if (!isOwnerOrAdmin(staff)) return err("Owner only", 403);
       const { branchId, label } = payload;
       const { data: maxSort } = await db.from("desks").select("sort_order").eq("branch_id", branchId).order("sort_order", { ascending: false }).limit(1).maybeSingle();
       await db.from("desks").insert({ branch_id: branchId, label, sort_order: (maxSort?.sort_order ?? 0) + 1 });
@@ -648,7 +651,7 @@ Deno.serve(async (req) => {
     }
 
     if (action === "remove_desk") {
-      if (!isOwner(staff)) return err("Owner only", 403);
+      if (!isOwnerOrAdmin(staff)) return err("Owner only", 403);
       const { deskId } = payload;
       const { data: desk } = await db.from("desks").select("*").eq("id", deskId).single();
       if (desk?.status !== "free") return err("Cannot remove occupied desk");
@@ -731,7 +734,7 @@ Deno.serve(async (req) => {
       if (!requireBranch(staff, branchId)) return err("Branch access denied", 403);
       // Same range logic as get_daily_report — staff only ever see a single day; the
       // owner's Day/Week/Month/Custom picker at the top of Reports scopes this too.
-      const range = period && isOwner(staff) ? dateRange(period, dateFrom, dateTo) : { from: date ?? todayISO(), to: date ?? todayISO() };
+      const range = period && isOwnerOrAdmin(staff) ? dateRange(period, dateFrom, dateTo) : { from: date ?? todayISO(), to: date ?? todayISO() };
       const fromTs = istDayStart(range.from);
       const toTs = istDayEnd(range.to);
       // Instant bounds for the in-JS re-check below (fromTs/toTs carry +05:30 while DB
@@ -823,7 +826,7 @@ Deno.serve(async (req) => {
 
     // ─── COMBINED HALL (owner, all branches) ───
     if (action === "get_combined_hall") {
-      if (!isOwner(staff)) return err("Owner only", 403);
+      if (!isOwnerOrAdmin(staff)) return err("Owner only", 403);
       const { data: branchesList } = await db.from("branches").select("id, name").eq("is_active", true).order("name");
       const today = todayISO();
 
@@ -868,7 +871,7 @@ Deno.serve(async (req) => {
     }
 
     if (action === "get_combined_seatmap") {
-      if (!isOwner(staff)) return err("Owner only", 403);
+      if (!isOwnerOrAdmin(staff)) return err("Owner only", 403);
       const { data: branchesList } = await db.from("branches").select("id, name").eq("is_active", true).order("name");
 
       const branchesOut = [];
@@ -887,7 +890,7 @@ Deno.serve(async (req) => {
     }
 
     if (action === "get_combined_pending") {
-      if (!isOwner(staff)) return err("Owner only", 403);
+      if (!isOwnerOrAdmin(staff)) return err("Owner only", 403);
       const { date } = payload;
       const targetDate = date || todayISO();
 
@@ -1091,7 +1094,7 @@ Deno.serve(async (req) => {
         gross = monthlyFee * months;
       }
       const totalPaid = gross * (1 - discount / 100);
-      const startDate = isOwner(staff) && customStartDate ? customStartDate : todayISO();
+      const startDate = isOwnerOrAdmin(staff) && customStartDate ? customStartDate : todayISO();
       if (startDate > todayISO()) return err("Start date cannot be in the future");
       const endDate = isCustomDaysPlan ? addDays(startDate, customDaysCount! - 1) : endDateForMonths(startDate, months);
       // Derived the same clamp-aware way as endDate (not a raw addMonths) so a start date
@@ -1979,7 +1982,7 @@ Deno.serve(async (req) => {
       const { branchId, allBranches } = payload;
       let branchIds: string[];
       if (allBranches) {
-        if (!isOwner(staff)) return err("Owner only", 403);
+        if (!isOwnerOrAdmin(staff)) return err("Owner only", 403);
         const { data: branchesList } = await db.from("branches").select("id").eq("is_active", true);
         branchIds = (branchesList ?? []).map(b => b.id);
       } else {
@@ -2163,7 +2166,7 @@ Deno.serve(async (req) => {
     // accumulated hold_days (the source-of-truth fields, which were never wrong), so
     // it's safe to run more than once and only touches rows that actually drifted.
     if (action === "fix_membership_dates") {
-      if (!isOwner(staff)) return err("Owner only", 403);
+      if (!isOwnerOrAdmin(staff)) return err("Owner only", 403);
       const { data: memberships } = await db.from("memberships")
         .select("id, start_date, months_paid, hold_days, end_date, due_date");
       let fixed = 0;
@@ -2186,7 +2189,7 @@ Deno.serve(async (req) => {
     // the student's next checkout, same as any other shortfall) and the balance is reset to
     // 0. Safe to run more than once — it only touches rows still sitting below zero.
     if (action === "fix_negative_food_pass_balances") {
-      if (!isOwner(staff)) return err("Owner only", 403);
+      if (!isOwnerOrAdmin(staff)) return err("Owner only", 403);
       const { data: passes } = await db.from("food_passes").select("*").lt("balance", 0);
       let fixed = 0;
       for (const p of passes ?? []) {
@@ -2728,7 +2731,7 @@ Deno.serve(async (req) => {
     }
 
     if (action === "create_food_item") {
-      if (!isOwner(staff)) return err("Owner only", 403);
+      if (!isOwnerOrAdmin(staff)) return err("Owner only", 403);
       const { branchId, name, price } = payload;
       if (!requireBranch(staff, branchId)) return err("Branch access denied", 403);
       if (!name?.trim() || !price) return err("Name and price are required");
@@ -2740,7 +2743,7 @@ Deno.serve(async (req) => {
     }
 
     if (action === "update_food_item") {
-      if (!isOwner(staff)) return err("Owner only", 403);
+      if (!isOwnerOrAdmin(staff)) return err("Owner only", 403);
       const { itemId, isActive, price } = payload;
       const updates: Record<string, unknown> = {};
       if (isActive !== undefined) updates.is_active = isActive;
@@ -2764,7 +2767,7 @@ Deno.serve(async (req) => {
       const range = dateRange(period ?? "today", dateFrom, dateTo);
 
       let branchFilter: string[] = [];
-      if (allBranches && isOwner(staff)) {
+      if (allBranches && isOwnerOrAdmin(staff)) {
         const { data: bs } = await db.from("branches").select("id");
         branchFilter = bs?.map(b => b.id) ?? [];
       } else {
@@ -2832,7 +2835,7 @@ Deno.serve(async (req) => {
     if (action === "get_referral_stats") {
       const { branchId, allBranches } = payload;
       let branchFilter: string[] = [];
-      if (allBranches && isOwner(staff)) {
+      if (allBranches && isOwnerOrAdmin(staff)) {
         const { data: bs } = await db.from("branches").select("id");
         branchFilter = bs?.map(b => b.id) ?? [];
       } else {
@@ -2866,7 +2869,7 @@ Deno.serve(async (req) => {
       // without it the Transactions tab stayed pinned to one branch while the Overview totals
       // above it were consolidated, which read as the filter working only intermittently.
       let branchFilter: string[] = [];
-      if (allBranches && isOwner(staff)) {
+      if (allBranches && isOwnerOrAdmin(staff)) {
         const { data: bs } = await db.from("branches").select("id");
         branchFilter = bs?.map(b => b.id) ?? [];
       } else {
@@ -2950,7 +2953,7 @@ Deno.serve(async (req) => {
 
       // Staff only ever see a single day; the owner can additionally pick week/month/custom
       // (period-based) to see the same stats aggregated over a range.
-      const range = period && isOwner(staff) ? dateRange(period, dateFrom, dateTo) : { from: date ?? todayISO(), to: date ?? todayISO() };
+      const range = period && isOwnerOrAdmin(staff) ? dateRange(period, dateFrom, dateTo) : { from: date ?? todayISO(), to: date ?? todayISO() };
       const fromTs = istDayStart(range.from);
       const toTs = istDayEnd(range.to);
 
@@ -2985,7 +2988,7 @@ Deno.serve(async (req) => {
       // week-range buckets), so the owner can see day-on-day movement at a glance.
       let attendanceTrend = null;
       let registrationsTrend = null;
-      if (isOwner(staff) && period && period !== "day") {
+      if (isOwnerOrAdmin(staff) && period && period !== "day") {
         const buckets = buildDateBuckets(range.from, range.to, "day");
         attendanceTrend = buckets.map(b => ({
           label: b.label,
@@ -3013,7 +3016,7 @@ Deno.serve(async (req) => {
     }
 
     if (action === "update_fee_config") {
-      if (!isOwner(staff)) return err("Owner only", 403);
+      if (!isOwnerOrAdmin(staff)) return err("Owner only", 403);
       const { id, fee } = payload;
       await db.from("fee_config").update({ fee }).eq("id", id);
       return json({ ok: true });
@@ -3021,7 +3024,7 @@ Deno.serve(async (req) => {
 
     // ─── STAFF MANAGEMENT ───
     if (action === "list_staff") {
-      if (!isOwner(staff)) return err("Owner only", 403);
+      if (!isOwnerOrAdmin(staff)) return err("Owner only", 403);
       // Disambiguated FK hint (!branch_id) is required — staff now has two FKs to branches
       // (branch_id and override_branch_id from the branch-reassignment feature), so the
       // plain `branches(name)` embed is ambiguous to PostgREST and errors out silently.
@@ -3035,7 +3038,7 @@ Deno.serve(async (req) => {
     // today (override branch if one's set for today, otherwise their home branch) — so a
     // substitute shows up under the branch they're covering, not their home branch.
     if (action === "get_staff_grid") {
-      if (!isOwner(staff)) return err("Owner only", 403);
+      if (!isOwnerOrAdmin(staff)) return err("Owner only", 403);
       const { data: branches } = await db.from("branches").select("id, name").eq("is_active", true).order("name");
       const { data: allStaff } = await db.from("staff")
         .select("id, username, display_name, role, branch_id, override_branch_id, override_date")
@@ -3057,7 +3060,7 @@ Deno.serve(async (req) => {
     // Owner drags a staff card onto a different branch column — assigns them there for
     // today only. Dropping back onto their own home branch column clears the override.
     if (action === "assign_staff_override") {
-      if (!isOwner(staff)) return err("Owner only", 403);
+      if (!isOwnerOrAdmin(staff)) return err("Owner only", 403);
       const { staffId, branchId } = payload;
       const { data: target } = await db.from("staff").select("id, role, branch_id").eq("id", staffId).single();
       if (!target) return err("Staff not found");
@@ -3076,7 +3079,7 @@ Deno.serve(async (req) => {
 
     // Manually revert a staff member to their home branch before the day is over.
     if (action === "clear_staff_override") {
-      if (!isOwner(staff)) return err("Owner only", 403);
+      if (!isOwnerOrAdmin(staff)) return err("Owner only", 403);
       const { staffId } = payload;
       await db.from("staff").update({ override_branch_id: null, override_date: null }).eq("id", staffId);
       return json({ ok: true });
@@ -3087,7 +3090,7 @@ Deno.serve(async (req) => {
       const { branchId } = payload;
       let q = db.from("staff").select("id, username, display_name, role, branch_id")
         .eq("is_active", true).neq("role", "admin").order("display_name");
-      if (isOwner(staff)) {
+      if (isOwnerOrAdmin(staff)) {
         // Include the owner themself (branch_id is null for owner accounts) so they can
         // self-assign a task regardless of which branch they're currently viewing.
         if (branchId) q = q.or(`branch_id.eq.${branchId},role.eq.owner`);
@@ -3099,7 +3102,7 @@ Deno.serve(async (req) => {
       const { data } = await q;
       const results = data ?? [];
       // Owner may not be tied to any single branch — always let them self-assign
-      if (isOwner(staff) && !results.some(s => s.id === staff.id)) {
+      if (isOwnerOrAdmin(staff) && !results.some(s => s.id === staff.id)) {
         const { data: ownerRow } = await db.from("staff").select("id, username, display_name, role, branch_id").eq("id", staff.id).single();
         if (ownerRow) results.push(ownerRow);
       }
@@ -3116,7 +3119,7 @@ Deno.serve(async (req) => {
       if (!staffIds.length) return err("Please select at least one person to assign this task to");
       if (repeatInterval && !["none", "daily", "weekly", "monthly"].includes(repeatInterval)) return err("Invalid repeat interval");
       const targetBranchId = branchId ?? staff.branch_id;
-      if (!isOwner(staff)) {
+      if (!isOwnerOrAdmin(staff)) {
         if (!targetBranchId || targetBranchId !== staff.branch_id) return err("Branch access denied", 403);
         if (dueDate && dueDate < todayISO()) return err("Cannot assign a task on a past date");
         const { data: assignees } = await db.from("staff").select("id, branch_id, role").in("id", staffIds);
@@ -3139,7 +3142,7 @@ Deno.serve(async (req) => {
       const targetDate = date || todayISO();
       let q = db.from("tasks").select("*, assigned_to:assigned_to_staff_id(display_name, username, is_active), assigned_by:assigned_by_staff_id(display_name, username), branches(name)")
         .order("created_at", { ascending: false });
-      if (isOwner(staff)) {
+      if (isOwnerOrAdmin(staff)) {
         if (!allBranches && branchId) q = q.eq("branch_id", branchId);
       } else {
         const bid = staff.branch_id;
@@ -3174,7 +3177,7 @@ Deno.serve(async (req) => {
       // Only the assignee can mark their own task complete — except the owner, who can
       // manually set completion status on any staff member's task (e.g. clearing missed
       // items in the Incomplete Tasks list).
-      if (task.assigned_to_staff_id !== staff.id && !isOwner(staff)) {
+      if (task.assigned_to_staff_id !== staff.id && !isOwnerOrAdmin(staff)) {
         return err("Only the person a task is assigned to can complete it", 403);
       }
       if (task.repeat_interval === "none") {
@@ -3212,7 +3215,7 @@ Deno.serve(async (req) => {
       const { branchId, allBranches, date } = payload;
       const targetDate = date || todayISO();
       let q = db.from("tasks").select("*, assigned_to:assigned_to_staff_id(display_name, username, is_active), branches(name)");
-      if (isOwner(staff)) {
+      if (isOwnerOrAdmin(staff)) {
         if (!allBranches && branchId) q = q.eq("branch_id", branchId);
       } else {
         const bid = staff.branch_id;
@@ -3242,7 +3245,7 @@ Deno.serve(async (req) => {
     if (action === "list_incomplete_tasks") {
       const { branchId, allBranches } = payload;
       let q = db.from("tasks").select("*, assigned_to:assigned_to_staff_id(display_name, username), assigned_by:assigned_by_staff_id(display_name, username), branches(name)");
-      if (isOwner(staff)) {
+      if (isOwnerOrAdmin(staff)) {
         if (!allBranches && branchId) q = q.eq("branch_id", branchId);
       } else {
         const bid = staff.branch_id;
@@ -3295,7 +3298,7 @@ Deno.serve(async (req) => {
     }
 
     if (action === "list_staff_attendance") {
-      if (!isOwner(staff)) return err("Owner only", 403);
+      if (!isOwnerOrAdmin(staff)) return err("Owner only", 403);
       const targetDate = payload?.date || todayISO();
 
       // Disambiguated FK hint — see the comment in list_staff for why this is required now.
@@ -3335,7 +3338,7 @@ Deno.serve(async (req) => {
     }
 
     if (action === "create_staff") {
-      if (!isOwner(staff)) return err("Owner only", 403);
+      if (!isOwnerOrAdmin(staff)) return err("Owner only", 403);
       const { username, password, displayName, role, branchId } = payload;
       const { data: hash } = await db.rpc("hash_staff_password", { plain_password: password });
       const { error } = await db.from("staff").insert({
@@ -3351,7 +3354,7 @@ Deno.serve(async (req) => {
     // immediately blocks that account from signing in — and authStaff() re-checks
     // is_active on every request, so an already-issued token stops working too.
     if (action === "update_staff") {
-      if (!isOwner(staff)) return err("Owner only", 403);
+      if (!isOwnerOrAdmin(staff)) return err("Owner only", 403);
       const { staffId, username, newPassword, displayName, branchId, isActive } = payload;
       if (!staffId) return err("Staff ID required");
       const { data: target } = await db.from("staff").select("id, role, is_active").eq("id", staffId).single();
@@ -3470,7 +3473,7 @@ Deno.serve(async (req) => {
       const { branchId, allBranches } = payload;
       let branchIds: string[];
       if (allBranches) {
-        if (!isOwner(staff)) return err("Owner only", 403);
+        if (!isOwnerOrAdmin(staff)) return err("Owner only", 403);
         const { data: branchesList } = await db.from("branches").select("id").eq("is_active", true);
         branchIds = (branchesList ?? []).map(b => b.id);
       } else {
@@ -3573,7 +3576,7 @@ Deno.serve(async (req) => {
       const { branchId, allBranches } = payload;
       let branchIds: string[];
       if (allBranches) {
-        if (!isOwner(staff)) return err("Owner only", 403);
+        if (!isOwnerOrAdmin(staff)) return err("Owner only", 403);
         const { data: branchesList } = await db.from("branches").select("id").eq("is_active", true);
         branchIds = (branchesList ?? []).map(b => b.id);
       } else {

@@ -95,12 +95,25 @@ export function AuthProvider({ children }) {
     setStoredBranchId(id)
   }, [])
 
-  const isOwner = staff?.role === 'owner'
+  // admin outranks owner and can do everything owner can, so isOwner means "has owner-level
+  // access" here, not literally "role is owner" — every existing `isOwner &&` gate across the
+  // app (nav links, route guards, the Revenue tab, branch switcher, etc.) is meant to ask
+  // "can this person do owner things", and redefining the single source of truth here means
+  // admin inherits all of them without touching 13+ other files one by one. The one place
+  // that must NOT follow this — admin never appearing as a row in the Staff tab's own list —
+  // is enforced server-side (list_staff/get_staff_grid/etc. filter role='admin' out of the
+  // query itself), not by hiding the page from admin, so it stays correct without needing a
+  // separate frontend flag for it.
+  const isOwner = staff?.role === 'owner' || staff?.role === 'admin'
+  // Narrow flag for the rare case a screen must tell the two apart (e.g. showing "ADMIN"
+  // instead of "OWNER" in a label, or a control owner should see but admin's own account
+  // settings shouldn't need). Most of the app should keep using isOwner above.
+  const isAdmin = staff?.role === 'admin'
   const activeBranch = branches.find(b => b.id === branchId) ?? null
 
   return (
     <AuthContext.Provider value={{
-      staff, loading, login, logout, isOwner,
+      staff, loading, login, logout, isOwner, isAdmin,
       branchId, selectBranch, branches, activeBranch,
     }}>
       {children}
