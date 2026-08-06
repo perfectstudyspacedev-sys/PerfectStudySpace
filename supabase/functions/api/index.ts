@@ -111,8 +111,21 @@ async function authStaff(req: Request): Promise<StaffRow | null> {
 
 function isOwner(staff: StaffRow) { return staff.role === "owner"; }
 
+// Outranks owner: can do everything owner can (isOwner-gated checks below treat the two as
+// equivalent), plus edit/delete rows owner cannot touch at all (see the *_admin_edit actions),
+// and is deliberately excluded from every owner-facing staff listing/count — see the
+// getVisibleStaffFilter comment for why that's a real, if unusual, design choice here.
+function isAdmin(staff: StaffRow) { return staff.role === "admin"; }
+
+// Wherever the code already checks isOwner() to gate an owner-only action, admin should pass
+// too — admin outranks owner, not sits beside it. Kept as its own helper (rather than
+// redefining isOwner) so every existing `isOwner(staff)` call site in this file — 30+ of
+// them — gains admin access by switching to this one function, without touching each site's
+// surrounding logic or its "Owner only" error text.
+function isOwnerOrAdmin(staff: StaffRow) { return isOwner(staff) || isAdmin(staff); }
+
 function requireBranch(staff: StaffRow, branchId: string) {
-  if (isOwner(staff)) return true;
+  if (isOwnerOrAdmin(staff)) return true;
   return staff.branch_id === branchId;
 }
 
@@ -120,6 +133,14 @@ async function getOwnerStaffIds(db: ReturnType<typeof adminClient>): Promise<str
   const { data } = await db.from("staff").select("id").eq("role", "owner");
   return (data ?? []).map(r => r.id);
 }
+
+// admin is invisible to owner everywhere a staff list/grid/picker is built — the Staff tab,
+// the branch grid, attendance, task-assignment pickers, all of it. Every query that lists
+// staff for owner or staff-member consumption chains a plain .neq("role", "admin") — inline,
+// not through a shared wrapper, because the Supabase query builder's generics don't survive
+// being passed through an intermediate function without losing every later-chained method's
+// return type. Never applied to the admin's own login/session lookup in authStaff, which has
+// to find the row to authenticate it in the first place.
 
 // The edge function runs on UTC infrastructure with no "local" timezone, but the app is
 // used in India — so "today" must be computed in IST (UTC+5:30), not the server's UTC
@@ -3004,7 +3025,9 @@ Deno.serve(async (req) => {
       // Disambiguated FK hint (!branch_id) is required — staff now has two FKs to branches
       // (branch_id and override_branch_id from the branch-reassignment feature), so the
       // plain `branches(name)` embed is ambiguous to PostgREST and errors out silently.
-      const { data } = await db.from("staff").select("id, username, role, display_name, branch_id, is_active, branches!branch_id(name)").order("username");
+      const { data } = await db.from("staff")
+        .select("id, username, role, display_name, branch_id, is_active, branches!branch_id(name)")
+        .neq("role", "admin").order("username");
       return json({ staff: data ?? [] });
     }
 
@@ -3014,8 +3037,9 @@ Deno.serve(async (req) => {
     if (action === "get_staff_grid") {
       if (!isOwner(staff)) return err("Owner only", 403);
       const { data: branches } = await db.from("branches").select("id, name").eq("is_active", true).order("name");
-      const { data: allStaff } = await db.from("staff").select("id, username, display_name, role, branch_id, override_branch_id, override_date")
-        .eq("is_active", true).neq("role", "owner").order("display_name");
+      const { data: allStaff } = await db.from("staff")
+        .select("id, username, display_name, role, branch_id, override_branch_id, override_date")
+        .eq("is_active", true).neq("role", "owner").neq("role", "admin").order("display_name");
 
       const today = todayISO();
       const staffRows = (allStaff ?? []).map((s: { id: string; username: string; display_name: string | null; role: string; branch_id: string | null; override_branch_id: string | null; override_date: string | null }) => {
@@ -3061,7 +3085,8 @@ Deno.serve(async (req) => {
     // ─── TASKS (two-way assignment) ───
     if (action === "list_branch_staff") {
       const { branchId } = payload;
-      let q = db.from("staff").select("id, username, display_name, role, branch_id").eq("is_active", true).order("display_name");
+      let q = db.from("staff").select("id, username, display_name, role, branch_id")
+        .eq("is_active", true).neq("role", "admin").order("display_name");
       if (isOwner(staff)) {
         // Include the owner themself (branch_id is null for owner accounts) so they can
         // self-assign a task regardless of which branch they're currently viewing.
@@ -3275,7 +3300,7 @@ Deno.serve(async (req) => {
 
       // Disambiguated FK hint — see the comment in list_staff for why this is required now.
       const { data: allStaff } = await db.from("staff").select("id, username, display_name, branch_id, is_active, branches!branch_id(name)")
-        .eq("is_active", true).neq("role", "owner").order("display_name");
+        .eq("is_active", true).neq("role", "owner").neq("role", "admin").order("display_name");
       const { data: present } = await db.from("staff_attendance").select("staff_id, first_login_at, last_logout_at")
         .eq("attendance_date", targetDate);
       const presentMap = new Map((present ?? []).map((p: { staff_id: string; first_login_at: string; last_logout_at: string | null }) => [p.staff_id, p]));
