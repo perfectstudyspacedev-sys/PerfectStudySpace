@@ -1,6 +1,3 @@
-# Claude
-.claude/
-
 # Supabase temp
 supabase/.temp/
 
@@ -22,3 +19,10 @@ build/
 
 # Logs
 *.log
+
+# Claude OS working files
+.tmp/
+
+# Pre-install backups
+.claude-backup-before-os/
+.claude-flow-backup-before-os/
