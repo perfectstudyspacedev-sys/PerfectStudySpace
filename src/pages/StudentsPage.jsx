@@ -28,8 +28,127 @@ function cellText(row, col) {
   return String(raw)
 }
 
+function groupByBranchName(rows) {
+  const groups = new Map()
+  for (const row of rows) {
+    const key = row.branches?.name ?? 'Unknown Branch'
+    if (!groups.has(key)) groups.set(key, [])
+    groups.get(key).push(row)
+  }
+  return [...groups.entries()].sort(([a], [b]) => a.localeCompare(b))
+}
+
+// ── Combined Hall — read-only, every branch's students at once. The spreadsheet export,
+// Top Students, and Cashback tabs are all single-branch analytics with no combined form
+// defined yet, so they're only offered once a real branch is selected.
+const COMBINED_STATUS_OPTIONS = [
+  { value: '', label: 'All' },
+  { value: 'active', label: 'Active' },
+  { value: 'pending', label: 'Pending' },
+  { value: 'inactive', label: 'Inactive' },
+]
+
+function CombinedStudentsView() {
+  const [students, setStudents] = useState(null)
+  const [search, setSearch] = useState('')
+  const [error, setError] = useState('')
+  const [branchFilter, setBranchFilter] = useState(null) // null = every branch
+  const [statusFilter, setStatusFilter] = useState('')
+
+  const load = useCallback(async () => {
+    setError('')
+    try {
+      const data = await api('list_students', { allBranches: true })
+      setStudents(data.students ?? [])
+    } catch (err) {
+      setError(err.message)
+    }
+  }, [])
+
+  useEffect(() => { load() }, [load])
+
+  const searched = students && search.trim()
+    ? students.filter(s => {
+        const q = search.trim().toLowerCase()
+        return s.name.toLowerCase().includes(q) || s.contact.includes(q) || String(s.cabin).toLowerCase().includes(q)
+      })
+    : students
+
+  const filtered = searched && statusFilter ? searched.filter(s => s.status === statusFilter) : searched
+
+  const allGroups = filtered ? groupByBranchName(filtered) : []
+  const visibleGroups = branchFilter ? allGroups.filter(([name]) => name === branchFilter) : allGroups
+
+  return (
+    <>
+      <div className="page-header"><h1>Students — Combined Hall</h1></div>
+      {error && <p className="error-msg" style={{ marginBottom: '1rem' }}>{error}</p>}
+      {!students ? <p>Loading…</p> : (
+        <>
+          <div className="filters" style={{ marginBottom: '1rem', alignItems: 'center' }}>
+            <input placeholder="Search name, phone, cabin…" value={search} onChange={(e) => setSearch(e.target.value)} />
+            <div className="period-toggle">
+              {COMBINED_STATUS_OPTIONS.map(({ value, label }) => (
+                <button key={value || 'all'} type="button" className={statusFilter === value ? 'active' : ''} onClick={() => setStatusFilter(value)}>
+                  {label}
+                </button>
+              ))}
+            </div>
+          </div>
+          {allGroups.length > 0 && (
+            <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap', marginBottom: '1rem' }}>
+              <button type="button" className={`btn ${branchFilter === null ? 'btn-primary' : 'btn-ghost'}`} style={{ padding: '0.35rem 0.9rem', fontSize: '0.82rem' }} onClick={() => setBranchFilter(null)}>
+                All Branches ({filtered.length})
+              </button>
+              {allGroups.map(([name, rows]) => (
+                <button
+                  key={name} type="button"
+                  className={`btn ${branchFilter === name ? 'btn-primary' : 'btn-ghost'}`}
+                  style={{ padding: '0.35rem 0.9rem', fontSize: '0.82rem' }}
+                  onClick={() => setBranchFilter(name)}
+                >
+                  {name} ({rows.length})
+                </button>
+              ))}
+            </div>
+          )}
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '1.25rem' }}>
+            {visibleGroups.map(([branchName, rows]) => (
+              <div key={branchName} className="card" style={{ overflowX: 'auto' }}>
+                <h3 style={{ color: 'var(--accent)', marginBottom: '0.75rem' }}>{branchName} · {rows.length} student{rows.length === 1 ? '' : 's'}</h3>
+                <table className="data-table">
+                  <thead>
+                    <tr>
+                      {COLUMNS.map(col => <th key={col.key}>{col.label}</th>)}
+                      <th>Status</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {rows.map(s => (
+                      <tr key={s.id} className={(s.isOverdue || s.lockerOverdue) ? 'row-overdue' : ''}>
+                        {COLUMNS.map(col => (
+                          <td key={col.key}>
+                            {col.key === 'name' ? (
+                              <Link to={`/students/${s.id}`} style={{ color: 'var(--accent)' }}>{s.name}</Link>
+                            ) : col.isDate && s[col.key] && s[col.key] !== '-' ? formatDate(s[col.key]) : s[col.key]}
+                          </td>
+                        ))}
+                        <td><span className={`badge badge-${s.status} cap`}>{s.status}</span></td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            ))}
+          </div>
+        </>
+      )}
+    </>
+  )
+}
+
 export default function StudentsPage() {
-  const { branchId, isOwner: isOwnerRole } = useAuth()
+  const { branchId, isOwner: isOwnerRole, isCombinedHall } = useAuth()
   // Dev-mode: staff get the same Students spreadsheet access as owner, code-level only.
   const isOwner = isOwnerRole || DEV_MODE
   const [students, setStudents] = useState([])
@@ -49,7 +168,7 @@ export default function StudentsPage() {
   const [cashbackError, setCashbackError] = useState('')
 
   const load = useCallback(async () => {
-    if (!branchId) return
+    if (!branchId || isCombinedHall) return
     setLoading(true)
     try {
       const data = await api('list_students', { branchId })
@@ -175,6 +294,8 @@ export default function StudentsPage() {
       setCashbackLoading(false)
     }
   }
+
+  if (isCombinedHall) return <CombinedStudentsView />
 
   return (
     <>

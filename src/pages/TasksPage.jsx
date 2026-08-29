@@ -123,12 +123,16 @@ const REPEAT_OPTIONS = [
 ]
 
 export default function TasksPage() {
-  const { staff, isOwner, branchId, branches } = useAuth()
+  const { staff, isOwner, branchId, branches, isCombinedHall } = useAuth()
   const [tasks, setTasks] = useState([])
   const [incompleteTasks, setIncompleteTasks] = useState([])
   const [staffOptions, setStaffOptions] = useState([])
   const [loading, setLoading] = useState(true)
   const [allBranches, setAllBranches] = useState(isOwner)
+  // Combined Hall has no single real branch to fall back to — list_tasks/list_incomplete_tasks
+  // already ignore branchId entirely once allBranches is true, so this just forces that mode
+  // on instead of building a second combined view; the manual toggle is hidden below.
+  const effectiveAllBranches = isCombinedHall || allBranches
   const [statusFilter, setStatusFilter] = useState('')
 
   const [assignBranchId, setAssignBranchId] = useState(isOwner ? '' : branchId)
@@ -144,14 +148,14 @@ export default function TasksPage() {
     setLoading(true)
     try {
       const [t, incomplete] = await Promise.all([
-        api('list_tasks', { branchId, allBranches: isOwner ? allBranches : false }),
-        api('list_incomplete_tasks', { branchId, allBranches: isOwner ? allBranches : false }),
+        api('list_tasks', { branchId, allBranches: isOwner ? effectiveAllBranches : false }),
+        api('list_incomplete_tasks', { branchId, allBranches: isOwner ? effectiveAllBranches : false }),
       ])
       setTasks(t.tasks ?? [])
       setIncompleteTasks(incomplete.tasks ?? [])
     } catch (e) { console.error(e) }
     finally { setLoading(false) }
-  }, [branchId, isOwner, allBranches])
+  }, [branchId, isOwner, effectiveAllBranches])
 
   useEffect(() => { load() }, [load])
 
@@ -223,7 +227,9 @@ export default function TasksPage() {
     <>
       <div className="page-header">
         <h1>Actions</h1>
-        {isOwner && (
+        {isCombinedHall ? (
+          <span style={{ fontSize: '0.85rem', color: 'var(--text-muted)' }}>🏢 All branches (Combined Hall)</span>
+        ) : isOwner && (
           <label style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', fontSize: '0.85rem', color: 'var(--text-muted)' }}>
             <input type="checkbox" checked={allBranches} onChange={(e) => setAllBranches(e.target.checked)} />
             All branches
@@ -325,7 +331,7 @@ export default function TasksPage() {
             <div className="card">
               <h3 style={{ color: 'var(--accent)', marginBottom: '0.75rem' }}>My Tasks (Owner)</h3>
               {loading ? <p>Loading…</p> : (
-                <TaskTable tasks={filteredOwnerTasks} allBranches={allBranches} onToggle={toggleDone} currentStaffId={staff?.id} isOwner={isOwner} />
+                <TaskTable tasks={filteredOwnerTasks} allBranches={effectiveAllBranches} onToggle={toggleDone} currentStaffId={staff?.id} isOwner={isOwner} />
               )}
             </div>
           )}
@@ -345,7 +351,7 @@ export default function TasksPage() {
             </div>
 
             {loading ? <p>Loading…</p> : (
-              <TaskTable tasks={filteredTasks} allBranches={allBranches} onToggle={toggleDone} currentStaffId={staff?.id} isOwner={isOwner} />
+              <TaskTable tasks={filteredTasks} allBranches={effectiveAllBranches} onToggle={toggleDone} currentStaffId={staff?.id} isOwner={isOwner} />
             )}
           </div>
 
@@ -355,7 +361,7 @@ export default function TasksPage() {
               Tasks that were due on a past date and were never marked done, from the last 7 days.
             </p>
             {loading ? <p>Loading…</p> : (
-              <IncompleteTaskTable tasks={incompleteTasks} allBranches={allBranches} onComplete={completeMissed} currentStaffId={staff?.id} isOwner={isOwner} />
+              <IncompleteTaskTable tasks={incompleteTasks} allBranches={effectiveAllBranches} onComplete={completeMissed} currentStaffId={staff?.id} isOwner={isOwner} />
             )}
           </div>
         </div>

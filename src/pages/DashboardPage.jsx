@@ -1,9 +1,319 @@
 import { useState, useEffect, useCallback } from 'react'
-import { useNavigate } from 'react-router-dom'
+import { useNavigate, Link } from 'react-router-dom'
 import { useAuth } from '../context/AuthContext'
 import { api } from '../lib/api'
-import { nowTimeStr, localTimeStrToISO, formatCurrency, formatDate } from '../lib/utils'
+import { nowTimeStr, localTimeStrToISO, formatCurrency, formatDate, todayISO } from '../lib/utils'
 import WalkInModal from '../components/WalkInModal'
+
+// Every branch that appears in either list, even one with pending payments but nothing
+// expiring (or vice versa) — so that branch's card still shows up with a clear "none" for
+// the side that's empty, instead of silently vanishing from one section.
+function branchNamesUnion(...lists) {
+  const names = new Set()
+  for (const list of lists) {
+    for (const row of list) names.add(row.branches?.name ?? 'Unknown Branch')
+  }
+  return [...names].sort((a, b) => a.localeCompare(b))
+}
+
+// ── Combined Hall overview — read-only, all branches at once. Renewing, checking in, etc.
+// still happen from a specific branch (switch to it from the branch dropdown, or drill into
+// a student's profile from any row below) — this view is for seeing everything at a glance.
+function CombinedDashboard() {
+  const [hall, setHall] = useState(null)
+  const [seatMap, setSeatMap] = useState(null)
+  const [pending, setPending] = useState(null)
+  const [pendingDate, setPendingDate] = useState(todayISO())
+  const [pendingTableFilter, setPendingTableFilter] = useState('both') // 'both' | 'payments' | 'expiring'
+  const [pendingBranchFilter, setPendingBranchFilter] = useState(null) // null = every branch
+  const [loading, setLoading] = useState(true)
+  const [error, setError] = useState('')
+
+  const load = useCallback(async () => {
+    setLoading(true)
+    setError('')
+    try {
+      const [hallData, seatData, pendingData] = await Promise.all([
+        api('get_combined_hall'),
+        api('get_combined_seatmap'),
+        api('get_combined_pending', { date: pendingDate }),
+      ])
+      setHall(hallData)
+      setSeatMap(seatData)
+      setPending(pendingData)
+    } catch (err) {
+      setError(err.message)
+    } finally {
+      setLoading(false)
+    }
+  }, [pendingDate])
+
+  useEffect(() => { load() }, [load])
+
+  // Same staleness concern as the single-branch dashboard — another staff member's action
+  // at any branch (check-in, cabin reassignment, payment) should show up without a manual
+  // refresh.
+  useEffect(() => {
+    const interval = setInterval(load, 45_000)
+    const onVisible = () => { if (document.visibilityState === 'visible') load() }
+    document.addEventListener('visibilitychange', onVisible)
+    window.addEventListener('focus', onVisible)
+    return () => {
+      clearInterval(interval)
+      document.removeEventListener('visibilitychange', onVisible)
+      window.removeEventListener('focus', onVisible)
+    }
+  }, [load])
+
+  if (loading && !hall) return <p>Loading dashboard…</p>
+
+  return (
+    <>
+      <div className="page-header"><h1>Combined Hall</h1></div>
+      {error && <p className="error-msg" style={{ marginBottom: '1rem' }}>{error}</p>}
+
+      {hall && (
+        <>
+          <div className="stats-row" style={{ marginBottom: '1.5rem' }}>
+            <div className="card stat-card">
+              <div className="value count-up">{hall.totals.currentlyStudying}</div>
+              <div className="label">Currently Studying (All Branches)</div>
+            </div>
+            <div className="card stat-card">
+              <div className="value count-up">{hall.totals.activeMemberships}</div>
+              <div className="label">Active Memberships</div>
+            </div>
+            <div className="card stat-card">
+              <div className="value count-up">{hall.totals.permanentDesks}</div>
+              <div className="label">Permanent Desks Occupied</div>
+            </div>
+            <div className="card stat-card">
+              <div className="value count-up">{hall.totals.freeDesks}</div>
+              <div className="label">Free Desks</div>
+            </div>
+            <div className="card stat-card">
+              <div className="value count-up">{hall.totals.pending}</div>
+              <div className="label">Payment Pending</div>
+            </div>
+          </div>
+
+          <div className="card" style={{ marginBottom: '1.5rem' }}>
+            <h3 style={{ color: 'var(--accent)', marginBottom: '0.75rem' }}>By Branch</h3>
+            <table className="data-table">
+              <thead>
+                <tr>
+                  <th>Branch</th><th>Studying</th><th>Active Members</th><th>Temp</th><th>Perm</th>
+                  <th>Free Desks</th><th>Permanent Desks</th><th>Pending</th>
+                </tr>
+              </thead>
+              <tbody>
+                {hall.branches.map(b => (
+                  <tr key={b.id}>
+                    <td><strong>{b.name}</strong></td>
+                    <td className="mono">{b.currentlyStudying}</td>
+                    <td className="mono">{b.activeMemberships}</td>
+                    <td className="mono">{b.temporary}</td>
+                    <td className="mono">{b.permanent}</td>
+                    <td className="mono">{b.freeDesks}</td>
+                    <td className="mono">{b.permanentDesks}</td>
+                    <td className="mono" style={{ color: b.pending > 0 ? '#ff8c42' : undefined }}>{b.pending}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </>
+      )}
+
+      <div className="card" style={{ marginBottom: '1.5rem' }}>
+        <h2 style={{ color: 'var(--accent)', marginBottom: '0.75rem' }}>Seat Map</h2>
+        {!seatMap ? <p>Loading…</p> : (
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
+            {seatMap.branches.map(b => (
+              <div key={b.id}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', flexWrap: 'wrap', gap: '0.5rem' }}>
+                  <h3 style={{ color: 'var(--accent)', fontSize: '0.95rem' }}>{b.name}</h3>
+                  <span style={{ fontSize: '0.85rem', color: 'var(--text-muted)' }}>
+                    <strong style={{ color: 'var(--accent)' }}>{b.summary.free}</strong> Free ·{' '}
+                    <strong style={{ color: '#a0a0a0' }}>{b.summary.permanent}</strong> Permanent ·{' '}
+                    {b.summary.total} Total
+                  </span>
+                </div>
+                <div className="seat-map" style={{ marginTop: '0.5rem' }}>
+                  {b.desks.map(desk => (
+                    <div key={desk.id} className={`seat-cell ${desk.status}`} style={{ cursor: 'default' }}>
+                      {desk.label}
+                      {desk.status === 'reserved' && desk.students?.name && (
+                        <span className="seat-tooltip">{desk.students.name}</span>
+                      )}
+                    </div>
+                  ))}
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '0.75rem', marginBottom: '0.75rem' }}>
+        <h2 style={{ color: 'var(--accent)' }}>Pending Tracking</h2>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', flexWrap: 'wrap' }}>
+          <div className="period-toggle">
+            {[
+              { value: 'both', label: 'Both' },
+              { value: 'payments', label: 'Payments Pending' },
+              { value: 'expiring', label: 'Memberships Expiring' },
+            ].map(({ value, label }) => (
+              <button key={value} type="button" className={pendingTableFilter === value ? 'active' : ''} onClick={() => setPendingTableFilter(value)}>
+                {label}
+              </button>
+            ))}
+          </div>
+          <div className="form-group" style={{ maxWidth: 200, marginBottom: 0 }}>
+            <input type="date" value={pendingDate} onChange={(e) => setPendingDate(e.target.value)} />
+          </div>
+        </div>
+      </div>
+      {!pending ? <p>Loading…</p> : (() => {
+        const showPayments = pendingTableFilter !== 'expiring'
+        const showExpiring = pendingTableFilter !== 'payments'
+        // Only union in the lists actually being shown — filtering down to "Payments
+        // Pending" drops a branch whose only activity was an expiring membership, instead
+        // of leaving an empty card for it.
+        const allPendingBranchNames = branchNamesUnion(
+          showPayments ? pending.duePayments : [],
+          showExpiring ? pending.expiredMemberships : [],
+        )
+        const pendingBranchNames = pendingBranchFilter
+          ? allPendingBranchNames.filter(name => name === pendingBranchFilter)
+          : allPendingBranchNames
+        // Stat boxes track the branch filter (so picking a branch shows that branch's own
+        // counts) but not the Both/Payments/Expiring toggle — both counts stay visible at a
+        // glance even while only one table is expanded below.
+        const summaryDuePayments = pendingBranchFilter
+          ? pending.duePayments.filter(m => (m.branches?.name ?? 'Unknown Branch') === pendingBranchFilter)
+          : pending.duePayments
+        const summaryExpiring = pendingBranchFilter
+          ? pending.expiredMemberships.filter(m => (m.branches?.name ?? 'Unknown Branch') === pendingBranchFilter)
+          : pending.expiredMemberships
+        return (
+        <>
+          <div className="stats-row" style={{ marginBottom: '1rem' }}>
+            <div className="card stat-card">
+              <div className="value count-up" style={{ color: summaryDuePayments.length > 0 ? '#ff8888' : undefined }}>{summaryDuePayments.length}</div>
+              <div className="label">Payment Pending{pendingBranchFilter ? ` — ${pendingBranchFilter}` : ' (All Branches)'}</div>
+            </div>
+            <div className="card stat-card">
+              <div className="value count-up" style={{ color: summaryExpiring.length > 0 ? '#ffaa44' : undefined }}>{summaryExpiring.length}</div>
+              <div className="label">Expiring on {formatDate(pending.date)}{pendingBranchFilter ? ` — ${pendingBranchFilter}` : ' (All Branches)'}</div>
+            </div>
+          </div>
+          {allPendingBranchNames.length > 0 && (
+            <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap', marginBottom: '1rem' }}>
+              <button
+                type="button" onClick={() => setPendingBranchFilter(null)}
+                className={`btn ${pendingBranchFilter === null ? 'btn-primary' : 'btn-ghost'}`}
+                style={{ padding: '0.35rem 0.9rem', fontSize: '0.82rem' }}
+              >
+                All Branches
+              </button>
+              {allPendingBranchNames.map(name => (
+                <button
+                  key={name} type="button" onClick={() => setPendingBranchFilter(name)}
+                  className={`btn ${pendingBranchFilter === name ? 'btn-primary' : 'btn-ghost'}`}
+                  style={{ padding: '0.35rem 0.9rem', fontSize: '0.82rem' }}
+                >
+                  {name}
+                </button>
+              ))}
+            </div>
+          )}
+          {pendingBranchNames.length === 0 ? (
+            <p style={{ color: 'var(--text-muted)', fontSize: '0.85rem' }}>Nothing pending or expiring — all clear.</p>
+          ) : (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
+              {pendingBranchNames.map(branchName => {
+                const duePayments = pending.duePayments.filter(m => (m.branches?.name ?? 'Unknown Branch') === branchName)
+                const expiring = pending.expiredMemberships.filter(m => (m.branches?.name ?? 'Unknown Branch') === branchName)
+                return (
+                  <div key={branchName} className="card">
+                    <h3 style={{ color: 'var(--accent)', marginBottom: '1rem' }}>{branchName}</h3>
+
+                    {showPayments && (
+                      <>
+                        <h4 style={{ fontSize: '0.85rem', color: '#a78bfa', marginBottom: '0.5rem' }}>
+                          Payments Pending — {duePayments.length}
+                        </h4>
+                        {duePayments.length === 0 ? (
+                          <p style={{ color: 'var(--text-muted)', fontSize: '0.82rem', marginBottom: showExpiring ? '1rem' : 0 }}>No pending payments.</p>
+                        ) : (
+                          <table className="data-table" style={{ marginBottom: showExpiring ? '1rem' : 0 }}>
+                            <thead>
+                              <tr><th>Student</th><th>Course</th><th>Plan</th><th>Cabin</th><th>Due Date</th><th>Amount Pending</th></tr>
+                            </thead>
+                            <tbody>
+                              {duePayments.map(m => (
+                                <tr key={m.id}>
+                                  <td>
+                                    <Link to={`/students/${m.student_id}`} style={{ color: 'var(--accent)' }}>{m.students?.name}</Link>
+                                    <div className="mono" style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>{m.students?.phone}</div>
+                                  </td>
+                                  <td style={{ fontSize: '0.82rem' }}>{m.students?.course ?? '—'}</td>
+                                  <td style={{ fontSize: '0.82rem' }} className="cap">{m.category} · {m.hours_per_day}h/day</td>
+                                  <td style={{ fontSize: '0.82rem' }}>{m.cabin_no ?? '—'}</td>
+                                  <td className="mono">{formatDate(m.due_date)}</td>
+                                  <td className="mono" style={{ color: '#ff8888', fontWeight: 700 }}>{formatCurrency(m.fee_due)}</td>
+                                </tr>
+                              ))}
+                            </tbody>
+                          </table>
+                        )}
+                      </>
+                    )}
+
+                    {showPayments && showExpiring && <div style={{ borderTop: '1px solid var(--border)', margin: '1rem 0' }} />}
+
+                    {showExpiring && (
+                      <>
+                        <h4 style={{ fontSize: '0.85rem', color: '#a78bfa', marginBottom: '0.5rem' }}>
+                          Memberships Expiring On {formatDate(pending.date)} — {expiring.length}
+                        </h4>
+                        {expiring.length === 0 ? (
+                          <p style={{ color: 'var(--text-muted)', fontSize: '0.82rem' }}>None.</p>
+                        ) : (
+                          <table className="data-table">
+                            <thead>
+                              <tr><th>Student</th><th>Course</th><th>Plan</th><th>Cabin</th><th>End Date</th></tr>
+                            </thead>
+                            <tbody>
+                              {expiring.map(m => (
+                                <tr key={m.id}>
+                                  <td>
+                                    <Link to={`/students/${m.student_id}`} style={{ color: 'var(--accent)' }}>{m.students?.name}</Link>
+                                    <div className="mono" style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>{m.students?.phone}</div>
+                                  </td>
+                                  <td style={{ fontSize: '0.82rem' }}>{m.students?.course ?? '—'}</td>
+                                  <td style={{ fontSize: '0.82rem' }} className="cap">{m.category} · {m.hours_per_day}h/day</td>
+                                  <td style={{ fontSize: '0.82rem' }}>{m.cabin_no ?? '—'}</td>
+                                  <td className="mono">{formatDate(m.end_date)}</td>
+                                </tr>
+                              ))}
+                            </tbody>
+                          </table>
+                        )}
+                      </>
+                    )}
+                  </div>
+                )
+              })}
+            </div>
+          )}
+        </>
+        )
+      })()}
+    </>
+  )
+}
 
 function autoShift() {
   const h = new Date().getHours()
@@ -192,7 +502,7 @@ function CheckInModal({ branchId, onClose, onDone }) {
 }
 
 export default function DashboardPage() {
-  const { branchId, activeBranch, isOwner } = useAuth()
+  const { branchId, activeBranch, isOwner, isCombinedHall } = useAuth()
   const navigate = useNavigate()
   const [data, setData] = useState(null)
   const [seatMap, setSeatMap] = useState(null)
@@ -204,7 +514,7 @@ export default function DashboardPage() {
   const [enquiryFollowupCount, setEnquiryFollowupCount] = useState(0)
 
   const load = useCallback(async () => {
-    if (!branchId) return
+    if (!branchId || isCombinedHall) return
     setLoading(true)
     try {
       const [dash, seats] = await Promise.all([
@@ -221,18 +531,19 @@ export default function DashboardPage() {
   }, [branchId])
 
   const loadMyTasks = useCallback(async () => {
+    if (isCombinedHall) return
     try {
       const data = await api('get_my_tasks_today')
       setMyTasks(data.tasks ?? [])
     } catch { /* ignore */ }
-  }, [])
+  }, [isCombinedHall])
 
   // Not a real task — a live count of open enquiry follow-ups due today or overdue.
   // Shows as an extra row in "My Tasks Today" (no Complete button, since it's just a
   // pointer to the Enquiries tab) and disappears on its own once every follow-up due
   // today has been marked done there.
   const loadEnquiryFollowups = useCallback(async () => {
-    if (!branchId) return
+    if (!branchId || isCombinedHall) return
     try {
       const { followups } = await api('list_open_enquiry_followups', { branchId })
       const todayEnd = new Date(); todayEnd.setHours(23, 59, 59, 999)
@@ -268,6 +579,7 @@ export default function DashboardPage() {
     } catch { /* ignore */ }
   }
 
+  if (isCombinedHall) return <CombinedDashboard />
   if (!branchId) return <p>Select a branch to continue.</p>
   if (loading && !data) return <p>Loading dashboard…</p>
 

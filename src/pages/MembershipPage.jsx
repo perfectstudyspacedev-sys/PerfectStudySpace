@@ -1516,9 +1516,98 @@ function LockerTab({ branchId }) {
   )
 }
 
+function groupByBranchName(rows) {
+  const groups = new Map()
+  for (const row of rows) {
+    const key = row.branches?.name ?? row.branch_name ?? 'Unknown Branch'
+    if (!groups.has(key)) groups.set(key, [])
+    groups.get(key).push(row)
+  }
+  return [...groups.entries()].sort(([a], [b]) => a.localeCompare(b))
+}
+
+// ── Combined Hall — read-only, every branch's active members at once. New
+// Registration/Locker/Waitlist all belong to one specific branch, so they're only offered
+// once a real branch is selected — switch out of Combined Hall from the branch dropdown to
+// use them, or drill into a student's profile below for renew/hold/quit actions.
+function CombinedMembershipView() {
+  const [members, setMembers] = useState(null)
+  const [error, setError] = useState('')
+  const [branchFilter, setBranchFilter] = useState(null) // null = every branch
+
+  const load = useCallback(async () => {
+    setError('')
+    try {
+      const data = await api('list_active_memberships', { allBranches: true })
+      setMembers(data.members ?? [])
+    } catch (err) {
+      setError(err.message)
+    }
+  }, [])
+
+  useEffect(() => { load() }, [load])
+
+  const allGroups = members ? groupByBranchName(members) : []
+  const visibleGroups = branchFilter ? allGroups.filter(([name]) => name === branchFilter) : allGroups
+
+  return (
+    <>
+      <div className="page-header"><h1>Membership — Combined Hall</h1></div>
+      {error && <p className="error-msg" style={{ marginBottom: '1rem' }}>{error}</p>}
+      {members && allGroups.length > 0 && (
+        <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap', marginBottom: '1rem' }}>
+          <button type="button" className={`btn ${branchFilter === null ? 'btn-primary' : 'btn-ghost'}`} style={{ padding: '0.35rem 0.9rem', fontSize: '0.82rem' }} onClick={() => setBranchFilter(null)}>
+            All Branches ({members.length})
+          </button>
+          {allGroups.map(([name, rows]) => (
+            <button
+              key={name} type="button"
+              className={`btn ${branchFilter === name ? 'btn-primary' : 'btn-ghost'}`}
+              style={{ padding: '0.35rem 0.9rem', fontSize: '0.82rem' }}
+              onClick={() => setBranchFilter(name)}
+            >
+              {name} ({rows.length})
+            </button>
+          ))}
+        </div>
+      )}
+      {!members ? <p>Loading…</p> : (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: '1.25rem' }}>
+          {visibleGroups.map(([branchName, rows]) => (
+            <div key={branchName} className="card">
+              <h3 style={{ color: 'var(--accent)', marginBottom: '0.75rem' }}>{branchName} · {rows.length} active membership{rows.length === 1 ? '' : 's'}</h3>
+              <table className="data-table">
+                <thead>
+                  <tr><th>Student</th><th>Category</th><th>Hours</th><th>Cabin</th><th>Start</th><th>End</th><th>Fee Due</th></tr>
+                </thead>
+                <tbody>
+                  {rows.map(m => (
+                    <tr key={m.membership_id} className={m.fee_due > 0 ? 'row-overdue' : ''}>
+                      <td>
+                        <Link to={`/students/${m.student_id}`} style={{ color: 'var(--accent)' }}>{m.student_name}</Link>
+                        <div className="mono" style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>{m.student_phone}</div>
+                      </td>
+                      <td className="cap">{m.category}</td>
+                      <td className="mono">{m.hours_per_day}h/day</td>
+                      <td>{m.cabin_no ?? '—'}</td>
+                      <td className="mono">{formatDate(m.start_date)}</td>
+                      <td className="mono">{formatDate(m.end_date)}</td>
+                      <td className="mono" style={{ color: m.fee_due > 0 ? '#ff8888' : undefined, fontWeight: m.fee_due > 0 ? 700 : 400 }}>{formatCurrency(m.fee_due)}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          ))}
+        </div>
+      )}
+    </>
+  )
+}
+
 // ── Page ───────────────────────────────────────────────────────────────────
 export default function MembershipPage() {
-  const { branchId } = useAuth()
+  const { branchId, isCombinedHall } = useAuth()
   const [tab, setTab] = useState('active')
   const [tempPackages, setTempPackages] = useState(DEFAULT_TEMP_PACKAGES)
   const [permPackages, setPermPackages] = useState(DEFAULT_PERM_PACKAGES)
@@ -1540,6 +1629,8 @@ export default function MembershipPage() {
   }, [])
 
   useEffect(() => { loadFeeConfig() }, [loadFeeConfig])
+
+  if (isCombinedHall) return <CombinedMembershipView />
 
   return (
     <>

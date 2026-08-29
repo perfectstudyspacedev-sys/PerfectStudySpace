@@ -42,12 +42,16 @@ function formatDateTick(dateStr) {
 }
 
 export default function RevenuePage() {
-  const { branchId, isOwner, branches } = useAuth()
+  const { branchId, isOwner, branches, isCombinedHall } = useAuth()
   const [period, setPeriod] = useState('today')
   const [customFrom, setCustomFrom] = useState(todayISO())
   const [customTo, setCustomTo] = useState(todayISO())
   const [customApplied, setCustomApplied] = useState(false)
   const [allBranches, setAllBranches] = useState(false)
+  // Combined Hall has no single real branch to fall back to — the existing "All branches"
+  // mode (get_revenue etc. already ignore branchId entirely when this is true) is forced on
+  // rather than building a second combined view; the manual toggle is just hidden below.
+  const effectiveAllBranches = isCombinedHall || allBranches
   const [revenue, setRevenue] = useState(null)
   const [referralStats, setReferralStats] = useState(null)
   const [transactions, setTransactions] = useState([])
@@ -61,16 +65,16 @@ export default function RevenuePage() {
       period: period === 'custom' && customApplied ? undefined : period,
       dateFrom: period === 'custom' && customApplied ? customFrom : undefined,
       dateTo: period === 'custom' && customApplied ? customTo : undefined,
-      allBranches: isOwner && allBranches,
+      allBranches: isOwner && effectiveAllBranches,
     }
     const data = await api('get_revenue', payload)
     setRevenue(data)
-  }, [branchId, period, customFrom, customTo, customApplied, allBranches, isOwner])
+  }, [branchId, period, customFrom, customTo, customApplied, effectiveAllBranches, isOwner])
 
   const loadReferralStats = useCallback(async () => {
-    const data = await api('get_referral_stats', { branchId, allBranches: isOwner && allBranches })
+    const data = await api('get_referral_stats', { branchId, allBranches: isOwner && effectiveAllBranches })
     setReferralStats(data)
-  }, [branchId, allBranches, isOwner])
+  }, [branchId, effectiveAllBranches, isOwner])
 
   const loadTransactions = useCallback(async () => {
     const data = await api('list_transactions', {
@@ -79,10 +83,10 @@ export default function RevenuePage() {
       dateFrom: period === 'custom' && customApplied ? customFrom : undefined,
       dateTo: period === 'custom' && customApplied ? customTo : undefined,
       category: categoryFilter || undefined, search: search || undefined,
-      allBranches: isOwner && allBranches,
+      allBranches: isOwner && effectiveAllBranches,
     })
     setTransactions(data.transactions ?? [])
-  }, [branchId, period, customFrom, customTo, customApplied, categoryFilter, search, allBranches, isOwner])
+  }, [branchId, period, customFrom, customTo, customApplied, categoryFilter, search, effectiveAllBranches, isOwner])
 
   useEffect(() => { loadRevenue() }, [loadRevenue])
   useEffect(() => { loadReferralStats() }, [loadReferralStats])
@@ -125,7 +129,9 @@ export default function RevenuePage() {
     <>
       <div className="page-header">
         <h1>Revenue & Reporting</h1>
-        {isOwner && (
+        {isCombinedHall ? (
+          <span style={{ fontSize: '0.85rem', color: 'var(--text-muted)' }}>🏢 All branches (Combined Hall)</span>
+        ) : isOwner && (
           <label style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', fontSize: '0.85rem' }}>
             <input type="checkbox" checked={allBranches} onChange={(e) => setAllBranches(e.target.checked)} />
             All branches (consolidated)

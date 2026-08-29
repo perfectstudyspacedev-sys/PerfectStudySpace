@@ -9,6 +9,11 @@ if (!supabaseUrl || !supabaseAnonKey) {
 
 export const supabase = createClient(supabaseUrl, supabaseAnonKey)
 
+// Sentinel stored in the same slot as a real branch id (pss_branch_id) to mean "Combined
+// Hall is selected" — reusing that one slot means persistence-across-reload, the branch
+// switcher, and every page's branchId check all work with zero extra state to keep in sync.
+export const COMBINED_HALL_ID = '__combined_hall__'
+
 function getToken() {
   return sessionStorage.getItem('pss_token')
 }

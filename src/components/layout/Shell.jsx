@@ -1,9 +1,10 @@
 import { useState, useEffect, useRef } from 'react'
-import { NavLink, Outlet, useNavigate, useLocation } from 'react-router-dom'
+import { NavLink, Outlet, useNavigate } from 'react-router-dom'
 import { useAuth } from '../../context/AuthContext'
 import { useSessionAlerts } from '../../hooks/useSessionAlerts'
 import { useMessageAlerts } from '../../hooks/useMessageAlerts'
-import { api } from '../../lib/api'
+import { useTaskAlerts } from '../../hooks/useTaskAlerts'
+import { api, COMBINED_HALL_ID } from '../../lib/api'
 
 function BackgroundSketches() {
   return (
@@ -26,6 +27,7 @@ const TOAST_META = {
   warn: { icon: '⏰', title: 'Time Almost Up', color: 'var(--accent)', bg: '#1a1200', border: '#ffb800', shadow: 'rgba(255,184,0,0.35)' },
   message: { icon: '💬', title: 'New Message', color: '#ffaa44', bg: '#1a1000', border: '#ff9500', shadow: 'rgba(255,149,0,0.35)' },
   cross_branch: { icon: '🔄', title: 'Cross-Branch Visit', color: '#a78bfa', bg: '#150f24', border: '#8b5cf6', shadow: 'rgba(139,92,246,0.35)' },
+  task: { icon: '📋', title: 'New Task Assigned', color: '#4ade80', bg: '#0d1a0d', border: '#4ade80', shadow: 'rgba(74,222,128,0.35)' },
 }
 
 // Only the 4 most recent toasts stack up on screen — a burst of alerts (e.g. several
@@ -107,6 +109,7 @@ function NotificationBell({ toasts, dismiss, dismissAll }) {
   const endCount = toasts.filter(t => t.level === 'end').length
   const messageCount = toasts.filter(t => t.level === 'message').length
   const crossBranchCount = toasts.filter(t => t.level === 'cross_branch').length
+  const taskCount = toasts.filter(t => t.level === 'task').length
 
   useEffect(() => {
     if (!open) return
@@ -126,7 +129,7 @@ function NotificationBell({ toasts, dismiss, dismissAll }) {
         aria-label="Notifications"
       >
         🔔
-        {(warnCount > 0 || endCount > 0 || messageCount > 0 || crossBranchCount > 0) && (
+        {(warnCount > 0 || endCount > 0 || messageCount > 0 || crossBranchCount > 0 || taskCount > 0) && (
           <span style={{ position: 'absolute', top: -6, right: -10, display: 'flex', gap: 2 }}>
             {warnCount > 0 && (
               <span style={{
@@ -151,6 +154,12 @@ function NotificationBell({ toasts, dismiss, dismissAll }) {
                 background: '#8b5cf6', color: '#fff', borderRadius: '50%', width: 16, height: 16,
                 fontSize: '0.62rem', fontWeight: 700, display: 'flex', alignItems: 'center', justifyContent: 'center',
               }}>{crossBranchCount}</span>
+            )}
+            {taskCount > 0 && (
+              <span style={{
+                background: '#4ade80', color: '#0d1a0d', borderRadius: '50%', width: 16, height: 16,
+                fontSize: '0.62rem', fontWeight: 700, display: 'flex', alignItems: 'center', justifyContent: 'center',
+              }}>{taskCount}</span>
             )}
           </span>
         )}
@@ -200,15 +209,19 @@ function NotificationBell({ toasts, dismiss, dismissAll }) {
 }
 
 export default function Shell() {
-  const { staff, logout, isOwner, branchId, selectBranch, branches, activeBranch } = useAuth()
+  const { staff, logout, isOwner, branchId, selectBranch, branches, activeBranch, isCombinedHall } = useAuth()
   const navigate = useNavigate()
-  const location = useLocation()
-  const onCombinedHall = location.pathname.startsWith('/combined-hall')
-  const session = useSessionAlerts(branchId)
-  const messages = useMessageAlerts(branchId, staff?.id)
-  const toasts = [...session.toasts, ...messages.toasts]
-  const dismiss = (id) => { session.dismiss(id); messages.dismiss(id) }
-  const dismissAll = () => { session.dismissAll(); messages.dismissAll() }
+  // Neither hook has a meaningful single branch_id to filter on while Combined Hall is
+  // selected — both already no-op on a falsy branchId, so this just borrows that guard
+  // instead of sending the '__combined_hall__' sentinel to the backend as a branch filter.
+  const session = useSessionAlerts(isCombinedHall ? null : branchId)
+  const messages = useMessageAlerts(isCombinedHall ? null : branchId, staff?.id)
+  // Task assignment doesn't depend on branch context (list_tasks allBranches:true sidesteps
+  // it entirely — see the hook), so this one runs the same in Combined Hall as anywhere else.
+  const taskAlerts = useTaskAlerts(staff?.id)
+  const toasts = [...session.toasts, ...messages.toasts, ...taskAlerts.toasts]
+  const dismiss = (id) => { session.dismiss(id); messages.dismiss(id); taskAlerts.dismiss(id) }
+  const dismissAll = () => { session.dismissAll(); messages.dismissAll(); taskAlerts.dismissAll() }
   const [sessionEnded, setSessionEnded] = useState(false)
   const [endSessionModal, setEndSessionModal] = useState(false)
   const [endSessionPassword, setEndSessionPassword] = useState('')
@@ -262,20 +275,22 @@ export default function Shell() {
             {isOwner && branches.length > 1 && (
               <div className="branch-switcher">
                 <select
-                  value={onCombinedHall ? '__combined_hall__' : (branchId || '')}
+                  value={branchId || ''}
                   onChange={(e) => {
-                    if (e.target.value === '__combined_hall__') {
-                      navigate('/combined-hall')
-                    } else {
-                      selectBranch(e.target.value)
-                      if (onCombinedHall) navigate('/')
-                    }
+                    const next = e.target.value
+                    selectBranch(next)
+                    // Combined Hall has no dedicated route anymore — every nav page renders
+                    // a combined view when isCombinedHall is true. Only force a jump to
+                    // Dashboard when *entering* Combined Hall (so it opens on the overview,
+                    // as it always has); switching between two real branches keeps whatever
+                    // page staff is already on, same as it's always worked.
+                    if (next === COMBINED_HALL_ID) navigate('/')
                   }}
                 >
                   {[...branches].sort((a, b) => (a.name === 'Ram Nagar' ? -1 : b.name === 'Ram Nagar' ? 1 : 0)).map(b => (
                     <option key={b.id} value={b.id}>{b.name}</option>
                   ))}
-                  <option value="__combined_hall__">🏢 Combined Hall</option>
+                  <option value={COMBINED_HALL_ID}>🏢 Combined Hall</option>
                 </select>
               </div>
             )}

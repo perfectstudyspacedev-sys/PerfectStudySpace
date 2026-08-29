@@ -1,4 +1,5 @@
 import { useState, useEffect, useCallback } from 'react'
+import { Link } from 'react-router-dom'
 import { XAxis, YAxis, Tooltip, ResponsiveContainer, AreaChart, Area, CartesianGrid } from 'recharts'
 import { useAuth } from '../context/AuthContext'
 import { api } from '../lib/api'
@@ -20,28 +21,35 @@ function describeActivity(a) {
 }
 
 export default function ReportsPage() {
-  const { branchId, isOwner } = useAuth()
+  const { branchId, isOwner, isCombinedHall } = useAuth()
   const [date, setDate] = useState(todayISO())
   const [period, setPeriod] = useState('day') // owner only: day | week | month | custom
   const [customFrom, setCustomFrom] = useState(todayISO())
   const [customTo, setCustomTo] = useState(todayISO())
   const [report, setReport] = useState(null)
   const [actionable, setActionable] = useState(null)
+  const [actionableStatusFilter, setActionableStatusFilter] = useState('')
+  const [actionableBranchFilter, setActionableBranchFilter] = useState(null) // null = every branch
   const [taskReport, setTaskReport] = useState(null)
   const [taskAllBranches, setTaskAllBranches] = useState(isOwner)
+  // get_daily_report / get_actionable_items both have allBranches modes now. get_recent_activity
+  // is still single-branch only — Combined Hall doesn't have a real branch to point it at, so
+  // that one stays disabled there (see the notice rendered below). Tasks Completed already had
+  // its own allBranches mode from before (same as Actions).
+  const effectiveTaskAllBranches = isCombinedHall || taskAllBranches
   const [loading, setLoading] = useState(false)
   const [recentActivity, setRecentActivity] = useState([])
 
   const load = useCallback(async () => {
-    if (!branchId) return
+    if (!branchId && !isCombinedHall) return
     setLoading(true)
     try {
       const reportPayload = isOwner && period !== 'day'
-        ? { branchId, period, dateFrom: period === 'custom' ? customFrom : undefined, dateTo: period === 'custom' ? customTo : undefined }
-        : { branchId, date }
+        ? { branchId, period, dateFrom: period === 'custom' ? customFrom : undefined, dateTo: period === 'custom' ? customTo : undefined, allBranches: isCombinedHall }
+        : { branchId, date, allBranches: isCombinedHall }
       const [rpt, act] = await Promise.all([
         api('get_daily_report', reportPayload),
-        api('get_actionable_items', { branchId }),
+        api('get_actionable_items', { branchId, allBranches: isCombinedHall }),
       ])
       setReport(rpt)
       setActionable(act)
@@ -50,24 +58,25 @@ export default function ReportsPage() {
     } finally {
       setLoading(false)
     }
-  }, [branchId, date, isOwner, period, customFrom, customTo])
+  }, [branchId, isCombinedHall, date, isOwner, period, customFrom, customTo])
 
   const loadTaskReport = useCallback(async () => {
     if (!branchId) return
     try {
-      const data = await api('get_task_completion_report', { branchId, date, allBranches: isOwner && taskAllBranches })
+      const data = await api('get_task_completion_report', { branchId, date, allBranches: isOwner && effectiveTaskAllBranches })
       setTaskReport(data)
     } catch (e) { console.error(e) }
-  }, [branchId, date, isOwner, taskAllBranches])
+  }, [branchId, date, isOwner, effectiveTaskAllBranches])
 
   const loadRecentActivity = useCallback(async () => {
-    // Only shown for the Day view — skip fetching entirely for Week/Month/Custom.
-    if (!branchId || (isOwner && period !== 'day')) return
+    // Only shown for the Day view — skip fetching entirely for Week/Month/Custom, and
+    // entirely in Combined Hall (single-branch only, no allBranches mode).
+    if (!branchId || isCombinedHall || (isOwner && period !== 'day')) return
     try {
       const data = await api('get_recent_activity', { branchId, date })
       setRecentActivity(data.recentActivity ?? [])
     } catch (e) { console.error(e) }
-  }, [branchId, date, isOwner, period])
+  }, [branchId, isCombinedHall, date, isOwner, period])
 
   useEffect(() => { load() }, [load])
   useEffect(() => { loadTaskReport() }, [loadTaskReport])
@@ -78,25 +87,33 @@ export default function ReportsPage() {
   const buildActionableRows = (act) => {
     if (!act) return []
     const rows = new Map()
-    const upsert = (studentId, name, phone, status, dueDate, amount, overdue) => {
+    const upsert = (studentId, name, phone, branchName, status, dueDate, amount, overdue) => {
       const key = studentId ?? phone ?? name
       if (!key) return
-      const row = rows.get(key) ?? { name, phone, statuses: [], dueDate: null, amount: 0, overdue: false }
+      const row = rows.get(key) ?? { studentId, name, phone, branchName, statuses: [], dueDate: null, amount: 0, overdue: false }
       if (!row.statuses.includes(status)) row.statuses.push(status)
       if (!row.dueDate || (dueDate && dueDate < row.dueDate)) row.dueDate = dueDate
       row.amount += Number(amount || 0)
       if (overdue) row.overdue = true
       rows.set(key, row)
     }
-    ;(act.expiredMemberships ?? []).forEach(m => upsert(m.student_id, m.students?.name, m.students?.phone, 'Expired', m.end_date, 0, true))
-    ;(act.dueToday ?? []).forEach(m => upsert(m.student_id, m.students?.name, m.students?.phone, 'Payment Due', m.due_date, m.fee_due, true))
-    ;(act.expiringSoon ?? []).forEach(m => upsert(m.student_id, m.students?.name, m.students?.phone, 'Expiring This Week', m.end_date, 0, false))
-    ;(act.overdueLockers ?? []).forEach(l => upsert(l.student_id, l.students?.name, l.students?.phone, 'Locker Overdue', l.locker_due_date, l.fee_due, true))
+    ;(act.expiredMemberships ?? []).forEach(m => upsert(m.student_id, m.students?.name, m.students?.phone, m.branches?.name, 'Expired', m.end_date, 0, true))
+    ;(act.dueToday ?? []).forEach(m => upsert(m.student_id, m.students?.name, m.students?.phone, m.branches?.name, 'Payment Due', m.due_date, m.fee_due, true))
+    ;(act.expiringSoon ?? []).forEach(m => upsert(m.student_id, m.students?.name, m.students?.phone, m.branches?.name, 'Expiring This Week', m.end_date, 0, false))
+    ;(act.overdueLockers ?? []).forEach(l => upsert(l.student_id, l.students?.name, l.students?.phone, l.branches?.name, 'Locker Overdue', l.locker_due_date, l.fee_due, true))
     return [...rows.entries()].map(([key, row]) => ({ key, ...row }))
       .sort((a, b) => (a.dueDate ?? '').localeCompare(b.dueDate ?? ''))
   }
 
-  const actionableRows = buildActionableRows(actionable)
+  const ACTIONABLE_STATUSES = ['Expired', 'Payment Due', 'Expiring This Week', 'Locker Overdue']
+
+  const allActionableRows = buildActionableRows(actionable)
+  const actionableBranchNames = isCombinedHall
+    ? [...new Set(allActionableRows.map(r => r.branchName ?? 'Unknown Branch'))].sort((a, b) => a.localeCompare(b))
+    : []
+  const actionableRows = allActionableRows
+    .filter(r => !actionableStatusFilter || r.statuses.includes(actionableStatusFilter))
+    .filter(r => !actionableBranchFilter || (r.branchName ?? 'Unknown Branch') === actionableBranchFilter)
   const totalPendingDue = actionableRows.reduce((sum, r) => sum + Number(r.amount || 0), 0)
 
   const exportActionable = () => {
@@ -163,13 +180,29 @@ export default function ReportsPage() {
 
       {loading && <p>Loading…</p>}
 
+      {isCombinedHall && (
+        <div className="card" style={{ marginBottom: '1rem', background: 'rgba(255,215,0,0.05)' }}>
+          <p style={{ fontSize: '0.85rem', color: 'var(--text-muted)' }}>
+            🏢 Showing the Daily Report, Actionable Items, and Tasks Completed combined across
+            every branch. Recent Activity is still a per-branch view — select a specific branch
+            from the branch dropdown to see it.
+          </p>
+        </div>
+      )}
+
       {report && (
         <>
           <div className="stats-row">
             {isOwner && (
               <div className="card stat-card">
                 <div className="value" style={{ color: totalPendingDue > 0 ? '#ff8888' : undefined }}>{formatCurrency(totalPendingDue)}</div>
-                <div className="label">Pending Due</div>
+                <div className="label">Pending Due{actionableStatusFilter || actionableBranchFilter ? ' (Filtered)' : ''}</div>
+              </div>
+            )}
+            {report.activeMemberships != null && (
+              <div className="card stat-card">
+                <div className="value">{report.activeMemberships}</div>
+                <div className="label">Active Memberships{isCombinedHall ? ' (All Branches)' : ''}</div>
               </div>
             )}
           </div>
@@ -203,6 +236,26 @@ export default function ReportsPage() {
                   <div className="label">Permanent</div>
                 </div>
               </div>
+            </div>
+          )}
+
+          {report.byBranch?.length > 0 && (
+            <div className="card" style={{ marginBottom: '1rem' }}>
+              <h3 style={{ color: 'var(--accent)', marginBottom: '0.75rem' }}>By Branch</h3>
+              <table className="data-table">
+                <thead>
+                  <tr><th>Branch</th><th>Attendance (Distinct Students)</th><th>Active Memberships</th></tr>
+                </thead>
+                <tbody>
+                  {report.byBranch.map(b => (
+                    <tr key={b.name}>
+                      <td><strong>{b.name}</strong></td>
+                      <td className="mono">{b.total}</td>
+                      <td className="mono">{b.activeMemberships}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
             </div>
           )}
 
@@ -269,7 +322,9 @@ export default function ReportsPage() {
       <div className="card" style={{ marginBottom: '1rem' }}>
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.75rem', flexWrap: 'wrap', gap: '0.5rem' }}>
           <h3 style={{ color: 'var(--accent)' }}>Tasks Completed — {formatDate(date)}</h3>
-          {isOwner && (
+          {isCombinedHall ? (
+            <span style={{ fontSize: '0.85rem', color: 'var(--text-muted)' }}>🏢 All branches (Combined Hall)</span>
+          ) : isOwner && (
             <label style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', fontSize: '0.85rem', color: 'var(--text-muted)' }}>
               <input type="checkbox" checked={taskAllBranches} onChange={(e) => setTaskAllBranches(e.target.checked)} />
               All branches
@@ -287,7 +342,7 @@ export default function ReportsPage() {
               <thead>
                 <tr>
                   <th>Title</th>
-                  {taskAllBranches && <th>Branch</th>}
+                  {effectiveTaskAllBranches && <th>Branch</th>}
                   <th>Assigned To</th>
                   <th>Repeat</th>
                   <th>Status</th>
@@ -297,7 +352,7 @@ export default function ReportsPage() {
                 {taskReport.tasks.map(t => (
                   <tr key={t.id}>
                     <td>{t.title}</td>
-                    {taskAllBranches && <td style={{ fontSize: '0.82rem' }}>{t.branches?.name ?? '—'}</td>}
+                    {effectiveTaskAllBranches && <td style={{ fontSize: '0.82rem' }}>{t.branches?.name ?? '—'}</td>}
                     <td style={{ fontSize: '0.85rem' }}>{t.assigned_to?.display_name || t.assigned_to?.username}</td>
                     <td style={{ fontSize: '0.8rem', textTransform: 'capitalize' }}>{t.repeat_interval === 'none' ? '—' : t.repeat_interval}</td>
                     <td>
@@ -320,18 +375,65 @@ export default function ReportsPage() {
       {actionable && (
         <div className="card">
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', flexWrap: 'wrap', gap: '0.5rem', marginBottom: '0.75rem' }}>
-            <h3 style={{ color: 'var(--accent)' }}>Actionable Items (Today)</h3>
+            <h3 style={{ color: 'var(--accent)' }}>Actionable Items (Today){isCombinedHall ? ' — All Branches' : ''}</h3>
             {totalPendingDue > 0 && (
               <span className="mono" style={{ color: '#ff8888', fontWeight: 700, fontSize: '0.95rem' }}>
                 Total Pending Due: {formatCurrency(totalPendingDue)}
               </span>
             )}
           </div>
+
+          <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap', marginBottom: '0.75rem' }}>
+            {[{ value: '', label: 'All' }, ...ACTIONABLE_STATUSES.map(s => ({ value: s, label: s }))].map(({ value, label }) => (
+              <button
+                key={value || 'all'} type="button"
+                onClick={() => setActionableStatusFilter(value)}
+                style={{
+                  padding: '3px 12px', borderRadius: 20, fontSize: '0.78rem', fontWeight: 600, cursor: 'pointer',
+                  border: `1px solid ${actionableStatusFilter === value ? 'var(--accent)' : '#333'}`,
+                  background: actionableStatusFilter === value ? 'rgba(255,215,0,0.1)' : '#141414',
+                  color: actionableStatusFilter === value ? 'var(--accent)' : 'var(--text-muted)',
+                }}
+              >
+                {label}
+              </button>
+            ))}
+          </div>
+
+          {isCombinedHall && actionableBranchNames.length > 0 && (
+            <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap', marginBottom: '0.75rem' }}>
+              <button
+                type="button" onClick={() => setActionableBranchFilter(null)}
+                className={`btn ${actionableBranchFilter === null ? 'btn-primary' : 'btn-ghost'}`}
+                style={{ padding: '0.3rem 0.8rem', fontSize: '0.78rem' }}
+              >
+                All Branches
+              </button>
+              {actionableBranchNames.map(name => (
+                <button
+                  key={name} type="button" onClick={() => setActionableBranchFilter(name)}
+                  className={`btn ${actionableBranchFilter === name ? 'btn-primary' : 'btn-ghost'}`}
+                  style={{ padding: '0.3rem 0.8rem', fontSize: '0.78rem' }}
+                >
+                  {name}
+                </button>
+              ))}
+            </div>
+          )}
+
           {actionableRows.length === 0 ? (
-            <p style={{ color: 'var(--text-muted)' }}>All clear — no urgent follow-ups.</p>
+            <p style={{ color: 'var(--text-muted)' }}>
+              {actionableStatusFilter || actionableBranchFilter ? 'No students match this filter.' : 'All clear — no urgent follow-ups.'}
+            </p>
           ) : (
             <table className="data-table">
-              <thead><tr><th>Status</th><th>Student</th><th>Phone</th><th>Since / Due</th><th>Amount</th></tr></thead>
+              <thead>
+                <tr>
+                  <th>Status</th><th>Student</th><th>Phone</th>
+                  {isCombinedHall && <th>Branch</th>}
+                  <th>Since / Due</th><th>Amount</th>
+                </tr>
+              </thead>
               <tbody>
                 {actionableRows.map(r => (
                   <tr key={r.key} className={r.overdue ? 'row-overdue' : ''}>
@@ -348,8 +450,11 @@ export default function ReportsPage() {
                         ))}
                       </div>
                     </td>
-                    <td>{r.name}</td>
+                    <td>
+                      {r.studentId ? <Link to={`/students/${r.studentId}`} style={{ color: 'var(--accent)' }}>{r.name}</Link> : r.name}
+                    </td>
                     <td className="mono">{r.phone}</td>
+                    {isCombinedHall && <td style={{ fontSize: '0.82rem' }}>{r.branchName ?? '—'}</td>}
                     <td className="mono">{r.dueDate ? formatDate(r.dueDate) : '—'}</td>
                     <td className="mono">{r.amount > 0 ? formatCurrency(r.amount) : '—'}</td>
                   </tr>
@@ -360,7 +465,7 @@ export default function ReportsPage() {
         </div>
       )}
 
-      {(!isOwner || period === 'day') && (
+      {!isCombinedHall && (!isOwner || period === 'day') && (
         <div className="card" style={{ marginTop: '1rem' }}>
           <h3 style={{ color: 'var(--accent)', marginBottom: '0.75rem' }}>
             Recent Activity — {formatDate(date)}

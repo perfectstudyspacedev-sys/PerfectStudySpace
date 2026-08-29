@@ -1,5 +1,5 @@
 import { createContext, useContext, useState, useEffect, useCallback } from 'react'
-import { api, setToken, setStoredStaff, getStoredStaff, getStoredBranchId, setStoredBranchId } from '../lib/api'
+import { api, setToken, setStoredStaff, getStoredStaff, getStoredBranchId, setStoredBranchId, COMBINED_HALL_ID } from '../lib/api'
 
 const AuthContext = createContext(null)
 
@@ -109,12 +109,13 @@ export function AuthProvider({ children }) {
   // instead of "OWNER" in a label, or a control owner should see but admin's own account
   // settings shouldn't need). Most of the app should keep using isOwner above.
   const isAdmin = staff?.role === 'admin'
-  const activeBranch = branches.find(b => b.id === branchId) ?? null
+  const isCombinedHall = branchId === COMBINED_HALL_ID
+  const activeBranch = isCombinedHall ? null : (branches.find(b => b.id === branchId) ?? null)
 
   return (
     <AuthContext.Provider value={{
       staff, loading, login, logout, isOwner, isAdmin,
-      branchId, selectBranch, branches, activeBranch,
+      branchId, selectBranch, branches, activeBranch, isCombinedHall,
     }}>
       {children}
     </AuthContext.Provider>

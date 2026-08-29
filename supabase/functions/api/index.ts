@@ -208,6 +208,17 @@ function addDays(dateStr: string, days: number): string {
   return date.toISOString().slice(0, 10);
 }
 
+function daysBetween(fromDateStr: string, toDateStr: string): number {
+  return Math.floor((new Date(toDateStr + "T12:00:00").getTime() - new Date(fromDateStr + "T12:00:00").getTime()) / 86_400_000);
+}
+
+// How many days past end_date a membership is still allowed to check in / renew as a
+// continuation rather than being treated as a fresh restart. Shared by the check-in gate
+// (blocks check-in once past grace) and renew_membership's startDate calc (below) — both
+// must agree on the same window, or a renewal inside grace could compute a start date the
+// check-in gate would then treat as still-expired.
+const MEMBERSHIP_GRACE_DAYS = 10;
+
 // A membership's end date is billing-cycle style: one day short of the same day N months
 // out, so a period never spills into the day it would "restart" on (e.g. 1 month from the
 // 15th ends the 14th, not the 15th). Starting on the 1st is the case that makes this
@@ -1373,14 +1384,13 @@ Deno.serve(async (req) => {
       const today = todayISO();
       const isExpiredMembership = membership.end_date < today;
       if (isExpiredMembership) {
-        const daysSinceExpiry = Math.floor((new Date(today + "T12:00:00").getTime() - new Date(membership.end_date + "T12:00:00").getTime()) / 86_400_000);
-        const GRACE_DAYS = 10;
-        if (daysSinceExpiry > GRACE_DAYS) {
+        const daysSinceExpiry = daysBetween(membership.end_date, today);
+        if (daysSinceExpiry > MEMBERSHIP_GRACE_DAYS) {
           const dueAmount = Number(membership.fee_due);
           if (dueAmount > 0) {
-            return err(`Dues not cleared (₹${dueAmount} pending) even ${daysSinceExpiry} days after membership expiration — the ${GRACE_DAYS}-day grace period is over. Please clear dues and renew before checking in.`);
+            return err(`Dues not cleared (₹${dueAmount} pending) even ${daysSinceExpiry} days after membership expiration — the ${MEMBERSHIP_GRACE_DAYS}-day grace period is over. Please clear dues and renew before checking in.`);
           }
-          return err(`Membership expired ${daysSinceExpiry} days ago — the ${GRACE_DAYS}-day grace period is over. Please renew before checking in.`);
+          return err(`Membership expired ${daysSinceExpiry} days ago — the ${MEMBERSHIP_GRACE_DAYS}-day grace period is over. Please renew before checking in.`);
         }
       }
 
@@ -2636,9 +2646,11 @@ Deno.serve(async (req) => {
 
     // ─── FOOD ───
     if (action === "list_food_items") {
-      const { branchId } = payload;
-      let q = db.from("food_items").select("*").eq("is_active", true).order("name");
-      if (branchId) {
+      const { branchId, allBranches } = payload;
+      let q = db.from("food_items").select("*, branches(name)").eq("is_active", true).order("name");
+      if (allBranches && isOwnerOrAdmin(staff)) {
+        // no branch filter — every branch's menu, for the Combined Hall read-only view
+      } else {
         if (!requireBranch(staff, branchId)) return err("Branch access denied", 403);
         q = q.eq("branch_id", branchId);
       }
@@ -2752,12 +2764,99 @@ Deno.serve(async (req) => {
       return json({ ok: true });
     }
 
-    if (action === "list_food_bills") {
-      const { branchId, dateFrom, dateTo } = payload;
+    // ─── INVENTORY MANAGEMENT (fully separate from the food menu — see 045_inventory_items) ───
+    if (action === "list_inventory_items") {
+      const { branchId, allBranches } = payload;
+      let q = db.from("inventory_items").select("*, branches(name)").order("name");
+      if (allBranches && isOwnerOrAdmin(staff)) {
+        // no branch filter — every branch's inventory, for the Combined Hall read-only view
+      } else {
+        if (!requireBranch(staff, branchId)) return err("Branch access denied", 403);
+        q = q.eq("branch_id", branchId);
+      }
+      const { data } = await q;
+      return json({ items: data ?? [] });
+    }
+
+    // Owner/admin types a name and a packet count. Upserts by (branch, lower(name)) — typing
+    // an existing item's name adds to its count; typing a new name creates it. No link to
+    // food_items at all, deliberately — inventory is tracked independently of the menu.
+    if (action === "add_inventory_item") {
+      if (!isOwnerOrAdmin(staff)) return err("Owner only", 403);
+      const { branchId, name, addQuantity } = payload;
       if (!requireBranch(staff, branchId)) return err("Branch access denied", 403);
-      const { data } = await db.from("food_bills").select("*, food_bill_items(*)").eq("branch_id", branchId)
+      const trimmedName = name?.trim();
+      if (!trimmedName) return err("Enter an item name");
+      const addNum = Number(addQuantity);
+      if (!(addNum > 0)) return err("Enter a quantity greater than 0");
+
+      const { data: existing } = await db.from("inventory_items").select("id, quantity")
+        .eq("branch_id", branchId).ilike("name", trimmedName).maybeSingle();
+
+      let itemId: string;
+      let newQuantity: number;
+      if (existing) {
+        itemId = existing.id;
+        newQuantity = Number(existing.quantity) + addNum;
+        await db.from("inventory_items").update({ quantity: newQuantity }).eq("id", itemId);
+      } else {
+        const { data: created, error } = await db.from("inventory_items")
+          .insert({ branch_id: branchId, name: trimmedName, quantity: addNum }).select("id").single();
+        if (error) return err(error.message);
+        itemId = created!.id;
+        newQuantity = addNum;
+      }
+      await db.from("inventory_logs").insert({
+        inventory_item_id: itemId, branch_id: branchId, action: "add", quantity: addNum, created_by_staff_id: staff.id,
+      });
+      return json({ ok: true, itemId, quantity: newQuantity });
+    }
+
+    // Staff-facing "Avail" — one click marks one packet used.
+    if (action === "avail_inventory_item") {
+      const { itemId, quantity } = payload;
+      const availNum = quantity != null ? Number(quantity) : 1;
+      if (!(availNum > 0)) return err("Enter a quantity greater than 0");
+      const { data: item } = await db.from("inventory_items").select("quantity, branch_id").eq("id", itemId).single();
+      if (!item) return err("Item not found");
+      if (!requireBranch(staff, item.branch_id)) return err("Branch access denied", 403);
+      if (item.quantity <= 0) return err("Out of stock");
+      if (availNum > item.quantity) return err(`Only ${item.quantity} in stock`);
+      const newQuantity = item.quantity - availNum;
+      await db.from("inventory_items").update({ quantity: newQuantity }).eq("id", itemId);
+      await db.from("inventory_logs").insert({
+        inventory_item_id: itemId, branch_id: item.branch_id, action: "avail", quantity: availNum, created_by_staff_id: staff.id,
+      });
+      return json({ ok: true, quantity: newQuantity });
+    }
+
+    if (action === "list_inventory_log") {
+      const { branchId, allBranches } = payload;
+      let q = db.from("inventory_logs")
+        .select("*, inventory_items(name), branches(name), staff:created_by_staff_id(display_name, username)")
+        .order("created_at", { ascending: false }).limit(100);
+      if (allBranches && isOwnerOrAdmin(staff)) {
+        // no branch filter — every branch's activity, for the Combined Hall read-only view
+      } else {
+        if (!requireBranch(staff, branchId)) return err("Branch access denied", 403);
+        q = q.eq("branch_id", branchId);
+      }
+      const { data } = await q;
+      return json({ logs: data ?? [] });
+    }
+
+    if (action === "list_food_bills") {
+      const { branchId, dateFrom, dateTo, allBranches } = payload;
+      let q = db.from("food_bills").select("*, food_bill_items(*), branches(name)")
         .gte("created_at", istDayStart(dateFrom)).lte("created_at", istDayEnd(dateTo))
         .order("created_at", { ascending: false });
+      if (allBranches && isOwnerOrAdmin(staff)) {
+        // no branch filter — every branch's bills, for the Combined Hall read-only view
+      } else {
+        if (!requireBranch(staff, branchId)) return err("Branch access denied", 403);
+        q = q.eq("branch_id", branchId);
+      }
+      const { data } = await q;
       return json({ bills: data ?? [] });
     }
 
@@ -2948,8 +3047,16 @@ Deno.serve(async (req) => {
     }
 
     if (action === "get_daily_report") {
-      const { branchId, date, period, dateFrom, dateTo } = payload;
-      if (!requireBranch(staff, branchId)) return err("Branch access denied", 403);
+      const { branchId, date, period, dateFrom, dateTo, allBranches } = payload;
+
+      let branchFilter: string[] = [];
+      if (allBranches && isOwnerOrAdmin(staff)) {
+        const { data: bs } = await db.from("branches").select("id");
+        branchFilter = bs?.map(b => b.id) ?? [];
+      } else {
+        if (!requireBranch(staff, branchId)) return err("Branch access denied", 403);
+        branchFilter = [branchId];
+      }
 
       // Staff only ever see a single day; the owner can additionally pick week/month/custom
       // (period-based) to see the same stats aggregated over a range.
@@ -2958,18 +3065,20 @@ Deno.serve(async (req) => {
       const toTs = istDayEnd(range.to);
 
       const { data: walkins } = await db.from("bookings").select("*, students(name)")
-        .eq("branch_id", branchId).eq("booking_type", "walkin")
+        .in("branch_id", branchFilter).eq("booking_type", "walkin")
         .gte("created_at", fromTs).lte("created_at", toTs);
 
       const { data: newMembers } = await db.from("memberships").select("*, students(name)")
-        .eq("branch_id", branchId).gte("created_at", fromTs).lte("created_at", toTs);
+        .in("branch_id", branchFilter).gte("created_at", fromTs).lte("created_at", toTs);
 
       // Attendance breakdown over the range — how many sessions were temporary vs permanent
       // members vs plain walk-ins, counted by distinct student (not by session, so a member
-      // who split their day into two sessions only counts once).
-      const { data: rangeBookingsRaw } = await db.from("bookings").select("student_id, booking_type, created_at")
-        .eq("branch_id", branchId).gte("created_at", fromTs).lte("created_at", toTs);
-      const rangeBookings = (rangeBookingsRaw ?? []) as { student_id: string; booking_type: string; created_at: string }[];
+      // who split their day into two sessions only counts once). With allBranches this
+      // dedupes org-wide too — a student who visited two branches the same day (a "cross-
+      // branch visit") is one person, counted once in the combined total.
+      const { data: rangeBookingsRaw } = await db.from("bookings").select("student_id, booking_type, created_at, branch_id, branches(name)")
+        .in("branch_id", branchFilter).gte("created_at", fromTs).lte("created_at", toTs);
+      const rangeBookings = (rangeBookingsRaw ?? []) as { student_id: string; booking_type: string; created_at: string; branch_id: string; branches: { name: string } | null }[];
       const attendanceBreakdown = {
         temporary: new Set(rangeBookings.filter(b => b.booking_type === "temporary").map(b => b.student_id)).size,
         permanent: new Set(rangeBookings.filter(b => b.booking_type === "permanent").map(b => b.student_id)).size,
@@ -2977,10 +3086,41 @@ Deno.serve(async (req) => {
         total: new Set(rangeBookings.map(b => b.student_id)).size,
       };
 
-      // New registrations — brand-new students created at this branch in the range (membership
-      // or walk-in, whichever brought them in first).
+      // Active memberships right now (not "new in range" — currently valid, any branch in
+      // scope) — the "how many memberships are in use" number the owner actually wants
+      // alongside the attendance breakdown above.
+      const { data: activeMembershipRows } = await db.from("memberships")
+        .select("branch_id").in("branch_id", branchFilter).eq("is_active", true).gte("end_date", todayISO());
+      const activeMemberships = (activeMembershipRows ?? []).length;
+
+      // Per-branch breakdown — only meaningful (and only computed) once more than one branch
+      // is in view, same convention as get_revenue's byBranch.
+      let byBranch: { name: string; total: number; activeMemberships: number }[] = [];
+      if (branchFilter.length > 1) {
+        const byBranchIdMap: Record<string, { name: string; students: Set<string> }> = {};
+        for (const b of rangeBookings) {
+          const key = b.branch_id;
+          if (!byBranchIdMap[key]) byBranchIdMap[key] = { name: b.branches?.name ?? "Unknown", students: new Set() };
+          byBranchIdMap[key].students.add(b.student_id);
+        }
+        const activeMembershipCounts: Record<string, number> = {};
+        for (const m of activeMembershipRows ?? []) activeMembershipCounts[m.branch_id] = (activeMembershipCounts[m.branch_id] ?? 0) + 1;
+        const allBranchIds = new Set([...Object.keys(byBranchIdMap), ...Object.keys(activeMembershipCounts)]);
+        const { data: branchNameRows } = await db.from("branches").select("id, name").in("id", [...allBranchIds]);
+        const nameById = new Map(branchNameRows?.map(b => [b.id, b.name]) ?? []);
+        byBranch = [...allBranchIds]
+          .map(id => ({
+            name: byBranchIdMap[id]?.name ?? nameById.get(id) ?? "Unknown",
+            total: byBranchIdMap[id]?.students.size ?? 0,
+            activeMemberships: activeMembershipCounts[id] ?? 0,
+          }))
+          .sort((a, b) => b.total - a.total);
+      }
+
+      // New registrations — brand-new students created at this branch (or every branch, with
+      // allBranches) in the range (membership or walk-in, whichever brought them in first).
       const { count: newRegistrations } = await db.from("students")
-        .select("*", { count: "exact", head: true }).eq("branch_id", branchId)
+        .select("*", { count: "exact", head: true }).in("branch_id", branchFilter)
         .gte("created_at", fromTs).lte("created_at", toTs);
 
       // Trend charts (owner, non-single-day views only) — attendance and new-membership
@@ -3006,6 +3146,7 @@ Deno.serve(async (req) => {
         date: range.to, dateFrom: range.from, dateTo: range.to,
         walkins, newMembers, attendanceTrend, registrationsTrend,
         attendanceBreakdown, newRegistrations: newRegistrations ?? 0,
+        activeMemberships, byBranch,
       });
     }
 
@@ -3441,26 +3582,33 @@ Deno.serve(async (req) => {
 
     // ─── ACTIONABLE ITEMS ───
     if (action === "get_actionable_items") {
-      const { branchId } = payload;
-      if (!requireBranch(staff, branchId)) return err("Branch access denied", 403);
+      const { branchId, allBranches } = payload;
+      let branchFilter: string[] = [];
+      if (allBranches && isOwnerOrAdmin(staff)) {
+        const { data: bs } = await db.from("branches").select("id");
+        branchFilter = bs?.map(b => b.id) ?? [];
+      } else {
+        if (!requireBranch(staff, branchId)) return err("Branch access denied", 403);
+        branchFilter = [branchId];
+      }
       const today = todayISO();
       const weekAgo = new Date(); weekAgo.setDate(weekAgo.getDate() - 7);
 
       // Any outstanding balance is actionable, regardless of due_date — due_date is always
       // set a month out even on a same-day partial payment, so gating on it would hide a
       // real balance for a full month.
-      const { data: dueToday } = await db.from("memberships").select("*, students(name, phone, course)")
-        .eq("branch_id", branchId).eq("is_active", true).gt("fee_due", 0);
+      const { data: dueToday } = await db.from("memberships").select("*, students(name, phone, course), branches(name)")
+        .in("branch_id", branchFilter).eq("is_active", true).gt("fee_due", 0);
 
-      const { data: expiringSoon } = await db.from("memberships").select("*, students(name, phone)")
-        .eq("branch_id", branchId).eq("is_active", true)
+      const { data: expiringSoon } = await db.from("memberships").select("*, students(name, phone), branches(name)")
+        .in("branch_id", branchFilter).eq("is_active", true)
         .gte("end_date", today).lte("end_date", addDays(today, 7));
 
-      const { data: expiredMemberships } = await db.from("memberships").select("*, students(name, phone)")
-        .eq("branch_id", branchId).eq("is_active", true).lt("end_date", today);
+      const { data: expiredMemberships } = await db.from("memberships").select("*, students(name, phone), branches(name)")
+        .in("branch_id", branchFilter).eq("is_active", true).lt("end_date", today);
 
-      const { data: overdueLockers } = await db.from("lockers").select("*, students(name, phone)")
-        .eq("branch_id", branchId).eq("is_active", true).lt("locker_due_date", today);
+      const { data: overdueLockers } = await db.from("lockers").select("*, students(name, phone), branches(name)")
+        .in("branch_id", branchFilter).eq("is_active", true).lt("locker_due_date", today);
 
       return json({
         dueToday: dueToday ?? [], expiringSoon: expiringSoon ?? [],
@@ -3862,10 +4010,14 @@ Deno.serve(async (req) => {
       const feeDue = Math.max(totalFee - feePaid, 0);
 
       const today = todayISO();
-      // A renewal made before the current period lapses picks up the very next day — the
-      // current end_date is already the last day the student is covered through under the
-      // inclusive-end convention above, so starting there again would double-count it.
-      const startDate = mem.end_date < today ? today : addDays(mem.end_date, 1);
+      // A renewal made before the current period lapses — or within the same grace window
+      // that still lets the student check in (MEMBERSHIP_GRACE_DAYS) — picks up the very
+      // next day after end_date. The current end_date is already the last day the student
+      // is covered through under the inclusive-end convention above, so starting there again
+      // would double-count it. Only once grace has actually run out does the new period
+      // start "fresh" from today, since there's no reasonable continuation left to preserve.
+      const daysSinceExpiry = daysBetween(mem.end_date, today);
+      const startDate = daysSinceExpiry > MEMBERSHIP_GRACE_DAYS ? today : addDays(mem.end_date, 1);
       const endDate = isCustomDaysPlan ? addDays(startDate, customDaysCount! - 1) : endDateForMonths(startDate, months);
       const dueDate = isCustomDaysPlan ? addDays(endDate, 1) : addDays(endDateForMonths(startDate, 1), 1);
       const monthLabel = new Date(startDate).toLocaleString("en-US", { month: "long", year: "numeric" });
@@ -4279,9 +4431,15 @@ Deno.serve(async (req) => {
 
     // ─── ENQUIRIES (leads pipeline) ───
     if (action === "list_enquiries") {
-      const { branchId } = payload;
-      if (!requireBranch(staff, branchId)) return err("Branch access denied", 403);
-      const { data } = await db.from("enquiries").select("*").eq("branch_id", branchId).order("created_at", { ascending: false });
+      const { branchId, allBranches } = payload;
+      let q = db.from("enquiries").select("*, branches(name)").order("created_at", { ascending: false });
+      if (allBranches && isOwnerOrAdmin(staff)) {
+        // no branch filter — every branch's enquiries, for the Combined Hall read-only view
+      } else {
+        if (!requireBranch(staff, branchId)) return err("Branch access denied", 403);
+        q = q.eq("branch_id", branchId);
+      }
+      const { data } = await q;
       return json({ enquiries: data ?? [] });
     }
 

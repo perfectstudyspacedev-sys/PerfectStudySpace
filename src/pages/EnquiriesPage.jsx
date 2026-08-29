@@ -40,8 +40,170 @@ function fmtDate(d) {
   return formatDate(d)
 }
 
+function groupByBranchName(rows) {
+  const groups = new Map()
+  for (const row of rows) {
+    const key = row.branches?.name ?? 'Unknown Branch'
+    if (!groups.has(key)) groups.set(key, [])
+    groups.get(key).push(row)
+  }
+  return [...groups.entries()].sort(([a], [b]) => a.localeCompare(b))
+}
+
+// ── Combined Hall — read-only, every branch's enquiries at once. The full workflow (notes,
+// interactions, follow-ups, status changes, merge, delete) is all single-branch here since
+// it's not clear a merge/status-change should span branches — switch to a real branch from
+// the dropdown to manage a specific enquiry.
+function CombinedEnquiriesView() {
+  const [enquiries, setEnquiries] = useState(null)
+  const [search, setSearch] = useState('')
+  const [error, setError] = useState('')
+  const [branchFilter, setBranchFilter] = useState(null) // null = every branch
+  const [statusFilter, setStatusFilter] = useState('')
+  const [viewEnq, setViewEnq] = useState(null)
+
+  const load = useCallback(async () => {
+    setError('')
+    try {
+      const { enquiries: data } = await api('list_enquiries', { allBranches: true })
+      setEnquiries(data ?? [])
+    } catch (err) {
+      setError(err.message)
+    }
+  }, [])
+
+  useEffect(() => { load() }, [load])
+
+  const searched = enquiries && search.trim()
+    ? enquiries.filter(e => {
+        const q = search.trim().toLowerCase()
+        return [e.name, e.email, e.phone, e.source].filter(Boolean).some(v => v.toLowerCase().includes(q))
+      })
+    : enquiries
+
+  const filtered = searched && statusFilter ? searched.filter(e => (e.status || 'new') === statusFilter) : searched
+
+  const allGroups = filtered ? groupByBranchName(filtered) : []
+  const visibleGroups = branchFilter ? allGroups.filter(([name]) => name === branchFilter) : allGroups
+
+  return (
+    <>
+      <div className="page-header"><h1>Enquiries — Combined Hall</h1></div>
+      {error && <p className="error-msg" style={{ marginBottom: '1rem' }}>{error}</p>}
+      {!enquiries ? <p>Loading…</p> : (
+        <>
+          <div className="filters" style={{ marginBottom: '1rem', alignItems: 'center' }}>
+            <input placeholder="Search name, email, phone, source…" value={search} onChange={(e) => setSearch(e.target.value)} />
+            <select value={statusFilter} onChange={(e) => setStatusFilter(e.target.value)}>
+              <option value="">All Statuses</option>
+              {STATUSES.map(s => <option key={s} value={s}>{STATUS_LABEL[s]}</option>)}
+            </select>
+          </div>
+          {allGroups.length > 0 && (
+            <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap', marginBottom: '1rem' }}>
+              <button type="button" className={`btn ${branchFilter === null ? 'btn-primary' : 'btn-ghost'}`} style={{ padding: '0.35rem 0.9rem', fontSize: '0.82rem' }} onClick={() => setBranchFilter(null)}>
+                All Branches ({filtered.length})
+              </button>
+              {allGroups.map(([name, rows]) => (
+                <button
+                  key={name} type="button"
+                  className={`btn ${branchFilter === name ? 'btn-primary' : 'btn-ghost'}`}
+                  style={{ padding: '0.35rem 0.9rem', fontSize: '0.82rem' }}
+                  onClick={() => setBranchFilter(name)}
+                >
+                  {name} ({rows.length})
+                </button>
+              ))}
+            </div>
+          )}
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '1.25rem' }}>
+            {visibleGroups.map(([branchName, rows]) => (
+              <div key={branchName} className="card" style={{ overflowX: 'auto' }}>
+                <h3 style={{ color: 'var(--accent)', marginBottom: '0.75rem' }}>{branchName} · {rows.length} enquir{rows.length === 1 ? 'y' : 'ies'}</h3>
+                <table className="data-table">
+                  <thead>
+                    <tr><th>Name</th><th>Phone</th><th>Email</th><th>Source</th><th>Status</th><th>Received</th><th>Actions</th></tr>
+                  </thead>
+                  <tbody>
+                    {rows.map(row => (
+                      <tr key={row.id}>
+                        <td>{row.name}</td>
+                        <td className="mono">{row.phone || '—'}</td>
+                        <td>{row.email || '—'}</td>
+                        <td>{SOURCE_LABEL[row.source] || row.source || '—'}</td>
+                        <td><span className={`badge ${STATUS_BADGE[row.status || 'new']} cap`}>{STATUS_LABEL[row.status || 'new']}</span></td>
+                        <td className="mono" style={{ fontSize: '0.78rem' }}>{formatDateTime(row.created_at)}</td>
+                        <td>
+                          <button type="button" className="act-btn" title="View" onClick={() => setViewEnq(row)}>👁</button>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            ))}
+          </div>
+        </>
+      )}
+
+      {/* Read-only — notes/interactions/follow-ups/status/merge all stay single-branch (see
+          the note at the top of this component); switch to the real branch to manage one. */}
+      {viewEnq && (
+        <div className="modal-overlay" onClick={() => setViewEnq(null)}>
+          <div className="modal drawer-modal" onClick={(e) => e.stopPropagation()}>
+            <div className="drw-head">
+              <div>
+                <div className="drw-title">{viewEnq.name || '—'}</div>
+                <div className="drw-sub">{viewEnq.email || viewEnq.phone || '—'}</div>
+              </div>
+              <button type="button" className="drw-close" onClick={() => setViewEnq(null)}>✕</button>
+            </div>
+            <div className="drw-body">
+              <div className="drw-info-grid">
+                <div className="drw-field"><div className="drw-lbl">Branch</div><div className="drw-val">{viewEnq.branches?.name ?? '—'}</div></div>
+                <div className="drw-field">
+                  <div className="drw-lbl">Status</div>
+                  <span className={`badge ${STATUS_BADGE[viewEnq.status || 'new']} cap`}>{STATUS_LABEL[viewEnq.status || 'new']}</span>
+                </div>
+                <div className="drw-field"><div className="drw-lbl">Source</div><div className="drw-val">{SOURCE_LABEL[viewEnq.source] || viewEnq.source || '—'}</div></div>
+                <div className="drw-field"><div className="drw-lbl">Phone</div><div className="drw-val">{viewEnq.phone || '—'}</div></div>
+                <div className="drw-field"><div className="drw-lbl">Email</div><div className="drw-val">{viewEnq.email || '—'}</div></div>
+                <div className="drw-field"><div className="drw-lbl">Received</div><div className="drw-val">{formatDateTime(viewEnq.created_at)}</div></div>
+              </div>
+
+              {viewEnq.message && (
+                <div className="drw-field" style={{ marginTop: '0.5rem' }}>
+                  <div className="drw-lbl">Message</div>
+                  <div className="drw-val" style={{ whiteSpace: 'pre-wrap' }}>{viewEnq.message}</div>
+                </div>
+              )}
+
+              {viewEnq.notes && (
+                <>
+                  <div className="drw-hr" />
+                  <div className="drw-lbl" style={{ marginBottom: '0.5rem' }}>Internal Notes</div>
+                  <div className="drw-val" style={{ whiteSpace: 'pre-wrap' }}>{viewEnq.notes}</div>
+                </>
+              )}
+
+              <div className="drw-hr" />
+              <p style={{ fontSize: '0.78rem', color: 'var(--text-muted)' }}>
+                This is a read-only view. Switch to {viewEnq.branches?.name ?? 'this'}'s branch from the branch
+                dropdown to update notes, status, or follow-ups for this enquiry.
+              </p>
+            </div>
+            <div className="drw-actions">
+              {viewEnq.phone && <button type="button" className="drw-btn drw-wa" onClick={() => openWhatsApp(viewEnq.phone, `Hi ${viewEnq.name}, this is Perfect Study Space — following up on your enquiry. How can we help you?`)}>💬 WhatsApp</button>}
+            </div>
+          </div>
+        </div>
+      )}
+    </>
+  )
+}
+
 export default function EnquiriesPage() {
-  const { branchId, isOwner } = useAuth()
+  const { branchId, isOwner, isCombinedHall } = useAuth()
   const [enquiries, setEnquiries] = useState([])
   const [loading, setLoading] = useState(true)
   const [errBanner, setErrBanner] = useState(false)
@@ -93,7 +255,7 @@ export default function EnquiriesPage() {
   }, [])
 
   const load = useCallback(async () => {
-    if (!branchId) return
+    if (!branchId || isCombinedHall) return
     setLoading(true)
     setErrBanner(false)
     try {
@@ -105,12 +267,12 @@ export default function EnquiriesPage() {
     } finally {
       setLoading(false)
     }
-  }, [branchId])
+  }, [branchId, isCombinedHall])
 
   useEffect(() => { load() }, [load])
 
   const loadTodayFollowups = useCallback(async () => {
-    if (!branchId) return
+    if (!branchId || isCombinedHall) return
     try {
       const { followups: open } = await api('list_open_enquiry_followups', { branchId })
       const todayStart = new Date(); todayStart.setHours(0, 0, 0, 0)
@@ -119,7 +281,7 @@ export default function EnquiriesPage() {
       const dueToday = (open ?? []).filter(f => { const d = new Date(f.due_at); return d >= todayStart && d <= todayEnd })
       setTodayFollowups({ overdue, today: dueToday })
     } catch { /* non-critical */ }
-  }, [branchId])
+  }, [branchId, isCombinedHall])
 
   useEffect(() => { loadTodayFollowups() }, [loadTodayFollowups])
 
@@ -455,6 +617,7 @@ export default function EnquiriesPage() {
 
   const liveDupGroup = drawerEnq ? dupGroups.find(g => g.some(e => e.id === drawerEnq.id)) : null
 
+  if (isCombinedHall) return <CombinedEnquiriesView />
   if (!branchId) return <p>Loading…</p>
 
   return (

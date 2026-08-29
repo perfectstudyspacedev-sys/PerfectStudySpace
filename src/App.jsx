@@ -15,7 +15,6 @@ import BranchSettingsPage from './pages/BranchSettingsPage'
 import ReportsPage from './pages/ReportsPage'
 import BookingsPage from './pages/BookingsPage'
 import TasksPage from './pages/TasksPage'
-import CombinedHallPage from './pages/CombinedHallPage'
 
 function ProtectedRoute({ children }) {
   const { staff, loading } = useAuth()
@@ -48,7 +47,6 @@ export default function App() {
             <Route path="messages" element={<MessagesPage />} />
             <Route path="reports" element={<ReportsPage />} />
             <Route path="actions" element={<TasksPage />} />
-            <Route path="combined-hall" element={<OwnerRoute><CombinedHallPage /></OwnerRoute>} />
             <Route path="settings/branches" element={<OwnerRoute><BranchSettingsPage /></OwnerRoute>} />
             <Route path="settings/staff" element={<OwnerRoute><StaffPage /></OwnerRoute>} />
           </Route>

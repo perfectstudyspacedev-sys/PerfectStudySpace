@@ -18,21 +18,25 @@ function formatDayLabel(iso) {
 }
 
 export default function MessagesPage() {
-  const { branchId, staff, activeBranch } = useAuth()
+  const { branchId, staff, activeBranch, isCombinedHall } = useAuth()
   const [channel, setChannel] = useState('branch')
   const [messages, setMessages] = useState([])
   const [content, setContent] = useState('')
   const [sending, setSending] = useState(false)
   const [error, setError] = useState('')
   const scrollRef = useRef(null)
+  // "Branch Team" has no meaning without a real branch — the "All Staff" channel is already
+  // branch-agnostic (branch_id is null there, same query either way), so Combined Hall just
+  // forces that channel on instead of needing its own combined chat concept.
+  const effectiveChannel = isCombinedHall ? 'all' : channel
 
   const load = useCallback(async () => {
-    if (!branchId) return
+    if (!branchId && !isCombinedHall) return
     try {
-      const msgData = await api('list_messages', { branchId, channel })
+      const msgData = await api('list_messages', { branchId, channel: effectiveChannel })
       setMessages(msgData.messages ?? [])
     } catch { /* ignore */ }
-  }, [branchId, channel])
+  }, [branchId, effectiveChannel, isCombinedHall])
 
   useEffect(() => { load() }, [load])
 
@@ -47,7 +51,7 @@ export default function MessagesPage() {
     setError('')
     try {
       await api('send_message', {
-        branchId, channel,
+        branchId, channel: effectiveChannel,
         recipientType: 'staff',
         recipientStudentId: null,
         content: content.trim(),
@@ -74,16 +78,24 @@ export default function MessagesPage() {
           height: 'calc(100vh - 220px)', minHeight: 320,
         }}>
           <div style={{ padding: '0.85rem 1rem', borderBottom: '1px solid #262626' }}>
-            <div className="period-toggle">
-              <button type="button" className={channel === 'branch' ? 'active' : ''} onClick={() => setChannel('branch')}>
-                🏢 {activeBranch?.name ?? 'Branch'} Team
-              </button>
-              <button type="button" className={channel === 'all' ? 'active' : ''} onClick={() => setChannel('all')}>
-                🌐 All Staff
-              </button>
-            </div>
+            {isCombinedHall ? (
+              <div className="period-toggle">
+                <button type="button" className="active">🌐 All Staff</button>
+              </div>
+            ) : (
+              <div className="period-toggle">
+                <button type="button" className={channel === 'branch' ? 'active' : ''} onClick={() => setChannel('branch')}>
+                  🏢 {activeBranch?.name ?? 'Branch'} Team
+                </button>
+                <button type="button" className={channel === 'all' ? 'active' : ''} onClick={() => setChannel('all')}>
+                  🌐 All Staff
+                </button>
+              </div>
+            )}
             <p style={{ fontSize: '0.75rem', color: 'var(--text-muted)', marginTop: '0.5rem' }}>
-              Internal messages between owner and staff only — not visible to students.
+              {isCombinedHall
+                ? 'Combined Hall shows the All Staff channel — switch to a specific branch to see that branch\'s team chat.'
+                : 'Internal messages between owner and staff only — not visible to students.'}
             </p>
           </div>
 

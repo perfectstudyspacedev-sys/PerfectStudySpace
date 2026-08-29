@@ -555,8 +555,79 @@ function FoodOrderModal({ branchId, booking, onClose, onDone }) {
   )
 }
 
+function groupByBranchName(rows) {
+  const groups = new Map()
+  for (const row of rows) {
+    const key = row.branches?.name ?? 'Unknown Branch'
+    if (!groups.has(key)) groups.set(key, [])
+    groups.get(key).push(row)
+  }
+  return [...groups.entries()].sort(([a], [b]) => a.localeCompare(b))
+}
+
+// ── Combined Hall — read-only, every branch's live sessions at once. Break/Continue,
+// Checkout, Food, and Edit all mutate one specific session and need the interactive
+// per-branch view's context menus/modals — drill into the real branch (branch dropdown) or
+// the student's profile to act on a session; this view is for seeing everything at a glance.
+function CombinedSessionsView() {
+  const [sessions, setSessions] = useState(null)
+  const [error, setError] = useState('')
+
+  const load = useCallback(async () => {
+    setError('')
+    try {
+      const data = await api('list_today_bookings', { allBranches: true })
+      setSessions(data.bookings ?? [])
+    } catch (err) {
+      setError(err.message)
+    }
+  }, [])
+
+  useEffect(() => { load() }, [load])
+
+  return (
+    <>
+      <div className="page-header">
+        <h1>Active Session — Combined Hall</h1>
+        <button type="button" className="btn btn-ghost" onClick={load}>↻ Refresh</button>
+      </div>
+      {error && <p className="error-msg" style={{ marginBottom: '1rem' }}>{error}</p>}
+      {!sessions ? <p>Loading…</p> : sessions.length === 0 ? (
+        <div className="card"><p style={{ color: 'var(--text-muted)' }}>No students currently present at any branch.</p></div>
+      ) : (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: '1.25rem' }}>
+          {groupByBranchName(sessions).map(([branchName, rows]) => (
+            <div key={branchName} className="card">
+              <h3 style={{ color: 'var(--accent)', marginBottom: '0.75rem' }}>{branchName} · {rows.length} active session{rows.length === 1 ? '' : 's'}</h3>
+              <table className="data-table">
+                <thead>
+                  <tr><th>Student</th><th>Desk</th><th>Type</th><th>Started</th><th>Hours</th></tr>
+                </thead>
+                <tbody>
+                  {rows.map(b => (
+                    <tr key={b.id}>
+                      <td>
+                        <Link to={`/students/${b.student_id}`} style={{ color: 'var(--accent)' }}>{b.students?.name}</Link>
+                        <div className="mono" style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>{b.students?.phone}</div>
+                      </td>
+                      <td>{b.desks?.label ?? '—'}</td>
+                      <td className="cap">{b.booking_type}</td>
+                      <td className="mono">{timeStr(b.start_time)}</td>
+                      <td className="mono">{b.hours ?? '—'}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          ))}
+        </div>
+      )}
+    </>
+  )
+}
+
 export default function BookingsPage() {
-  const { branchId } = useAuth()
+  const { branchId, isCombinedHall } = useAuth()
   const [bookings, setBookings] = useState([])
   const [loading, setLoading] = useState(true)
   const [actionLoading, setActionLoading] = useState(null)
@@ -572,7 +643,7 @@ export default function BookingsPage() {
   const notifiedIds = useRef(new Set())
 
   const load = useCallback(async () => {
-    if (!branchId) return
+    if (!branchId || isCombinedHall) return
     setLoading(true)
     try {
       const data = await api('list_today_bookings', { branchId })
@@ -643,6 +714,8 @@ export default function BookingsPage() {
       window.alert(err.message)
     } finally { setActionLoading(null) }
   }
+
+  if (isCombinedHall) return <CombinedSessionsView />
 
   const walkinCount = bookings.filter(b => b.booking_type === 'walkin').length
   const memberCount = bookings.filter(b => b.booking_type !== 'walkin').length
