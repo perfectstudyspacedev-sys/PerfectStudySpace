@@ -61,6 +61,9 @@ function CombinedEnquiriesView() {
   const [branchFilter, setBranchFilter] = useState(null) // null = every branch
   const [statusFilter, setStatusFilter] = useState('')
   const [viewEnq, setViewEnq] = useState(null)
+  const [viewActivities, setViewActivities] = useState([])
+  const [viewFollowups, setViewFollowups] = useState([])
+  const [viewLoading, setViewLoading] = useState(false)
 
   const load = useCallback(async () => {
     setError('')
@@ -73,6 +76,25 @@ function CombinedEnquiriesView() {
   }, [])
 
   useEffect(() => { load() }, [load])
+
+  const openView = async (row) => {
+    setViewEnq(row)
+    setViewLoading(true)
+    try {
+      const [{ activities: acts }, { followups: fus }] = await Promise.all([
+        api('list_enquiry_activities', { enquiryId: row.id }),
+        api('list_enquiry_followups', { enquiryId: row.id }),
+      ])
+      setViewActivities(acts ?? [])
+      setViewFollowups(fus ?? [])
+    } catch {
+      setViewActivities([])
+      setViewFollowups([])
+    } finally {
+      setViewLoading(false)
+    }
+  }
+  const closeView = () => { setViewEnq(null); setViewActivities([]); setViewFollowups([]) }
 
   const searched = enquiries && search.trim()
     ? enquiries.filter(e => {
@@ -122,19 +144,21 @@ function CombinedEnquiriesView() {
                 <h3 style={{ color: 'var(--accent)', marginBottom: '0.75rem' }}>{branchName} · {rows.length} enquir{rows.length === 1 ? 'y' : 'ies'}</h3>
                 <table className="data-table">
                   <thead>
-                    <tr><th>Name</th><th>Phone</th><th>Email</th><th>Source</th><th>Status</th><th>Received</th><th>Actions</th></tr>
+                    <tr><th>Name</th><th>Contact</th><th>Source</th><th>Status</th><th>Received</th><th>Actions</th></tr>
                   </thead>
                   <tbody>
                     {rows.map(row => (
                       <tr key={row.id}>
                         <td>{row.name}</td>
-                        <td className="mono">{row.phone || '—'}</td>
-                        <td>{row.email || '—'}</td>
+                        <td>
+                          <div className="mono">{row.phone || '—'}</div>
+                          {row.email && <div style={{ fontSize: '0.78rem', color: 'var(--text-muted)' }}>{row.email}</div>}
+                        </td>
                         <td>{SOURCE_LABEL[row.source] || row.source || '—'}</td>
                         <td><span className={`badge ${STATUS_BADGE[row.status || 'new']} cap`}>{STATUS_LABEL[row.status || 'new']}</span></td>
                         <td className="mono" style={{ fontSize: '0.78rem' }}>{formatDateTime(row.created_at)}</td>
                         <td>
-                          <button type="button" className="act-btn" title="View" onClick={() => setViewEnq(row)}>👁</button>
+                          <button type="button" className="act-btn" title="View" onClick={() => openView(row)}>👁</button>
                         </td>
                       </tr>
                     ))}
@@ -149,14 +173,14 @@ function CombinedEnquiriesView() {
       {/* Read-only — notes/interactions/follow-ups/status/merge all stay single-branch (see
           the note at the top of this component); switch to the real branch to manage one. */}
       {viewEnq && (
-        <div className="modal-overlay" onClick={() => setViewEnq(null)}>
+        <div className="modal-overlay" onClick={closeView}>
           <div className="modal drawer-modal" onClick={(e) => e.stopPropagation()}>
             <div className="drw-head">
               <div>
                 <div className="drw-title">{viewEnq.name || '—'}</div>
                 <div className="drw-sub">{viewEnq.email || viewEnq.phone || '—'}</div>
               </div>
-              <button type="button" className="drw-close" onClick={() => setViewEnq(null)}>✕</button>
+              <button type="button" className="drw-close" onClick={closeView}>✕</button>
             </div>
             <div className="drw-body">
               <div className="drw-info-grid">
@@ -181,9 +205,46 @@ function CombinedEnquiriesView() {
               {viewEnq.notes && (
                 <>
                   <div className="drw-hr" />
-                  <div className="drw-lbl" style={{ marginBottom: '0.5rem' }}>Internal Notes</div>
+                  <div className="drw-lbl" style={{ marginBottom: '0.5rem' }}>📝 Internal Notes</div>
                   <div className="drw-val" style={{ whiteSpace: 'pre-wrap' }}>{viewEnq.notes}</div>
                 </>
+              )}
+
+              <div className="drw-hr" />
+              <div className="drw-lbl" style={{ marginBottom: '0.5rem' }}>🕒 Activity Timeline</div>
+              {viewLoading ? (
+                <p style={{ fontSize: '0.8rem', color: 'var(--text-muted)' }}>Loading…</p>
+              ) : (
+                <div className="activity-feed">
+                  <div className="activity-item">
+                    <div>Enquiry received</div>
+                    <div className="time">{fmtDT(viewEnq.created_at)}</div>
+                  </div>
+                  {viewActivities.filter(a => a.type !== 'merged_snapshot').map(a => (
+                    <div key={a.id} className="activity-item">
+                      <div>{ACT_ICON[a.type] || '•'} {a.note || a.type}</div>
+                      <div className="time">{fmtDT(a.created_at)}</div>
+                    </div>
+                  ))}
+                </div>
+              )}
+
+              <div className="drw-hr" />
+              <div className="drw-lbl" style={{ marginBottom: '0.5rem' }}>⏰ Follow-up Tasks</div>
+              {viewLoading ? (
+                <p style={{ fontSize: '0.8rem', color: 'var(--text-muted)' }}>Loading…</p>
+              ) : viewFollowups.length === 0 ? (
+                <p style={{ fontSize: '0.75rem', color: 'var(--ghost)' }}>No follow-ups scheduled.</p>
+              ) : (
+                <div className="fu-list">
+                  {viewFollowups.map(f => (
+                    <div key={f.id} className={`fu-item${f.done ? ' done-item' : ''}`}>
+                      <span title={f.done ? 'Completed' : 'Pending'}>{f.done ? '✓' : '⏳'}</span>
+                      <span className="fu-note">{f.note || 'Follow up'}</span>
+                      <span className="fu-time">{fmtDT(f.due_at)}</span>
+                    </div>
+                  ))}
+                </div>
               )}
 
               <div className="drw-hr" />
@@ -242,7 +303,6 @@ export default function EnquiriesPage() {
   const toastIdRef = useRef(0)
 
   const [statusDrop, setStatusDrop] = useState(null)
-  const [notesDraft, setNotesDraft] = useState('')
   const [intType, setIntType] = useState('note')
   const [intNote, setIntNote] = useState('')
   const [fuNote, setFuNote] = useState('')
@@ -288,8 +348,6 @@ export default function EnquiriesPage() {
   useEffect(() => {
     try { setSavedFilters(JSON.parse(localStorage.getItem('pss_enq_saved_filters') || '[]')) } catch { setSavedFilters([]) }
   }, [])
-
-  useEffect(() => { setNotesDraft(drawerEnq?.notes || '') }, [drawerEnq?.id])
 
   useEffect(() => {
     const handler = (e) => {
@@ -474,6 +532,12 @@ export default function EnquiriesPage() {
   }
   const removeSavedFilter = (idx) => persistSavedFilters(savedFilters.filter((_, i) => i !== idx))
 
+  const hasActiveFilters = !!(search || statusFilter || sourceFilter || dayFilter || dateFrom || dateTo)
+  const clearFilters = () => {
+    setSearch(''); setStatusFilter(''); setSourceFilter('')
+    setDayFilter(0); setDateFrom(''); setDateTo('')
+  }
+
   const openDrawer = async (id) => {
     const enq = enquiries.find(e => e.id === id)
     if (!enq) return
@@ -491,13 +555,6 @@ export default function EnquiriesPage() {
   }
   const closeDrawer = () => { setDrawerEnq(null); setActivities([]); setFollowups([]) }
 
-  const saveNotes = async () => {
-    if (!drawerEnq) return
-    await patch(drawerEnq.id, { notes: notesDraft })
-    await logActivity(drawerEnq.id, 'note', 'Notes updated')
-    setActivities(await refreshActivities(drawerEnq.id))
-    showToast('Notes saved', 'ok')
-  }
   const logInteraction = async () => {
     if (!drawerEnq || !intNote.trim()) { showToast('Enter a note', 'info'); return }
     await logActivity(drawerEnq.id, intType, intNote.trim())
@@ -623,20 +680,37 @@ export default function EnquiriesPage() {
   return (
     <>
       <div className="page-header">
-        <h1>Enquiries</h1>
-        <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap' }}>
-          {isOwner && <button type="button" className="btn btn-ghost" onClick={() => handleExport(false)}>Export CSV</button>}
-          <button type="button" className="btn btn-primary" onClick={() => { setDrawerEnq(null); setMergeGroup(null); setAddOpen(true); setAddError('') }}>+ Add Enquiry</button>
-        </div>
+        {drawerEnq ? (
+          <>
+            <div>
+              <h1>{drawerEnq.name || 'Enquiry'}</h1>
+              <span style={{ color: 'var(--text-muted)', fontSize: '0.85rem' }}>{drawerEnq.email || drawerEnq.phone || '—'}</span>
+            </div>
+            <button type="button" className="btn btn-ghost" onClick={closeDrawer} style={{ fontSize: '0.82rem' }}>← Back to list</button>
+          </>
+        ) : (
+          <>
+            <div>
+              <h1>Enquiries</h1>
+              <span style={{ color: 'var(--text-muted)', fontSize: '0.85rem' }}>Track prospective students from first contact to enrollment</span>
+            </div>
+            <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap' }}>
+              {isOwner && <button type="button" className="btn btn-ghost" onClick={() => handleExport(false)}>Export CSV</button>}
+              <button type="button" className="btn btn-primary" onClick={() => { setDrawerEnq(null); setMergeGroup(null); setAddOpen(true); setAddError('') }}>+ Add Enquiry</button>
+            </div>
+          </>
+        )}
       </div>
 
-      {errBanner && (
+      {!drawerEnq && errBanner && (
         <div className="card" style={{ borderColor: '#662222', background: 'rgba(255,60,60,0.06)', marginBottom: '1rem', display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '1rem' }}>
           <span style={{ color: '#ff8888', fontSize: '0.85rem' }}>⚠ Could not load enquiries.</span>
           <button type="button" className="btn btn-ghost" onClick={load}>Retry</button>
         </div>
       )}
 
+      {!drawerEnq && (
+      <>
       <div className="stats-row">
         <div className="card stat-card"><div className="value">{stats.total}</div><div className="label">Total Enquiries</div></div>
         <div className="card stat-card"><div className="value">{stats.today}</div><div className="label">New Today</div></div>
@@ -714,6 +788,9 @@ export default function EnquiriesPage() {
         <input type="date" className="dr-input" value={dateFrom} onChange={(e) => setDateFrom(e.target.value)} title="From" />
         <input type="date" className="dr-input" value={dateTo} onChange={(e) => setDateTo(e.target.value)} title="To" />
         <button type="button" className="btn btn-ghost" onClick={saveCurrentFilter} style={{ fontSize: '0.78rem' }}>+ Save Filter</button>
+        {hasActiveFilters && (
+          <button type="button" className="btn btn-ghost" onClick={clearFilters} style={{ fontSize: '0.78rem', color: '#ff8888' }}>✕ Clear Filters</button>
+        )}
       </div>
 
       <div className="card" style={{ overflowX: 'auto' }}>
@@ -727,7 +804,7 @@ export default function EnquiriesPage() {
                       <input type="checkbox" onChange={(e) => toggleAllOnPage(e.target.checked)}
                         checked={pageRows.length > 0 && pageRows.every(r => selected.has(r.id))} />
                     </th>
-                    <th>#</th><th>Name</th><th>Phone</th><th>Email</th><th>Source</th><th>Message</th><th>Status</th><th>Received</th><th>Actions</th>
+                    <th>#</th><th>Name</th><th>Contact</th><th>Source</th><th>Message</th><th>Status</th><th>Received</th><th>Actions</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -743,8 +820,10 @@ export default function EnquiriesPage() {
                           {fresh && <span title="New today" style={{ display: 'inline-block', width: 7, height: 7, borderRadius: '50%', background: 'var(--accent)', marginRight: 6, boxShadow: '0 0 8px rgba(255,215,0,0.6)' }} />}
                           <span style={{ cursor: 'pointer', fontWeight: 600 }} onClick={() => openDrawer(row.id)}>{row.name}</span>
                         </td>
-                        <td className="mono">{row.phone || '—'}</td>
-                        <td>{row.email || '—'}</td>
+                        <td>
+                          <div className="mono">{row.phone || '—'}</div>
+                          {row.email && <div style={{ fontSize: '0.78rem', color: 'var(--text-muted)' }}>{row.email}</div>}
+                        </td>
                         <td>{SOURCE_LABEL[row.source] || row.source || '—'}</td>
                         <td style={{ maxWidth: 220, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={row.message || ''}>{row.message || '—'}</td>
                         <td>
@@ -785,6 +864,8 @@ export default function EnquiriesPage() {
           </div>
           <button type="button" className="btn btn-ghost" onClick={clearSelection}>✕ Clear</button>
         </div>
+      )}
+      </>
       )}
 
       {/* ─── Add Enquiry Modal ─── */}
@@ -884,29 +965,23 @@ export default function EnquiriesPage() {
         </div>
       )}
 
-      {/* ─── Detail Drawer ─── */}
+      {/* ─── Detail View — full-width, 3 columns: student details / notes+interaction+follow-ups / activity ─── */}
       {drawerEnq && (
-        <div className="modal-overlay" onClick={closeDrawer}>
-          <div className="modal drawer-modal" onClick={(e) => e.stopPropagation()}>
-            <div className="drw-head">
-              <div>
-                <div className="drw-title">{drawerEnq.name || '—'}</div>
-                <div className="drw-sub">{drawerEnq.email || drawerEnq.phone || '—'}</div>
-              </div>
-              <button type="button" className="drw-close" onClick={closeDrawer}>✕</button>
+        <div>
+          {liveDupGroup && liveDupGroup.length > 1 && (
+            <div className="tabs" style={{ marginBottom: '1rem' }}>
+              {liveDupGroup.slice().sort((a, b) => new Date(a.created_at) - new Date(b.created_at)).map(g => (
+                <button key={g.id} type="button" className={g.id === drawerEnq.id ? 'active' : ''} onClick={() => openDrawer(g.id)}>
+                  {SOURCE_LABEL[g.source] || g.source || 'Enquiry'} · {fmtDate(g.created_at)}
+                </button>
+              ))}
             </div>
+          )}
 
-            {liveDupGroup && liveDupGroup.length > 1 && (
-              <div className="tabs" style={{ padding: '0 0.25rem' }}>
-                {liveDupGroup.slice().sort((a, b) => new Date(a.created_at) - new Date(b.created_at)).map(g => (
-                  <button key={g.id} type="button" className={g.id === drawerEnq.id ? 'active' : ''} onClick={() => openDrawer(g.id)}>
-                    {SOURCE_LABEL[g.source] || g.source || 'Enquiry'} · {fmtDate(g.created_at)}
-                  </button>
-                ))}
-              </div>
-            )}
-
-            <div className="drw-body">
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(300px, 1fr))', gap: '1.25rem', alignItems: 'stretch' }}>
+            {/* LEFT — Student Details */}
+            <div className="card">
+              <h3 style={{ color: 'var(--accent)', marginBottom: '0.75rem' }}>👤 Student Details</h3>
               <div className="drw-info-grid">
                 <div className="drw-field">
                   <div className="drw-lbl">Status</div>
@@ -918,67 +993,17 @@ export default function EnquiriesPage() {
               </div>
 
               {drawerEnq.message && (
-                <div className="drw-field" style={{ marginTop: '0.5rem' }}>
+                <div className="drw-field" style={{ marginTop: '0.75rem' }}>
                   <div className="drw-lbl">Message</div>
                   <div className="drw-val" style={{ whiteSpace: 'pre-wrap' }}>{drawerEnq.message}</div>
                 </div>
               )}
 
-              <div className="drw-hr" />
-              <div className="drw-lbl" style={{ marginBottom: '0.5rem' }}>Internal Notes</div>
-              <textarea className="drw-notes" rows={3} value={notesDraft} onChange={(e) => setNotesDraft(e.target.value)} placeholder="Add private notes about this enquiry…" />
-              <button type="button" className="btn btn-ghost" style={{ marginTop: '0.5rem' }} onClick={saveNotes}>Save Notes</button>
-
-              <div className="drw-hr" />
-              <div className="drw-lbl" style={{ marginBottom: '0.5rem' }}>Add Interaction</div>
-              <div className="ai-row">
-                <select className="ai-select" value={intType} onChange={(e) => setIntType(e.target.value)}>
-                  <option value="note">📝 Note</option>
-                  <option value="call">📞 Call</option>
-                  <option value="email">✉️ Email</option>
-                  <option value="whatsapp">💬 WhatsApp</option>
-                </select>
-                <input className="ai-note-input" value={intNote} onChange={(e) => setIntNote(e.target.value)} placeholder="What happened?…" />
-                <button type="button" className="btn btn-primary" onClick={logInteraction}>Log</button>
-              </div>
-
-              <div className="drw-hr" />
-              <div className="drw-lbl" style={{ marginBottom: '0.5rem' }}>Activity Timeline</div>
-              <div className="activity-feed">
-                <div className="activity-item">
-                  <div>Enquiry received</div>
-                  <div className="time">{fmtDT(drawerEnq.created_at)}</div>
-                </div>
-                {activities.filter(a => a.type !== 'merged_snapshot').map(a => (
-                  <div key={a.id} className="activity-item">
-                    <div>{ACT_ICON[a.type] || '•'} {a.note || a.type}</div>
-                    <div className="time">{fmtDT(a.created_at)}</div>
-                  </div>
-                ))}
-              </div>
-
-              <div className="drw-hr" />
-              <div className="drw-lbl" style={{ marginBottom: '0.5rem' }}>Follow-up Tasks</div>
-              <div className="fu-form">
-                <input type="datetime-local" className="fu-input" value={fuDue} onChange={(e) => setFuDue(e.target.value)} />
-                <input type="text" className="fu-input" value={fuNote} onChange={(e) => setFuNote(e.target.value)} placeholder="What to do?" />
-                <button type="button" className="btn btn-primary" onClick={addFollowUp}>+ Add</button>
-              </div>
-              <div className="fu-list">
-                {followups.length === 0 ? <p style={{ fontSize: '0.75rem', color: 'var(--ghost)', padding: '0.4rem 0' }}>No follow-ups scheduled.</p> : followups.map(f => (
-                  <div key={f.id} className={`fu-item${f.done ? ' done-item' : ''}`}>
-                    <input type="checkbox" className="fu-check" checked={f.done} onChange={(e) => toggleFollowUp(f.id, e.target.checked)} />
-                    <span className="fu-note">{f.note || 'Follow up'}</span>
-                    <span className="fu-time">{fmtDT(f.due_at)}</span>
-                  </div>
-                ))}
-              </div>
-
               {activities.filter(a => a.type === 'merged_snapshot').length > 0 && (
                 <>
                   <div className="drw-hr" />
-                  <div className="drw-lbl" style={{ marginBottom: '0.5rem' }}>Merged Records (read-only)</div>
-                  {activities.filter(a => a.type === 'merged_snapshot').map((a, i) => {
+                  <div className="drw-lbl" style={{ marginBottom: '0.5rem' }}>🔀 Merged Records (read-only)</div>
+                  {activities.filter(a => a.type === 'merged_snapshot').map((a) => {
                     let snap = null
                     try { snap = JSON.parse(a.note) } catch { /* ignore */ }
                     if (!snap) return null
@@ -997,13 +1022,64 @@ export default function EnquiriesPage() {
                   })}
                 </>
               )}
+
+              <div className="drw-hr" />
+              <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.5rem' }}>
+                {drawerEnq.phone && <button type="button" className="drw-btn drw-wa" onClick={() => waLink(drawerEnq.phone, drawerEnq.name)}>💬 WhatsApp</button>}
+                {drawerEnq.email && <button type="button" className="drw-btn drw-book" style={{ color: 'var(--accent)', borderColor: 'rgba(255,215,0,0.25)' }} onClick={() => openEmailModal(drawerEnq)}>✉ Email</button>}
+                <button type="button" className="drw-btn drw-book" onClick={() => changeStatus(drawerEnq.id, 'converted')}>✓ Mark Converted</button>
+                <button type="button" className="drw-btn drw-arch" onClick={() => changeStatus(drawerEnq.id, 'dropped')}>Drop</button>
+              </div>
             </div>
 
-            <div className="drw-actions">
-              {drawerEnq.phone && <button type="button" className="drw-btn drw-wa" onClick={() => waLink(drawerEnq.phone, drawerEnq.name)}>💬 WhatsApp</button>}
-              {drawerEnq.email && <button type="button" className="drw-btn drw-book" style={{ color: 'var(--accent)', borderColor: 'rgba(255,215,0,0.25)' }} onClick={() => openEmailModal(drawerEnq)}>✉ Email</button>}
-              <button type="button" className="drw-btn drw-book" onClick={() => changeStatus(drawerEnq.id, 'converted')}>✓ Mark Converted</button>
-              <button type="button" className="drw-btn drw-arch" onClick={() => changeStatus(drawerEnq.id, 'dropped')}>Drop</button>
+            {/* MIDDLE — Add Interaction, Follow-up Tasks */}
+            <div className="card">
+              <h3 style={{ color: 'var(--accent)', marginBottom: '0.75rem' }}>🗒️ Notes &amp; Follow-ups</h3>
+              <div className="drw-lbl" style={{ marginBottom: '0.5rem' }}>💬 Add Interaction</div>
+              <div className="ai-row">
+                <select className="ai-select" value={intType} onChange={(e) => setIntType(e.target.value)}>
+                  <option value="note">📝 Note</option>
+                  <option value="call">📞 Call</option>
+                  <option value="email">✉️ Email</option>
+                  <option value="whatsapp">💬 WhatsApp</option>
+                </select>
+                <input className="ai-note-input" value={intNote} onChange={(e) => setIntNote(e.target.value)} placeholder="What happened?…" />
+                <button type="button" className="btn btn-primary" onClick={logInteraction}>Log</button>
+              </div>
+
+              <div className="drw-hr" />
+              <div className="drw-lbl" style={{ marginBottom: '0.5rem' }}>⏰ Follow-up Tasks</div>
+              <div className="fu-form">
+                <input type="datetime-local" className="fu-input" value={fuDue} onChange={(e) => setFuDue(e.target.value)} />
+                <input type="text" className="fu-input" value={fuNote} onChange={(e) => setFuNote(e.target.value)} placeholder="What to do?" />
+                <button type="button" className="btn btn-primary" onClick={addFollowUp}>+ Add</button>
+              </div>
+              <div className="fu-list">
+                {followups.length === 0 ? <p style={{ fontSize: '0.75rem', color: 'var(--ghost)', padding: '0.4rem 0' }}>No follow-ups scheduled.</p> : followups.map(f => (
+                  <div key={f.id} className={`fu-item${f.done ? ' done-item' : ''}`}>
+                    <input type="checkbox" className="fu-check" checked={f.done} onChange={(e) => toggleFollowUp(f.id, e.target.checked)} />
+                    <span className="fu-note">{f.note || 'Follow up'}</span>
+                    <span className="fu-time">{fmtDT(f.due_at)}</span>
+                  </div>
+                ))}
+              </div>
+            </div>
+
+            {/* RIGHT — Activity Pipeline */}
+            <div className="card">
+              <h3 style={{ color: 'var(--accent)', marginBottom: '0.75rem' }}>🕒 Activity Pipeline</h3>
+              <div className="activity-feed">
+                <div className="activity-item">
+                  <div>Enquiry received</div>
+                  <div className="time">{fmtDT(drawerEnq.created_at)}</div>
+                </div>
+                {activities.filter(a => a.type !== 'merged_snapshot').map(a => (
+                  <div key={a.id} className="activity-item">
+                    <div>{ACT_ICON[a.type] || '•'} {a.note || a.type}</div>
+                    <div className="time">{fmtDT(a.created_at)}</div>
+                  </div>
+                ))}
+              </div>
             </div>
           </div>
         </div>

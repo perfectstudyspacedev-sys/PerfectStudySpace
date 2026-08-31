@@ -1,0 +1,1 @@
+{"nodes": [{"id": "$graphify-root$_supabase_migrations_047_drop_food_inventory_logs_sql", "label": "047_drop_food_inventory_logs.sql", "file_type": "code", "source_file": "supabase/migrations/047_drop_food_inventory_logs.sql", "source_location": null}], "edges": []}

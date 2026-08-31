@@ -1,0 +1,1 @@
+{"nodes": [{"id": "$graphify-root$_supabase_migrations_028_branch_capacity_update_sql", "label": "028_branch_capacity_update.sql", "file_type": "code", "source_file": "supabase/migrations/028_branch_capacity_update.sql", "source_location": null}], "edges": []}

@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback } from 'react'
-import { Navigate } from 'react-router-dom'
+import { Navigate, useNavigate } from 'react-router-dom'
 import { useAuth } from '../context/AuthContext'
 import { api } from '../lib/api'
 import { todayISO } from '../lib/utils'
@@ -147,7 +147,8 @@ function StaffBranchBoard() {
 }
 
 export default function StaffPage() {
-  const { isOwner } = useAuth()
+  const { isOwner, isAdmin, staff: currentStaff, logout } = useAuth()
+  const navigate = useNavigate()
   const [staffList, setStaffList] = useState([])
   const [branches, setBranches] = useState([])
   const [staffBranchFilter, setStaffBranchFilter] = useState('')
@@ -247,12 +248,20 @@ export default function StaffPage() {
   }
 
   const deactivateStaff = (s) => {
+    const isSelf = s.id === currentStaff?.id
     setConfirmDialog({
-      message: `Permanently remove ${s.display_name || s.username}? This cannot be undone — they will be logged out immediately and can never be reactivated.`,
+      message: isSelf
+        ? `Deactivate YOUR OWN account? This logs you out immediately and cannot be undone — this account can never be reactivated, and you will need another owner or admin account to get back in. Are you absolutely sure?`
+        : `Permanently remove ${s.display_name || s.username}? This cannot be undone — they will be logged out immediately and can never be reactivated.`,
       onConfirm: async () => {
         try {
           await api('update_staff', { staffId: s.id, isActive: false })
-          load()
+          if (isSelf) {
+            logout()
+            navigate('/login')
+          } else {
+            load()
+          }
         } catch (err) {
           window.alert(err.message)
         }
@@ -343,7 +352,7 @@ export default function StaffPage() {
                   </div>
                   <span className="badge badge-active">Active</span>
                 </div>
-                {s.role !== 'owner' && (
+                {(s.role !== 'owner' || s.id === currentStaff?.id || isAdmin) && (
                   <div style={{ display: 'flex', gap: '0.4rem' }}>
                     <button type="button" className="btn btn-ghost" style={{ flex: 1, padding: '0.35rem', fontSize: '0.75rem' }} onClick={() => openEdit(s)}>
                       Edit

@@ -1,0 +1,1 @@
+{"nodes": [{"id": "$graphify-root$_supabase_migrations_041_admin_role_assign_sql", "label": "041_admin_role_assign.sql", "file_type": "code", "source_file": "supabase/migrations/041_admin_role_assign.sql", "source_location": null}], "edges": []}

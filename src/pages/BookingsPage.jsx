@@ -95,6 +95,13 @@ function toLocalTimeInput(isoString) {
   return `${pad(d.getHours())}:${pad(d.getMinutes())}`
 }
 
+// datetime-local wants "YYYY-MM-DDTHH:mm" in the browser's local time — building it from
+// getFullYear/etc. (not toISOString) is what keeps it local instead of silently shifting to UTC.
+function toLocalDateTimeInput(date) {
+  const pad = (n) => String(n).padStart(2, '0')
+  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}T${pad(date.getHours())}:${pad(date.getMinutes())}`
+}
+
 function EditStartTimeModal({ booking, onClose, onDone }) {
   const [time, setTime] = useState(toLocalTimeInput(booking.start_time))
   const [loading, setLoading] = useState(false)
@@ -148,11 +155,17 @@ function CheckoutModal({ booking, onConfirm, onCancel, loading }) {
   const [payMode, setPayMode] = useState(booking.payment_mode || 'cash')
   const [settleFoodNow, setSettleFoodNow] = useState(false)
   const [overtimePayNow, setOvertimePayNow] = useState(false)
+  // Defaults to right now (same overtime this would've shown before this feature existed).
+  // Staff can pull it back to when the student actually left if they forgot to check them
+  // out promptly — overtime below recalculates live off whatever this is set to, and it's
+  // what actually gets stamped as the booking's end_time on submit.
+  const [checkoutAt, setCheckoutAt] = useState(() => new Date())
 
   const totalPauseMs = (booking.total_pause_minutes ?? 0) * 60_000
   const endMs = new Date(booking.end_time).getTime() + totalPauseMs
-  const overtimeMs = Math.max(Date.now() - endMs, 0)
+  const overtimeMs = Math.max(checkoutAt.getTime() - endMs, 0)
   const overtimeMinutes = Math.ceil(overtimeMs / 60_000)
+  const checkoutBeforeStart = checkoutAt.getTime() < new Date(booking.start_time).getTime()
   const isWalkin = booking.booking_type === 'walkin'
   const membership = booking.memberships
 
@@ -206,6 +219,25 @@ function CheckoutModal({ booking, onConfirm, onCancel, loading }) {
             )}
           </div>
         )}
+
+        {/* Correct checkout time — if staff forgot to check the student out promptly, the
+            resulting overtime is really just that delay, not the student's. Adjusting this
+            recomputes overtime above and is what actually gets recorded as end_time. */}
+        <div className="form-group" style={{ marginBottom: '1rem' }}>
+          <label>Checkout Time (edit if the student actually left earlier)</label>
+          <div style={{ display: 'flex', gap: '0.5rem' }}>
+            <input
+              type="datetime-local"
+              value={toLocalDateTimeInput(checkoutAt)}
+              onChange={(e) => { if (e.target.value) setCheckoutAt(new Date(e.target.value)) }}
+              style={{ flex: 1 }}
+            />
+            <button type="button" className="btn btn-ghost" onClick={() => setCheckoutAt(new Date())}>Now</button>
+          </div>
+          {checkoutBeforeStart && (
+            <p className="error-msg" style={{ marginTop: '0.3rem' }}>Can't be before this session's check-in time.</p>
+          )}
+        </div>
 
         {/* Payment summary — what's been paid vs what's still pending */}
         <div className="card" style={{ marginBottom: '1rem', background: 'rgba(255,215,0,0.05)' }}>
@@ -303,8 +335,8 @@ function CheckoutModal({ booking, onConfirm, onCancel, loading }) {
 
         <div className="modal-actions">
           <button type="button" className="btn btn-ghost" onClick={onCancel}>Cancel</button>
-          <button type="button" className="btn btn-primary" disabled={loading}
-            onClick={() => onConfirm({ overtimeMinutes, overtimeCharge, overtimePaymentMode: payMode, overtimePayNow, settleFoodNow })}
+          <button type="button" className="btn btn-primary" disabled={loading || checkoutBeforeStart}
+            onClick={() => onConfirm({ overtimeMinutes, overtimeCharge, overtimePaymentMode: payMode, overtimePayNow, settleFoodNow, actualEndTime: checkoutAt.toISOString() })}
           >
             {loading ? 'Checking out…'
               : isWalkin && remainingDue > 0 ? `Collect ₹${remainingDue.toLocaleString('en-IN')} & Check Out`
@@ -695,16 +727,16 @@ export default function BookingsPage() {
   // (no foodPassPaymentMode given yet), nothing was mutated server-side; this just swaps the
   // checkout modal for a compulsory collect-now prompt (no skip option) and resubmits once
   // a payment mode is picked.
-  const confirmCheckout = async (bookingId, { overtimeMinutes, overtimePaymentMode, overtimePayNow, settleFoodNow, foodPassPaymentMode }) => {
+  const confirmCheckout = async (bookingId, { overtimeMinutes, overtimePaymentMode, overtimePayNow, settleFoodNow, foodPassPaymentMode, actualEndTime }) => {
     setActionLoading(bookingId + ':checkout')
     try {
       const res = await api('checkout_booking', {
-        bookingId, overtimeMinutes, overtimePaymentMode, overtimePayNow, settleFoodNow, foodPassPaymentMode,
+        bookingId, overtimeMinutes, overtimePaymentMode, overtimePayNow, settleFoodNow, foodPassPaymentMode, actualEndTime,
       })
       if (res?.needsFoodPassCollection) {
         setCheckoutBooking(null)
         setFoodPassCollectMode('cash')
-        setFoodPassPrompt({ bookingId, shortfall: res.shortfall, overtimeMinutes, overtimePaymentMode, overtimePayNow, settleFoodNow })
+        setFoodPassPrompt({ bookingId, shortfall: res.shortfall, overtimeMinutes, overtimePaymentMode, overtimePayNow, settleFoodNow, actualEndTime })
         return
       }
       setCheckoutBooking(null)
@@ -975,6 +1007,7 @@ export default function BookingsPage() {
                   overtimePayNow: foodPassPrompt.overtimePayNow,
                   settleFoodNow: foodPassPrompt.settleFoodNow,
                   foodPassPaymentMode: foodPassCollectMode,
+                  actualEndTime: foodPassPrompt.actualEndTime,
                 })}
               >
                 {actionLoading === foodPassPrompt.bookingId + ':checkout' ? 'Collecting…' : `Collect ${formatCurrency(foodPassPrompt.shortfall)} & Check Out`}

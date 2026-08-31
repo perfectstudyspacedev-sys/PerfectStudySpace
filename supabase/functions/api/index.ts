@@ -1795,10 +1795,27 @@ Deno.serve(async (req) => {
 
     // ─── CHECKOUT ───
     if (action === "checkout_booking") {
-      const { bookingId, overtimeMinutes, overtimePaymentMode, overtimePayNow, settleFoodNow, foodPassPaymentMode } = payload;
+      const { bookingId, overtimeMinutes, overtimePaymentMode, overtimePayNow, settleFoodNow, foodPassPaymentMode, actualEndTime } = payload;
       const { data: booking } = await db.from("bookings").select("*").eq("id", bookingId).single();
       if (!booking) return err("Booking not found");
       if (!requireBranch(staff, booking.branch_id)) return err("Branch access denied", 403);
+
+      // Staff can correct the recorded checkout moment (e.g. they forgot to check someone
+      // out promptly and the resulting overtime is really just their own delay, not the
+      // student's) — see the "Correct checkout time" control in the checkout modal, which
+      // recomputes overtimeMinutes client-side against this same value before submitting.
+      // Falls back to "now" exactly as before when omitted. Can't be before the session
+      // started; a future timestamp is allowed since staff correcting toward "later than I
+      // clicked" is a legitimate case too (e.g. filling this in a few minutes after the fact).
+      let stampedEndTime = new Date().toISOString();
+      if (actualEndTime) {
+        const parsed = new Date(actualEndTime);
+        if (isNaN(parsed.getTime())) return err("Invalid checkout time");
+        if (parsed.getTime() < new Date(booking.start_time).getTime()) {
+          return err("Checkout time can't be before the session started");
+        }
+        stampedEndTime = parsed.toISOString();
+      }
       // Checkout moves real money (overtime billing, Food Pass deduction, shortfall
       // collection) and stamps end_time, none of it idempotent — so a repeat submission
       // (double-click, retry on a slow network, two staff on two devices) would charge
@@ -1864,7 +1881,7 @@ Deno.serve(async (req) => {
       // checkout time here so attendance history (and anything reading end_time) is accurate,
       // especially when the student stayed into overtime.
       await db.from("bookings").update({
-        status: "completed", end_time: new Date().toISOString(),
+        status: "completed", end_time: stampedEndTime,
         is_paused: false, paused_at: null, total_pause_minutes: 0,
       }).eq("id", bookingId);
 
@@ -3500,8 +3517,12 @@ Deno.serve(async (req) => {
       if (!staffId) return err("Staff ID required");
       const { data: target } = await db.from("staff").select("id, role, is_active").eq("id", staffId).single();
       if (!target) return err("Staff not found");
-      if (target.role === "owner") return err("Owner accounts can't be edited here");
-      if (staffId === staff.id) return err("You can't edit your own account from here");
+      // The owner can edit/deactivate their own account, and admin (who outranks owner) can
+      // edit/deactivate the owner's account too — but nobody else gets to touch an owner
+      // account, and nobody but the owner gets to bypass the general self-edit block below.
+      const isSelf = staffId === staff.id;
+      if (target.role === "owner" && !isSelf && !isAdmin(staff)) return err("Owner accounts can't be edited here");
+      if (isSelf && staff.role !== "owner") return err("You can't edit your own account from here");
       // Deactivation is permanent — once a staff account is turned off it can never be
       // switched back on, so this deliberately does not accept isActive: true on an
       // already-inactive account.
