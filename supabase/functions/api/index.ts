@@ -212,6 +212,20 @@ function daysBetween(fromDateStr: string, toDateStr: string): number {
   return Math.floor((new Date(toDateStr + "T12:00:00").getTime() - new Date(fromDateStr + "T12:00:00").getTime()) / 86_400_000);
 }
 
+// The membership's committed length in days, used to derive a fair per-day rate for
+// prorated refunds (Delete Membership) and overstay charges (Quit/Delete Membership).
+// Primarily start_date→end_date, but floored at months_paid * 30 — Manage Plan lets staff
+// hand-edit end_date to any date independent of start_date/monthly_fee/months_paid (e.g.
+// shortening a plan), and without this floor a heavily-shortened end_date collapses
+// totalDays down to as little as 1, which turns "grossFee ÷ totalDays" into "grossFee ÷ 1"
+// and inflates a single overstay/unused day into the value of the entire remaining plan.
+function membershipTotalDays(mem: { start_date: string; end_date: string; months_paid: number }): number {
+  const dateBased = Math.round(
+    (new Date(mem.end_date + "T00:00:00Z").getTime() - new Date(mem.start_date + "T00:00:00Z").getTime()) / 86_400_000,
+  );
+  return Math.max(1, dateBased, Number(mem.months_paid) * 30);
+}
+
 // How many days past end_date a membership is still allowed to check in / renew as a
 // continuation rather than being treated as a fresh restart. Shared by the check-in gate
 // (blocks check-in once past grace) and renew_membership's startDate calc (below) — both
@@ -4147,9 +4161,7 @@ Deno.serve(async (req) => {
       const today = todayISO();
       const overstayDays = Math.max(0, daysBetween(mem.end_date, today));
       const grossFee = Number(mem.monthly_fee) * Number(mem.months_paid);
-      const totalDays = Math.max(1, Math.round(
-        (new Date(mem.end_date + "T00:00:00Z").getTime() - new Date(mem.start_date + "T00:00:00Z").getTime()) / 86_400_000,
-      ));
+      const totalDays = membershipTotalDays(mem);
       const overstayCharge = overstayDays > 0 ? Math.round((grossFee / totalDays) * overstayDays) : 0;
 
       const totalOwed = membershipDue + lockerDue + foodPassOwed + overtimeDue + overstayCharge;
@@ -4200,9 +4212,7 @@ Deno.serve(async (req) => {
 
       const today = todayISO();
       const grossFee = Number(mem.monthly_fee) * Number(mem.months_paid);
-      const totalDays = Math.max(1, Math.round(
-        (new Date(mem.end_date + "T00:00:00Z").getTime() - new Date(mem.start_date + "T00:00:00Z").getTime()) / 86_400_000,
-      ));
+      const totalDays = membershipTotalDays(mem);
       // Signed gap between today and end_date splits into exactly one of the two below —
       // a membership can't simultaneously have unused days left AND be overstayed.
       const daysSinceEnd = Math.round(
@@ -4403,9 +4413,7 @@ Deno.serve(async (req) => {
       const today = todayISO();
       const overstayDays = Math.max(0, daysBetween(mem.end_date, today));
       const grossFee = Number(mem.monthly_fee) * Number(mem.months_paid);
-      const totalDays = Math.max(1, Math.round(
-        (new Date(mem.end_date + "T00:00:00Z").getTime() - new Date(mem.start_date + "T00:00:00Z").getTime()) / 86_400_000,
-      ));
+      const totalDays = membershipTotalDays(mem);
       const overstayCharge = overstayDays > 0 && !waiveOverstayCharge
         ? Math.round((grossFee / totalDays) * overstayDays) : 0;
 
