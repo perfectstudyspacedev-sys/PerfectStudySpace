@@ -73,9 +73,9 @@ function CombinedStudentsView() {
       })
     : students
 
-  const filtered = statusFilter
-    ? searched.filter(s => s.status === statusFilter)
-    : searched.filter(s => s.status !== 'inactive')
+  const filtered = searched
+    ? (statusFilter ? searched.filter(s => s.status === statusFilter) : searched.filter(s => s.status !== 'inactive'))
+    : null
 
   const allGroups = filtered ? groupByBranchName(filtered) : []
   const visibleGroups = branchFilter ? allGroups.filter(([name]) => name === branchFilter) : allGroups
