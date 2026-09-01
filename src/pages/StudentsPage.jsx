@@ -158,7 +158,7 @@ export default function StudentsPage() {
   const [sortDir, setSortDir] = useState('asc')
   const [filters, setFilters] = useState({})
   const [search, setSearch] = useState('')
-  const [statusFilter, setStatusFilter] = useState('')
+  const [statusFilter, setStatusFilter] = useState('active')
   const [courseFilter, setCourseFilter] = useState('')
   const [tab, setTab] = useState(isOwner ? 'list' : 'loyalty')
   const [cashbackTarget, setCashbackTarget] = useState(null)
@@ -199,10 +199,7 @@ export default function StudentsPage() {
       const s = search.trim().toLowerCase()
       rows = rows.filter(r => r.name.toLowerCase().includes(s) || r.contact.includes(s) || r.cabin.toLowerCase().includes(s))
     }
-    // "All Status" excludes inactive by default — inactive students only show up once that
-    // filter is picked explicitly, so the day-to-day list isn't cluttered with people who
-    // already left.
-    rows = statusFilter ? rows.filter(r => r.status === statusFilter) : rows.filter(r => r.status !== 'inactive')
+    rows = rows.filter(r => r.status === statusFilter)
     if (courseFilter) rows = rows.filter(r => r.course === courseFilter)
     Object.entries(filters).forEach(([key, rawVal]) => {
       const val = rawVal.trim().toLowerCase()
@@ -325,7 +322,6 @@ export default function StudentsPage() {
           <div className="filters">
             <input placeholder="Search name, phone, cabin…" value={search} onChange={(e) => setSearch(e.target.value)} />
             <select value={statusFilter} onChange={(e) => setStatusFilter(e.target.value)}>
-              <option value="">All Status</option>
               <option value="active">Active</option>
               <option value="pending">Pending</option>
               <option value="inactive">Inactive</option>

@@ -3835,6 +3835,13 @@ Deno.serve(async (req) => {
       if (planUnchanged && !wantsEndDateChange) {
         return err("That's already the current plan");
       }
+      // A membership can't end before it starts — this is the same hand-edited end_date
+      // that once collapsed to 1 day after start_date and blew up the per-day rate used by
+      // Quit/Delete Membership (see membershipTotalDays). That's now floored so it can't
+      // overcharge, but there's no legitimate reason to allow the date itself to be invalid.
+      if (wantsEndDateChange && newEndDate < mem.start_date) {
+        return err("End date can't be before the membership's start date");
+      }
 
       // An expired membership can still have its due/end date corrected — staff routinely fix
       // a date that was mistyped at signup, or extend one that lapsed over a holiday, and
