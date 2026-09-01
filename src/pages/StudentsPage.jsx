@@ -9,7 +9,6 @@ const COLUMNS = [
   { key: 'sNo', label: 'S.No' },
   { key: 'name', label: 'Name' },
   { key: 'cabin', label: 'Cabin' },
-  { key: 'dueDate', label: 'Due Date', isDate: true },
   { key: 'month', label: 'Month' },
   { key: 'hours', label: 'Hours' },
   { key: 'locker', label: 'Locker' },
@@ -74,7 +73,9 @@ function CombinedStudentsView() {
       })
     : students
 
-  const filtered = searched && statusFilter ? searched.filter(s => s.status === statusFilter) : searched
+  const filtered = statusFilter
+    ? searched.filter(s => s.status === statusFilter)
+    : searched.filter(s => s.status !== 'inactive')
 
   const allGroups = filtered ? groupByBranchName(filtered) : []
   const visibleGroups = branchFilter ? allGroups.filter(([name]) => name === branchFilter) : allGroups
@@ -198,7 +199,10 @@ export default function StudentsPage() {
       const s = search.trim().toLowerCase()
       rows = rows.filter(r => r.name.toLowerCase().includes(s) || r.contact.includes(s) || r.cabin.toLowerCase().includes(s))
     }
-    if (statusFilter) rows = rows.filter(r => r.status === statusFilter)
+    // "All Status" excludes inactive by default — inactive students only show up once that
+    // filter is picked explicitly, so the day-to-day list isn't cluttered with people who
+    // already left.
+    rows = statusFilter ? rows.filter(r => r.status === statusFilter) : rows.filter(r => r.status !== 'inactive')
     if (courseFilter) rows = rows.filter(r => r.course === courseFilter)
     Object.entries(filters).forEach(([key, rawVal]) => {
       const val = rawVal.trim().toLowerCase()

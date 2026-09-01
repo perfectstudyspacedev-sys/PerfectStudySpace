@@ -220,10 +220,10 @@ function daysBetween(fromDateStr: string, toDateStr: string): number {
 const MEMBERSHIP_GRACE_DAYS = 10;
 
 // A membership's end date is billing-cycle style: one day short of the same day N months
-// out, so a period never spills into the day it would "restart" on (e.g. 1 month from the
-// 15th ends the 14th, not the 15th). Starting on the 1st is the case that makes this
-// legible — 1 month from the 1st ends the last day of that same month, not the 1st of the
-// next one.
+// out, so the period ends the day before it would "restart" on and grace begins on that
+// restart day — e.g. start Aug 20, 1 month ends Sep 19, grace begins Sep 20 (not Sep 20
+// itself as the end date). Starting on the 1st is the case that makes this legible — 1
+// month from the 1st ends the last day of that same month, not the 1st of the next one.
 //
 // Starting on the 29th/30th/31st needs special care: addMonths() clamps to the target
 // month's last day when that day-of-month doesn't exist there (e.g. Jan 31 + 1 month ->
@@ -4138,7 +4138,21 @@ Deno.serve(async (req) => {
       const overtimeMinutes = (unbilledOvertime ?? []).reduce((s: number, o: { overtime_minutes: number }) => s + Number(o.overtime_minutes), 0);
       const overtimeDue = (unbilledOvertime ?? []).reduce((s: number, o: { billed_amount: number | null }) => s + Number(o.billed_amount ?? 0), 0);
 
-      const totalOwed = membershipDue + lockerDue + foodPassOwed + overtimeDue;
+      // Quitting isn't always same-day — staff sometimes only get around to closing a
+      // membership a few days after it actually expired. Default assumption is the student
+      // kept using the space in the meantime, billed at the same per-day rate as the plan
+      // itself; staff can waive it with waiveOverstayCharge on the actual close if the
+      // student genuinely stopped coming on the expiry date and this is just a late
+      // paperwork close.
+      const today = todayISO();
+      const overstayDays = Math.max(0, daysBetween(mem.end_date, today));
+      const grossFee = Number(mem.monthly_fee) * Number(mem.months_paid);
+      const totalDays = Math.max(1, Math.round(
+        (new Date(mem.end_date + "T00:00:00Z").getTime() - new Date(mem.start_date + "T00:00:00Z").getTime()) / 86_400_000,
+      ));
+      const overstayCharge = overstayDays > 0 ? Math.round((grossFee / totalDays) * overstayDays) : 0;
+
+      const totalOwed = membershipDue + lockerDue + foodPassOwed + overtimeDue + overstayCharge;
       const totalCredit = lockerDepositRefund + foodPassRefund + cashbackAmount;
       const netAmount = totalOwed - totalCredit;
 
@@ -4146,6 +4160,7 @@ Deno.serve(async (req) => {
         membershipDue, lockerDue, lockerDepositRefund,
         foodPassBalance, foodPassRefund, foodPassOwed,
         cashbackAmount, overtimeMinutes, overtimeDue,
+        overstayDays, overstayCharge,
         totalOwed, totalCredit, netAmount,
         canClose: true,
         locker: locker ?? null,
@@ -4158,9 +4173,11 @@ Deno.serve(async (req) => {
     // does (locker, food pass, cashback, overtime), plus the prorated refund for unused days
     // that's unique to a deletion. "Membership amount paid" for the prorated formula is the
     // pre-multi-month-discount gross (monthly_fee * months_paid), per how it was specified;
-    // the raw result is capped at what was actually collected (total_paid) so a discounted
-    // or partially-paid membership never refunds more than the student actually paid.
-    async function computeDeleteSettlement(mem: Record<string, any>) {
+    // the raw result is capped at total_paid + fee_due (what the student will have been
+    // charged in total once this same settlement collects the outstanding balance below) —
+    // NOT total_paid alone, since that would short the refund by exactly the still-unpaid
+    // balance whenever the membership was only partially paid off.
+    async function computeDeleteSettlement(mem: Record<string, any>, waiveOverstayCharge = false, withholdLockerDeposit = false) {
       const { data: locker } = await db.from("lockers").select("*")
         .eq("student_id", mem.student_id).eq("is_active", true).maybeSingle();
       const { data: foodPass } = await db.from("food_passes").select("*")
@@ -4172,7 +4189,7 @@ Deno.serve(async (req) => {
 
       const membershipDue = Number(mem.fee_due ?? 0);
       const lockerDue = Number(locker?.fee_due ?? 0);
-      const lockerDepositRefund = locker && !locker.deposit_returned ? Number(locker.deposit_amount ?? 0) : 0;
+      const lockerDepositRefund = locker && !locker.deposit_returned && !withholdLockerDeposit ? Number(locker.deposit_amount ?? 0) : 0;
       const foodPassBalance = Number(foodPass?.balance ?? 0);
       const foodPassRefund = Math.max(foodPassBalance, 0);
       const foodPassOwed = Math.max(-foodPassBalance, 0);
@@ -4186,13 +4203,24 @@ Deno.serve(async (req) => {
       const totalDays = Math.max(1, Math.round(
         (new Date(mem.end_date + "T00:00:00Z").getTime() - new Date(mem.start_date + "T00:00:00Z").getTime()) / 86_400_000,
       ));
-      const remainingDays = Math.max(0, Math.round(
-        (new Date(mem.end_date + "T00:00:00Z").getTime() - new Date(today + "T00:00:00Z").getTime()) / 86_400_000,
-      ));
+      // Signed gap between today and end_date splits into exactly one of the two below —
+      // a membership can't simultaneously have unused days left AND be overstayed.
+      const daysSinceEnd = Math.round(
+        (new Date(today + "T00:00:00Z").getTime() - new Date(mem.end_date + "T00:00:00Z").getTime()) / 86_400_000,
+      );
+      const remainingDays = Math.max(0, -daysSinceEnd);
       const rawProratedRefund = (grossFee / totalDays) * remainingDays;
-      const proratedRefund = Math.round(Math.max(0, Math.min(rawProratedRefund, Number(mem.total_paid))));
+      const proratedRefund = Math.round(Math.max(0, Math.min(rawProratedRefund, Number(mem.total_paid) + membershipDue)));
 
-      const totalOwed = membershipDue + lockerDue + foodPassOwed + overtimeDue;
+      // Same overstay concept as close_membership — a Delete Membership done days after the
+      // student's plan already expired defaults to billing those extra days at the plan's
+      // own per-day rate; waiveOverstayCharge lets staff confirm the student actually left
+      // on the expiry date and this is just a late close.
+      const overstayDays = Math.max(0, daysSinceEnd);
+      const overstayCharge = overstayDays > 0 && !waiveOverstayCharge
+        ? Math.round((grossFee / totalDays) * overstayDays) : 0;
+
+      const totalOwed = membershipDue + lockerDue + foodPassOwed + overtimeDue + overstayCharge;
       const totalCredit = lockerDepositRefund + foodPassRefund + cashbackAmount + proratedRefund;
       const netAmount = totalOwed - totalCredit;
 
@@ -4201,6 +4229,7 @@ Deno.serve(async (req) => {
         foodPassBalance, foodPassRefund, foodPassOwed,
         cashbackAmount, cashbackContribs, overtimeMinutes, overtimeDue,
         proratedRefund, remainingDays, totalDays, grossFee,
+        overstayDays, overstayCharge,
         totalOwed, totalCredit, netAmount,
         locker: locker ?? null, foodPass: foodPass ?? null, unbilledOvertime: unbilledOvertime ?? [],
         planChanges: planChanges ?? [],
@@ -4226,7 +4255,7 @@ Deno.serve(async (req) => {
     // A positive net still owed blocks the delete until a payment mode is chosen, exactly
     // like close_membership; a negative net pays out each credit as its own ledger entry.
     if (action === "delete_membership") {
-      const { membershipId, paymentMode, reason } = payload;
+      const { membershipId, paymentMode, reason, waiveOverstayCharge, withholdLockerDeposit } = payload;
       // Delete Membership is the most destructive membership action in the app —
       // irreversible, moves real money via prorated refunds/payouts. Open to all staff
       // (not owner-only), but a reason is mandatory and logged to membership_edits
@@ -4240,7 +4269,7 @@ Deno.serve(async (req) => {
         return err("This student is currently checked in — check them out before deleting the membership.");
       }
 
-      const s = await computeDeleteSettlement(mem);
+      const s = await computeDeleteSettlement(mem, !!waiveOverstayCharge, !!withholdLockerDeposit);
 
       if (s.netAmount > 0 && !paymentMode) {
         return err(`₹${s.netAmount.toFixed(2)} still needs to be collected before deleting — choose a payment mode.`);
@@ -4319,7 +4348,10 @@ Deno.serve(async (req) => {
         await db.from("transactions").insert({
           student_id: mem.student_id, branch_id: mem.branch_id, membership_id: membershipId,
           category: "membership", amount: s.netAmount, payment_mode: paymentMode,
-          notes: "Final settlement at membership deletion", created_by_staff_id: staff.id,
+          notes: s.overstayCharge > 0
+            ? `Final settlement at membership deletion (includes ₹${s.overstayCharge} for ${s.overstayDays} day(s) used after expiry)`
+            : "Final settlement at membership deletion",
+          created_by_staff_id: staff.id,
         });
       }
 
@@ -4329,12 +4361,12 @@ Deno.serve(async (req) => {
         collectedAmount: Math.max(s.netAmount, 0), refundAmount: Math.max(-s.netAmount, 0),
         proratedRefund: s.proratedRefund, remainingDays: s.remainingDays, totalDays: s.totalDays,
         lockerDepositRefund: s.lockerDepositRefund, foodPassRefund: s.foodPassRefund, cashbackAmount: s.cashbackAmount,
-        overtimeDue: s.overtimeDue,
+        overtimeDue: s.overtimeDue, overstayDays: s.overstayDays, overstayCharge: s.overstayCharge,
       });
     }
 
     if (action === "close_membership") {
-      const { membershipId, paymentMode, withholdLockerDeposit } = payload;
+      const { membershipId, paymentMode, withholdLockerDeposit, waiveOverstayCharge } = payload;
       const { data: mem } = await db.from("memberships").select("*").eq("id", membershipId).single();
       if (!mem) return err("Membership not found");
       if (!requireBranch(staff, mem.branch_id)) return err("Branch access denied", 403);
@@ -4365,7 +4397,19 @@ Deno.serve(async (req) => {
       const overtimeMinutes = (unbilledOvertime ?? []).reduce((s: number, o: { overtime_minutes: number }) => s + Number(o.overtime_minutes), 0);
       const overtimeDue = (unbilledOvertime ?? []).reduce((s: number, o: { billed_amount: number | null }) => s + Number(o.billed_amount ?? 0), 0);
 
-      const totalOwed = membershipDue + lockerDue + foodPassOwed + overtimeDue;
+      // See get_membership_closure_summary — waiveOverstayCharge lets staff confirm the
+      // student actually left on the expiry date and this is only a late paperwork close,
+      // so nothing gets billed for the gap.
+      const today = todayISO();
+      const overstayDays = Math.max(0, daysBetween(mem.end_date, today));
+      const grossFee = Number(mem.monthly_fee) * Number(mem.months_paid);
+      const totalDays = Math.max(1, Math.round(
+        (new Date(mem.end_date + "T00:00:00Z").getTime() - new Date(mem.start_date + "T00:00:00Z").getTime()) / 86_400_000,
+      ));
+      const overstayCharge = overstayDays > 0 && !waiveOverstayCharge
+        ? Math.round((grossFee / totalDays) * overstayDays) : 0;
+
+      const totalOwed = membershipDue + lockerDue + foodPassOwed + overtimeDue + overstayCharge;
       const totalCredit = lockerDepositRefund + foodPassRefund + cashbackAmount;
       const netAmount = totalOwed - totalCredit;
 
@@ -4438,7 +4482,10 @@ Deno.serve(async (req) => {
         await db.from("transactions").insert({
           student_id: mem.student_id, branch_id: mem.branch_id, membership_id: membershipId,
           category: "membership", amount: netAmount, payment_mode: paymentMode,
-          notes: "Final settlement at membership closure", created_by_staff_id: staff.id,
+          notes: overstayCharge > 0
+            ? `Final settlement at membership closure (includes ₹${overstayCharge} for ${overstayDays} day(s) used after expiry)`
+            : "Final settlement at membership closure",
+          created_by_staff_id: staff.id,
         });
       }
 
@@ -4447,6 +4494,7 @@ Deno.serve(async (req) => {
         ok: true, netAmount,
         collectedAmount: Math.max(netAmount, 0), refundAmount: Math.max(-netAmount, 0),
         cashbackAmount, lockerDepositRefund, foodPassRefund, overtimeDue,
+        overstayDays, overstayCharge,
       });
     }
 

@@ -49,6 +49,7 @@ function ActiveMembersTab({ branchId, tempPackages, permPackages }) {
   const [closeLoading, setCloseLoading] = useState(false)
   const [closePayMode, setClosePayMode] = useState('cash')
   const [withholdLockerDeposit, setWithholdLockerDeposit] = useState(false)
+  const [waiveOverstayCharge, setWaiveOverstayCharge] = useState(false)
   const [cashbackNotice, setCashbackNotice] = useState(null)
   const [settlementNotice, setSettlementNotice] = useState(null)
   const [waLoadingId, setWaLoadingId] = useState(null)
@@ -194,6 +195,7 @@ function ActiveMembersTab({ branchId, tempPackages, permPackages }) {
     setCloseSummary(null)
     setClosePayMode('cash')
     setWithholdLockerDeposit(false)
+    setWaiveOverstayCharge(false)
     try {
       const summary = await api('get_membership_closure_summary', { membershipId })
       setCloseSummary(summary)
@@ -204,7 +206,9 @@ function ActiveMembersTab({ branchId, tempPackages, permPackages }) {
   // the net settlement — recomputed here so the confirm button and payment-mode gating
   // reflect the checkbox instantly, without a second round trip to the server.
   const closeEffectiveNetAmount = closeSummary
-    ? closeSummary.netAmount + (withholdLockerDeposit ? closeSummary.lockerDepositRefund : 0)
+    ? closeSummary.netAmount
+      + (withholdLockerDeposit ? closeSummary.lockerDepositRefund : 0)
+      - (waiveOverstayCharge ? closeSummary.overstayCharge : 0)
     : 0
 
   const confirmClose = async () => {
@@ -215,6 +219,7 @@ function ActiveMembersTab({ branchId, tempPackages, permPackages }) {
         membershipId: closeModal.membershipId,
         paymentMode: closeEffectiveNetAmount > 0 ? closePayMode : undefined,
         withholdLockerDeposit: withholdLockerDeposit || undefined,
+        waiveOverstayCharge: waiveOverstayCharge || undefined,
       })
       setCloseModal(null)
       if (res.refundAmount > 0) {
@@ -648,8 +653,26 @@ function ActiveMembersTab({ branchId, tempPackages, permPackages }) {
                   {closeSummary.locker && <p className="mono" style={{ fontSize: '0.85rem' }}>Locker rent: {formatCurrency(closeSummary.lockerDue)}</p>}
                   {closeSummary.foodPassOwed > 0 && <p className="mono" style={{ fontSize: '0.85rem' }}>Food Pass shortfall: {formatCurrency(closeSummary.foodPassOwed)}</p>}
                   {closeSummary.overtimeDue > 0 && <p className="mono" style={{ fontSize: '0.85rem' }}>Overtime ({closeSummary.overtimeMinutes}m): {formatCurrency(closeSummary.overtimeDue)}</p>}
-                  <p className="mono" style={{ fontWeight: 700, marginTop: '0.3rem' }}>Total: {formatCurrency(closeSummary.totalOwed)}</p>
+                  {closeSummary.overstayDays > 0 && (
+                    <p className="mono" style={{ fontSize: '0.85rem', textDecoration: waiveOverstayCharge ? 'line-through' : 'none', color: waiveOverstayCharge ? 'var(--text-muted)' : undefined }}>
+                      Used {closeSummary.overstayDays} extra day{closeSummary.overstayDays === 1 ? '' : 's'} past expiry: {formatCurrency(closeSummary.overstayCharge)}
+                    </p>
+                  )}
+                  <p className="mono" style={{ fontWeight: 700, marginTop: '0.3rem' }}>
+                    Total: {formatCurrency(closeSummary.totalOwed - (waiveOverstayCharge ? closeSummary.overstayCharge : 0))}
+                  </p>
                 </div>
+
+                {closeSummary.overstayDays > 0 && (
+                  <label style={{ display: 'flex', alignItems: 'flex-start', gap: '0.5rem', marginBottom: '1rem', fontSize: '0.82rem', cursor: 'pointer' }}>
+                    <input
+                      type="checkbox" checked={waiveOverstayCharge}
+                      onChange={(e) => setWaiveOverstayCharge(e.target.checked)}
+                      style={{ marginTop: '0.15rem' }}
+                    />
+                    <span>Student already vacated on the expiry date — they didn't actually use these {closeSummary.overstayDays} extra day{closeSummary.overstayDays === 1 ? '' : 's'}, this is just a late close. Waive the charge.</span>
+                  </label>
+                )}
 
                 <div className="card" style={{ marginBottom: '1rem', background: 'rgba(74,222,128,0.05)' }}>
                   <h3 style={{ color: '#4ade80', fontSize: '0.9rem', marginBottom: '0.5rem' }}>Owed Back to the Student</h3>

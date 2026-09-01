@@ -498,6 +498,8 @@ export default function StudentProfilePage() {
   const [deleteSummary, setDeleteSummary] = useState(null)
   const [deletePayMode, setDeletePayMode] = useState('cash')
   const [deleteReason, setDeleteReason] = useState('')
+  const [deleteWaiveOverstay, setDeleteWaiveOverstay] = useState(false)
+  const [deleteWithholdLockerDeposit, setDeleteWithholdLockerDeposit] = useState(false)
 
   const refresh = useCallback(() => {
     setLoading(true)
@@ -872,11 +874,23 @@ export default function StudentProfilePage() {
     }
   }
 
+  // A Delete Membership done days after the plan already expired defaults to billing those
+  // extra days (see deleteSummary.overstayCharge) — deleteWaiveOverstay lets staff confirm
+  // the student actually left on time and this is just a late close, recomputed client-side
+  // so the modal reflects the checkbox instantly, same pattern as Quit Membership.
+  const deleteEffectiveNetAmount = deleteSummary
+    ? deleteSummary.netAmount
+      + (deleteWithholdLockerDeposit ? deleteSummary.lockerDepositRefund : 0)
+      - (deleteWaiveOverstay ? deleteSummary.overstayCharge : 0)
+    : 0
+
   const openDeleteMembership = async (membershipId) => {
     setDeleteMembershipError('')
     setDeleteSummary(null)
     setDeletePayMode('cash')
     setDeleteReason('')
+    setDeleteWaiveOverstay(false)
+    setDeleteWithholdLockerDeposit(false)
     setOpenPanel(null) // don't stack this modal on top of the still-open Membership Control one
     setDeleteMembershipOpen(true)
     try {
@@ -894,8 +908,10 @@ export default function StudentProfilePage() {
     try {
       const res = await api('delete_membership', {
         membershipId,
-        paymentMode: deleteSummary?.netAmount > 0 ? deletePayMode : undefined,
+        paymentMode: deleteEffectiveNetAmount > 0 ? deletePayMode : undefined,
         reason: deleteReason.trim(),
+        waiveOverstayCharge: deleteWaiveOverstay || undefined,
+        withholdLockerDeposit: deleteWithholdLockerDeposit || undefined,
       })
       setDeleteMembershipOpen(false)
       setOpenPanel(null)
@@ -1029,15 +1045,10 @@ export default function StudentProfilePage() {
                 activeMem && ['Started', formatDate(activeMem.start_date)],
                 activeMem && ['Expires', formatDate(activeMem.end_date)],
                 activeMem && ['Days Left', (
-                  // +1 on the non-expired side counts both today and the (inclusive) end
-                  // date as usable days — a membership starting and ending on the same day
-                  // is 1 day left, not 0. The "expired Xd ago" side is unaffected — it's
-                  // already counting full days elapsed since the last valid day.
-                  <span key="daysleft" style={{ color: daysLeft < 0 ? '#ff6b6b' : daysLeft + 1 <= 5 ? '#ffaa44' : undefined, fontWeight: 700 }}>
-                    {daysLeft < 0 ? `Expired ${Math.abs(daysLeft)}d ago` : `${daysLeft + 1} day${daysLeft + 1 === 1 ? '' : 's'}`}
+                  <span key="daysleft" style={{ color: daysLeft < 0 ? '#ff6b6b' : daysLeft <= 5 ? '#ffaa44' : undefined, fontWeight: 700 }}>
+                    {daysLeft < 0 ? `Expired ${Math.abs(daysLeft)}d ago` : `${daysLeft} day${daysLeft === 1 ? '' : 's'}`}
                   </span>
                 )],
-                activeMem && ['Due Date', formatDate(activeMem.due_date)],
                 activeMem?.fee_due > 0 && ['Fee Due', <span key="fee" style={{ color: '#ff6b6b', fontWeight: 700 }}>{formatCurrency(activeMem.fee_due)}</span>],
                 locker && ['Locker', `${locker.locker_no} · Due ${formatDate(locker.locker_due_date)}`],
               ].filter(Boolean).map(([label, value]) => (
@@ -2201,28 +2212,63 @@ export default function StudentProfilePage() {
                   {deleteSummary.locker && <p className="mono" style={{ fontSize: '0.85rem' }}>Locker rent: {formatCurrency(deleteSummary.lockerDue)}</p>}
                   {deleteSummary.foodPassOwed > 0 && <p className="mono" style={{ fontSize: '0.85rem' }}>Food Pass shortfall: {formatCurrency(deleteSummary.foodPassOwed)}</p>}
                   {deleteSummary.overtimeDue > 0 && <p className="mono" style={{ fontSize: '0.85rem' }}>Overtime ({deleteSummary.overtimeMinutes}m): {formatCurrency(deleteSummary.overtimeDue)}</p>}
-                  <p className="mono" style={{ fontWeight: 700, marginTop: '0.3rem' }}>Total: {formatCurrency(deleteSummary.totalOwed)}</p>
+                  {deleteSummary.overstayDays > 0 && (
+                    <p className="mono" style={{ fontSize: '0.85rem', textDecoration: deleteWaiveOverstay ? 'line-through' : 'none', color: deleteWaiveOverstay ? 'var(--text-muted)' : undefined }}>
+                      Used {deleteSummary.overstayDays} extra day{deleteSummary.overstayDays === 1 ? '' : 's'} past expiry: {formatCurrency(deleteSummary.overstayCharge)}
+                    </p>
+                  )}
+                  <p className="mono" style={{ fontWeight: 700, marginTop: '0.3rem' }}>
+                    Total: {formatCurrency(deleteSummary.totalOwed - (deleteWaiveOverstay ? deleteSummary.overstayCharge : 0))}
+                  </p>
                 </div>
+
+                {deleteSummary.overstayDays > 0 && (
+                  <label style={{ display: 'flex', alignItems: 'flex-start', gap: '0.5rem', marginBottom: '0.75rem', fontSize: '0.82rem', cursor: 'pointer' }}>
+                    <input
+                      type="checkbox" checked={deleteWaiveOverstay}
+                      onChange={(e) => setDeleteWaiveOverstay(e.target.checked)}
+                      style={{ marginTop: '0.15rem' }}
+                    />
+                    <span>Student already vacated on the expiry date — they didn't actually use these {deleteSummary.overstayDays} extra day{deleteSummary.overstayDays === 1 ? '' : 's'}, this is just a late close. Waive the charge.</span>
+                  </label>
+                )}
 
                 <div className="card" style={{ marginBottom: '0.75rem', background: 'rgba(74,222,128,0.05)' }}>
                   <h3 style={{ color: '#4ade80', fontSize: '0.9rem', marginBottom: '0.5rem' }}>Owed Back to the Student</h3>
-                  {deleteSummary.lockerDepositRefund > 0 && <p className="mono" style={{ fontSize: '0.85rem' }}>Locker deposit: {formatCurrency(deleteSummary.lockerDepositRefund)}</p>}
+                  {deleteSummary.lockerDepositRefund > 0 && (
+                    <p className="mono" style={{ fontSize: '0.85rem', textDecoration: deleteWithholdLockerDeposit ? 'line-through' : 'none', color: deleteWithholdLockerDeposit ? 'var(--text-muted)' : undefined }}>
+                      Locker deposit: {formatCurrency(deleteSummary.lockerDepositRefund)}
+                    </p>
+                  )}
                   {deleteSummary.foodPassRefund > 0 && <p className="mono" style={{ fontSize: '0.85rem' }}>Food Pass balance: {formatCurrency(deleteSummary.foodPassRefund)}</p>}
                   {deleteSummary.cashbackAmount > 0 && <p className="mono" style={{ fontSize: '0.85rem' }}>Unredeemed cashback: {formatCurrency(deleteSummary.cashbackAmount)}</p>}
                   <p className="mono" style={{ fontSize: '0.85rem' }}>
                     Unused days ({deleteSummary.remainingDays} of {deleteSummary.totalDays}): {formatCurrency(deleteSummary.proratedRefund)}
                   </p>
-                  <p className="mono" style={{ fontWeight: 700, marginTop: '0.3rem' }}>Total: {formatCurrency(deleteSummary.totalCredit)}</p>
+                  <p className="mono" style={{ fontWeight: 700, marginTop: '0.3rem' }}>
+                    Total: {formatCurrency(deleteSummary.totalCredit - (deleteWithholdLockerDeposit ? deleteSummary.lockerDepositRefund : 0))}
+                  </p>
                 </div>
 
+                {deleteSummary.lockerDepositRefund > 0 && (
+                  <label style={{ display: 'flex', alignItems: 'flex-start', gap: '0.5rem', marginBottom: '0.75rem', fontSize: '0.82rem', cursor: 'pointer' }}>
+                    <input
+                      type="checkbox" checked={deleteWithholdLockerDeposit}
+                      onChange={(e) => setDeleteWithholdLockerDeposit(e.target.checked)}
+                      style={{ marginTop: '0.15rem' }}
+                    />
+                    <span>Don't refund the locker deposit (e.g. locker damage) — it's forfeited instead of paid back.</span>
+                  </label>
+                )}
+
                 <div className="card" style={{ marginBottom: '0.75rem', background: 'rgba(255,255,255,0.03)' }}>
-                  {deleteSummary.netAmount > 0 ? (
+                  {deleteEffectiveNetAmount > 0 ? (
                     <p className="mono" style={{ fontWeight: 700, fontSize: '1.05rem', color: 'var(--accent)' }}>
-                      Collect {formatCurrency(deleteSummary.netAmount)} from the student
+                      Collect {formatCurrency(deleteEffectiveNetAmount)} from the student
                     </p>
-                  ) : deleteSummary.netAmount < 0 ? (
+                  ) : deleteEffectiveNetAmount < 0 ? (
                     <p className="mono" style={{ fontWeight: 700, fontSize: '1.05rem', color: '#4ade80' }}>
-                      Pay back {formatCurrency(-deleteSummary.netAmount)} to the student
+                      Pay back {formatCurrency(-deleteEffectiveNetAmount)} to the student
                     </p>
                   ) : (
                     <p className="mono" style={{ fontWeight: 700, fontSize: '1.05rem', color: '#4ade80' }}>
@@ -2231,7 +2277,7 @@ export default function StudentProfilePage() {
                   )}
                 </div>
 
-                {deleteSummary.netAmount > 0 && (
+                {deleteEffectiveNetAmount > 0 && (
                   <div className="form-group">
                     <label>Payment Mode</label>
                     <div style={{ display: 'flex', gap: '0.5rem' }}>
@@ -2275,8 +2321,8 @@ export default function StudentProfilePage() {
                 disabled={!deleteSummary || deleteMembershipLoading}
               >
                 {deleteMembershipLoading ? 'Deleting…'
-                  : deleteSummary?.netAmount > 0 ? `Collect ${formatCurrency(deleteSummary.netAmount)} & Delete`
-                  : deleteSummary?.netAmount < 0 ? `Pay Back ${formatCurrency(-deleteSummary.netAmount)} & Delete`
+                  : deleteEffectiveNetAmount > 0 ? `Collect ${formatCurrency(deleteEffectiveNetAmount)} & Delete`
+                  : deleteEffectiveNetAmount < 0 ? `Pay Back ${formatCurrency(-deleteEffectiveNetAmount)} & Delete`
                   : 'Confirm Delete'}
               </button>
             </div>
@@ -2384,7 +2430,8 @@ export default function StudentProfilePage() {
                 Includes {formatCurrency(deleteMembershipNotice.proratedRefund)} refunded for {deleteMembershipNotice.remainingDays} of {deleteMembershipNotice.totalDays} unused day(s)
                 {deleteMembershipNotice.lockerDepositRefund > 0 && `, ${formatCurrency(deleteMembershipNotice.lockerDepositRefund)} locker deposit`}
                 {deleteMembershipNotice.foodPassRefund > 0 && `, ${formatCurrency(deleteMembershipNotice.foodPassRefund)} Food Pass balance`}
-                {deleteMembershipNotice.cashbackAmount > 0 && `, ${formatCurrency(deleteMembershipNotice.cashbackAmount)} cashback`}.
+                {deleteMembershipNotice.cashbackAmount > 0 && `, ${formatCurrency(deleteMembershipNotice.cashbackAmount)} cashback`}
+                {deleteMembershipNotice.overstayCharge > 0 && `, ${formatCurrency(deleteMembershipNotice.overstayCharge)} charged for ${deleteMembershipNotice.overstayDays} extra day(s) used past expiry`}.
               </p>
             </div>
             <div className="modal-actions">
