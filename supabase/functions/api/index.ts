@@ -4196,7 +4196,9 @@ Deno.serve(async (req) => {
     // charged in total once this same settlement collects the outstanding balance below) —
     // NOT total_paid alone, since that would short the refund by exactly the still-unpaid
     // balance whenever the membership was only partially paid off.
-    async function computeDeleteSettlement(mem: Record<string, any>, waiveOverstayCharge = false, withholdLockerDeposit = false) {
+    async function computeDeleteSettlement(
+      mem: Record<string, any>, waiveOverstayCharge = false, withholdLockerDeposit = false, waiveProratedRefund = false,
+    ) {
       const { data: locker } = await db.from("lockers").select("*")
         .eq("student_id", mem.student_id).eq("is_active", true).maybeSingle();
       const { data: foodPass } = await db.from("food_passes").select("*")
@@ -4226,7 +4228,10 @@ Deno.serve(async (req) => {
         (new Date(today + "T00:00:00Z").getTime() - new Date(mem.end_date + "T00:00:00Z").getTime()) / 86_400_000,
       );
       const remainingDays = Math.max(0, -daysSinceEnd);
-      const rawProratedRefund = (grossFee / totalDays) * remainingDays;
+      // waiveProratedRefund lets staff omit this credit entirely — e.g. the student is
+      // quitting early by choice and the business's policy is no refund for unused days,
+      // rather than the app forcing one.
+      const rawProratedRefund = waiveProratedRefund ? 0 : (grossFee / totalDays) * remainingDays;
       const proratedRefund = Math.round(Math.max(0, Math.min(rawProratedRefund, Number(mem.total_paid) + membershipDue)));
 
       // Same overstay concept as close_membership — a Delete Membership done days after the
@@ -4272,7 +4277,7 @@ Deno.serve(async (req) => {
     // A positive net still owed blocks the delete until a payment mode is chosen, exactly
     // like close_membership; a negative net pays out each credit as its own ledger entry.
     if (action === "delete_membership") {
-      const { membershipId, paymentMode, reason, waiveOverstayCharge, withholdLockerDeposit } = payload;
+      const { membershipId, paymentMode, reason, waiveOverstayCharge, withholdLockerDeposit, waiveProratedRefund } = payload;
       // Delete Membership is the most destructive membership action in the app —
       // irreversible, moves real money via prorated refunds/payouts. Open to all staff
       // (not owner-only), but a reason is mandatory and logged to membership_edits
@@ -4286,7 +4291,7 @@ Deno.serve(async (req) => {
         return err("This student is currently checked in — check them out before deleting the membership.");
       }
 
-      const s = await computeDeleteSettlement(mem, !!waiveOverstayCharge, !!withholdLockerDeposit);
+      const s = await computeDeleteSettlement(mem, !!waiveOverstayCharge, !!withholdLockerDeposit, !!waiveProratedRefund);
 
       if (s.netAmount > 0 && !paymentMode) {
         return err(`₹${s.netAmount.toFixed(2)} still needs to be collected before deleting — choose a payment mode.`);

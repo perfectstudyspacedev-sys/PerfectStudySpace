@@ -500,6 +500,7 @@ export default function StudentProfilePage() {
   const [deleteReason, setDeleteReason] = useState('')
   const [deleteWaiveOverstay, setDeleteWaiveOverstay] = useState(false)
   const [deleteWithholdLockerDeposit, setDeleteWithholdLockerDeposit] = useState(false)
+  const [deleteWaiveProratedRefund, setDeleteWaiveProratedRefund] = useState(false)
 
   const refresh = useCallback(() => {
     setLoading(true)
@@ -881,6 +882,7 @@ export default function StudentProfilePage() {
   const deleteEffectiveNetAmount = deleteSummary
     ? deleteSummary.netAmount
       + (deleteWithholdLockerDeposit ? deleteSummary.lockerDepositRefund : 0)
+      + (deleteWaiveProratedRefund ? deleteSummary.proratedRefund : 0)
       - (deleteWaiveOverstay ? deleteSummary.overstayCharge : 0)
     : 0
 
@@ -891,6 +893,7 @@ export default function StudentProfilePage() {
     setDeleteReason('')
     setDeleteWaiveOverstay(false)
     setDeleteWithholdLockerDeposit(false)
+    setDeleteWaiveProratedRefund(false)
     setOpenPanel(null) // don't stack this modal on top of the still-open Membership Control one
     setDeleteMembershipOpen(true)
     try {
@@ -912,6 +915,7 @@ export default function StudentProfilePage() {
         reason: deleteReason.trim(),
         waiveOverstayCharge: deleteWaiveOverstay || undefined,
         withholdLockerDeposit: deleteWithholdLockerDeposit || undefined,
+        waiveProratedRefund: deleteWaiveProratedRefund || undefined,
       })
       setDeleteMembershipOpen(false)
       setOpenPanel(null)
@@ -2242,11 +2246,13 @@ export default function StudentProfilePage() {
                   )}
                   {deleteSummary.foodPassRefund > 0 && <p className="mono" style={{ fontSize: '0.85rem' }}>Food Pass balance: {formatCurrency(deleteSummary.foodPassRefund)}</p>}
                   {deleteSummary.cashbackAmount > 0 && <p className="mono" style={{ fontSize: '0.85rem' }}>Unredeemed cashback: {formatCurrency(deleteSummary.cashbackAmount)}</p>}
-                  <p className="mono" style={{ fontSize: '0.85rem' }}>
+                  <p className="mono" style={{ fontSize: '0.85rem', textDecoration: deleteWaiveProratedRefund ? 'line-through' : 'none', color: deleteWaiveProratedRefund ? 'var(--text-muted)' : undefined }}>
                     Unused days ({deleteSummary.remainingDays} of {deleteSummary.totalDays}): {formatCurrency(deleteSummary.proratedRefund)}
                   </p>
                   <p className="mono" style={{ fontWeight: 700, marginTop: '0.3rem' }}>
-                    Total: {formatCurrency(deleteSummary.totalCredit - (deleteWithholdLockerDeposit ? deleteSummary.lockerDepositRefund : 0))}
+                    Total: {formatCurrency(deleteSummary.totalCredit
+                      - (deleteWithholdLockerDeposit ? deleteSummary.lockerDepositRefund : 0)
+                      - (deleteWaiveProratedRefund ? deleteSummary.proratedRefund : 0))}
                   </p>
                 </div>
 
@@ -2258,6 +2264,17 @@ export default function StudentProfilePage() {
                       style={{ marginTop: '0.15rem' }}
                     />
                     <span>Don't refund the locker deposit (e.g. locker damage) — it's forfeited instead of paid back.</span>
+                  </label>
+                )}
+
+                {deleteSummary.proratedRefund > 0 && (
+                  <label style={{ display: 'flex', alignItems: 'flex-start', gap: '0.5rem', marginBottom: '0.75rem', fontSize: '0.82rem', cursor: 'pointer' }}>
+                    <input
+                      type="checkbox" checked={deleteWaiveProratedRefund}
+                      onChange={(e) => setDeleteWaiveProratedRefund(e.target.checked)}
+                      style={{ marginTop: '0.15rem' }}
+                    />
+                    <span>Don't refund the {deleteSummary.remainingDays} unused day{deleteSummary.remainingDays === 1 ? '' : 's'} — student is quitting early by choice, no refund owed.</span>
                   </label>
                 )}
 
