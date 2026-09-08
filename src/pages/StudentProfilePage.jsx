@@ -856,7 +856,11 @@ export default function StudentProfilePage() {
         paymentMode: renewPayMode.mode,
         cashAmount: renewPayMode.cashAmount, upiAmount: renewPayMode.upiAmount,
         advanceAmount: renewPayType === 'partial' ? (Number(renewAdvance) || null) : renewPayType === 'pending' ? 0 : null,
-        isCustomPlan: renewIsCustomPlan || undefined,
+        // Explicit true/false, not `|| undefined` — the backend falls back to the expiring
+        // membership's own custom-ness when this is omitted (so an old caller that never
+        // sent it still works), but that means collapsing false into undefined here would
+        // silently ignore staff explicitly switching a custom plan back to a fixed package.
+        isCustomPlan: renewIsCustomPlan,
         customAmount: renewIsCustomPlan ? Number(renewCustomAmount) : undefined,
         weekendHours: renewIsCustomPlan ? (Number(renewCustomWeekendHours) || Number(renewCustomWeekdayHours)) : undefined,
         isCustomDays: renewIsCustomDays || undefined,
