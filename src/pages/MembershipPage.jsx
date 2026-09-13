@@ -992,7 +992,7 @@ function NewMembershipForm({ branchId, onCreated, tempPackages, permPackages }) 
         emergencyContact, referralSource,
         withLocker, lockerNo: withLocker ? lockerNo : null,
         advanceAmount: paymentType === 'full' ? null : paymentType === 'partial' ? advanceNum : 0,
-        startDate: isOwner ? startDate : undefined,
+        startDate: startDate || undefined,
         isCustomPlan: isCustomPlan || undefined,
         customAmount: isCustomPlan ? Number(customAmount) : undefined,
         weekendHours: isCustomPlan ? (Number(customWeekendHours) || Number(customWeekdayHours)) : undefined,
@@ -1221,12 +1221,10 @@ function NewMembershipForm({ branchId, onCreated, tempPackages, permPackages }) 
             </div>
           </div>
         )}
-        {isOwner && (
-          <div className="form-group">
-            <label>Start Date</label>
-            <input type="date" value={startDate} max={todayISO()} onChange={(e) => setStartDate(e.target.value)} />
-          </div>
-        )}
+        <div className="form-group">
+          <label>Start Date</label>
+          <input type="date" value={startDate} max={todayISO()} onChange={(e) => setStartDate(e.target.value)} />
+        </div>
         <div className="form-group">
           <label>Locker</label>
           <div style={{ display: 'flex', gap: '0.5rem' }}>

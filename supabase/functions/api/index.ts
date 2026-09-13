@@ -1119,7 +1119,7 @@ Deno.serve(async (req) => {
         gross = monthlyFee * months;
       }
       const totalPaid = gross * (1 - discount / 100);
-      const startDate = isOwnerOrAdmin(staff) && customStartDate ? customStartDate : todayISO();
+      const startDate = customStartDate ? customStartDate : todayISO();
       if (startDate > todayISO()) return err("Start date cannot be in the future");
       const endDate = isCustomDaysPlan ? addDays(startDate, customDaysCount! - 1) : endDateForMonths(startDate, months);
       // Derived the same clamp-aware way as endDate (not a raw addMonths) so a start date
@@ -2332,6 +2332,11 @@ Deno.serve(async (req) => {
       if (!["percent", "fixed"].includes(discountType)) return err("Invalid discount type");
       const value = Number(discountValue);
       if (!(value > 0)) return err("Discount value must be greater than 0");
+      // Same cap grant_cashback already enforces. Without it, "1000" typed into the value
+      // box with the type left on Percent (meaning ₹1000, a one-keystroke mistake) doesn't
+      // just clear the fee — the excess is banked as a cashback below, which is later paid
+      // out in real cash at closure. A 1000% discount on ₹2,100 owed banks ₹18,900.
+      if (discountType === "percent" && value > 100) return err("Percentage discount cannot exceed 100");
 
       const { data: mem } = await db.from("memberships").select("*").eq("id", membershipId).single();
       if (!mem) return err("Membership not found");
@@ -2709,8 +2714,12 @@ Deno.serve(async (req) => {
         if (fi.quantity != null) await db.from("food_items").update({ quantity: fi.quantity - qty }).eq("id", fi.id);
       }
 
-      const disc = Number(discountAmount) || 0;
-      const total = Math.max(subtotal - disc, 0);
+      // Clamped to [0, subtotal] rather than trusted as sent: a negative discount would
+      // *inflate* the bill above the sum of its own line items, and an oversized one would
+      // record a discount_amount that doesn't match the total actually charged (total is
+      // floored at 0 below, so the two would silently disagree on the receipt).
+      const disc = Math.min(Math.max(Number(discountAmount) || 0, 0), subtotal);
+      const total = subtotal - disc;
 
       // A student with a Food Pass pays through it exclusively — not a choice, a rule. The
       // pass balance itself must never go negative: if this order exceeds what's available,
@@ -3985,6 +3994,14 @@ Deno.serve(async (req) => {
       const { data: mem } = await db.from("memberships").select("*").eq("id", membershipId).single();
       if (!mem) return err("Membership not found");
       if (!requireBranch(staff, mem.branch_id)) return err("Branch access denied", 403);
+      // Renewal creates a new membership row and charges for it, so a double-submit (an
+      // impatient second click, a stale tab) would bill the student twice and leave two
+      // memberships behind. The fee_due check below can't catch that — a fully-paid renewal
+      // leaves the old row at 0 due, so the second attempt sails straight past it. Same
+      // re-entry guard delete_membership already uses.
+      if (!mem.is_active) {
+        return err("This membership has already been renewed or ended — refresh to see the current one.");
+      }
       if (Number(mem.fee_due ?? 0) > 0) {
         return err(`This membership still has ₹${Number(mem.fee_due)} pending — clear it before renewing.`);
       }
@@ -4392,6 +4409,13 @@ Deno.serve(async (req) => {
       const { data: mem } = await db.from("memberships").select("*").eq("id", membershipId).single();
       if (!mem) return err("Membership not found");
       if (!requireBranch(staff, mem.branch_id)) return err("Branch access denied", 403);
+      // Most of this settlement self-heals on a re-run (the deposit is marked returned, the
+      // pass is zeroed, fee_due is cleared), but the overstay charge does not — it's derived
+      // from end_date vs today, which nothing here resets, so a second Quit would re-bill the
+      // same days. Same re-entry guard delete_membership already uses.
+      if (!mem.is_active) {
+        return err("This membership has already been ended — refresh to see its current state.");
+      }
 
       const { data: locker } = await db.from("lockers").select("*")
         .eq("student_id", mem.student_id).eq("is_active", true).maybeSingle();
