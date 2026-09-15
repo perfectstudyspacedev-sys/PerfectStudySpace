@@ -27,17 +27,26 @@ function isToday(ts) {
 
 
 // Surfaces new chat messages (branch team + all-staff channels) in the notification bell —
-// this also covers cross-branch visit intimations, since those are inserted as ordinary
-// messages into the student's home branch channel. "Seen" message IDs persist to
-// localStorage per staff account, so a message already viewed/dismissed doesn't come
-// back at the next login, while messages that arrived while fully offline still surface.
-export function useMessageAlerts(branchId, currentStaffId) {
+// this also covers cross-branch visit intimations and new website enquiries, since those
+// are inserted as ordinary (tagged) messages. "Seen" message IDs persist to localStorage
+// per staff account, so a message already viewed/dismissed doesn't come back at the next
+// login, while messages that arrived while fully offline still surface.
+//
+// canSeeAllBranches (owner/admin) fetches every branch's channel at once instead of just
+// the one currently open, so a system notice reaches them regardless of which branch is
+// active — but ordinary team chat from a branch they're not currently viewing is noise,
+// not a notification, so only tagged system notices (cross-branch, new enquiry) are
+// allowed to toast from a branch other than the active one; see the skip check below.
+export function useMessageAlerts(branchId, currentStaffId, canSeeAllBranches) {
   const [toasts, setToasts] = useState([])
   const seen = useRef(null)
   const isFirstEverCheck = useRef(true)
 
   const check = useCallback(async () => {
-    if (!branchId || !currentStaffId) return
+    if (!currentStaffId) return
+    // A single-branch fetch has nothing to scope to without a branchId (e.g. Combined
+    // Hall), but the all-branches fetch doesn't need one at all.
+    if (!branchId && !canSeeAllBranches) return
     try {
       if (!seen.current) {
         const persisted = loadSeen(currentStaffId)
@@ -46,7 +55,9 @@ export function useMessageAlerts(branchId, currentStaffId) {
       }
 
       const [branchData, allData] = await Promise.all([
-        api('list_messages', { branchId, channel: 'branch' }),
+        canSeeAllBranches
+          ? api('list_messages', { allBranches: true })
+          : api('list_messages', { branchId, channel: 'branch' }),
         api('list_messages', { branchId, channel: 'all' }),
       ])
       const messages = [...(branchData.messages ?? []), ...(allData.messages ?? [])]
@@ -70,18 +81,33 @@ export function useMessageAlerts(branchId, currentStaffId) {
         // Don't surface messages that arrived on a previous day (e.g. staff was offline
         // for a while) — they're still marked seen above so they never resurface later.
         if (!isToday(m.sent_at)) continue
-        const senderName = m.staff?.display_name || m.staff?.username || 'Staff'
-        // Cross-branch check-in notices are inserted as ordinary messages (see
-        // check_in_member) but tagged so they get their own icon/title instead of looking
-        // like an indistinguishable chat message.
+        // Cross-branch check-in notices and new website enquiries are both inserted as
+        // ordinary messages (see check_in_member and public_create_enquiry) but tagged so
+        // they get their own icon/title instead of looking like an indistinguishable chat
+        // message — neither has a real staff sender, so senderName would read "Staff" and
+        // add nothing.
         const isCrossBranch = m.content.startsWith('[cross_branch]')
-        const displayContent = isCrossBranch ? m.content.slice('[cross_branch]'.length).trim() : m.content
+        const isNewEnquiry = m.content.startsWith('[new_enquiry]')
+        // Owner/admin fetched every branch above — an untagged chat message from a branch
+        // other than the one they actually have open is someone else's team chat, not
+        // something meant for them right now. Marked seen already (above) so switching to
+        // that branch later won't dredge it back up as "new". Exempt: tagged system
+        // notices (the whole point of fetching every branch), and the all-staff channel
+        // (m.branch_id null) — that one's already global by design, never branch-specific.
+        if (canSeeAllBranches && !isCrossBranch && !isNewEnquiry && m.branch_id != null && m.branch_id !== branchId) continue
+        const senderName = m.staff?.display_name || m.staff?.username || 'Staff'
+        const tagLength = isCrossBranch ? '[cross_branch]'.length : isNewEnquiry ? '[new_enquiry]'.length : 0
+        const displayContent = tagLength ? m.content.slice(tagLength).trim() : m.content
+        const level = isCrossBranch ? 'cross_branch' : isNewEnquiry ? 'new_enquiry' : 'message'
         newToasts.push({
-          id: `msg:${m.id}`, level: isCrossBranch ? 'cross_branch' : 'message',
-          message: isCrossBranch ? displayContent : `${senderName}: ${displayContent}`,
+          id: `msg:${m.id}`, level,
+          message: tagLength ? displayContent : `${senderName}: ${displayContent}`,
           createdAt: Date.parse(m.sent_at),
         })
-        fireNativeNotification(isCrossBranch ? '🔄 Cross-Branch Visit' : `💬 ${senderName}`, displayContent)
+        fireNativeNotification(
+          isCrossBranch ? '🔄 Cross-Branch Visit' : isNewEnquiry ? '📝 New Enquiry' : `💬 ${senderName}`,
+          displayContent,
+        )
       }
       // Persist whenever anything new was marked seen — not just when it produced a toast —
       // otherwise a message from the current staff member (skipped from toasting) would be
@@ -95,7 +121,7 @@ export function useMessageAlerts(branchId, currentStaffId) {
         return [...kept, ...newToasts]
       })
     } catch { /* ignore network errors */ }
-  }, [branchId, currentStaffId])
+  }, [branchId, currentStaffId, canSeeAllBranches])
 
   useEffect(() => {
     check()

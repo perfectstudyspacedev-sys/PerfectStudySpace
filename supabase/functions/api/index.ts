@@ -596,6 +596,16 @@ Deno.serve(async (req) => {
       });
       if (insertError) return err(insertError.message);
 
+      // Surface it to that branch's staff the same way as any other system-generated
+      // notice — tagged so useMessageAlerts gives it its own icon/title instead of an
+      // indistinguishable chat bubble, exactly like the [cross_branch] check-in notice
+      // above. sender_staff_id is null: no staff member triggered this, the public
+      // website form did, and the column allows null for that reason.
+      await db.from("messages").insert({
+        branch_id: branch.id, sender_staff_id: null, recipient_type: "staff",
+        content: `[new_enquiry] ${name} (${phone}) enquired via the website${packageInterest ? ` — ${packageInterest}` : ""}.`,
+      });
+
       return json({ ok: true });
     }
 
@@ -3580,15 +3590,24 @@ Deno.serve(async (req) => {
 
     // ─── MESSAGES ───
     if (action === "list_messages") {
-      const { branchId, channel } = payload;
+      const { branchId, channel, allBranches } = payload;
       let q = db.from("messages")
         .select("*, staff:sender_staff_id(display_name, username), students:recipient_student_id(name, phone)")
-        .order("sent_at", { ascending: false }).limit(50);
+        .order("sent_at", { ascending: false });
       if (channel === "all") {
-        q = q.is("branch_id", null);
+        q = q.is("branch_id", null).limit(50);
+      } else if (allBranches) {
+        // Owner/admin oversee every branch, so a system notice (a new website enquiry, a
+        // cross-branch check-in) has to reach them no matter which single branch they
+        // currently have open in the UI — see useMessageAlerts on the frontend, which
+        // filters this down to just the tagged system notices rather than every branch's
+        // ordinary team chat. Higher limit than the single-branch case since this spans
+        // every branch's channel at once.
+        if (!isOwnerOrAdmin(staff)) return err("Owner only", 403);
+        q = q.not("branch_id", "is", null).limit(150);
       } else {
         if (!requireBranch(staff, branchId)) return err("Branch access denied", 403);
-        q = q.eq("branch_id", branchId);
+        q = q.eq("branch_id", branchId).limit(50);
       }
       const { data } = await q;
       return json({ messages: data ?? [] });

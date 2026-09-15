@@ -28,6 +28,7 @@ const TOAST_META = {
   message: { icon: '💬', title: 'New Message', color: '#ffaa44', bg: '#1a1000', border: '#ff9500', shadow: 'rgba(255,149,0,0.35)' },
   cross_branch: { icon: '🔄', title: 'Cross-Branch Visit', color: '#a78bfa', bg: '#150f24', border: '#8b5cf6', shadow: 'rgba(139,92,246,0.35)' },
   task: { icon: '📋', title: 'New Task Assigned', color: '#4ade80', bg: '#0d1a0d', border: '#4ade80', shadow: 'rgba(74,222,128,0.35)' },
+  new_enquiry: { icon: '📝', title: 'New Enquiry', color: '#38bdf8', bg: '#0a1a24', border: '#38bdf8', shadow: 'rgba(56,189,248,0.35)' },
 }
 
 // Only the 4 most recent toasts stack up on screen — a burst of alerts (e.g. several
@@ -110,6 +111,7 @@ function NotificationBell({ toasts, dismiss, dismissAll }) {
   const messageCount = toasts.filter(t => t.level === 'message').length
   const crossBranchCount = toasts.filter(t => t.level === 'cross_branch').length
   const taskCount = toasts.filter(t => t.level === 'task').length
+  const newEnquiryCount = toasts.filter(t => t.level === 'new_enquiry').length
 
   useEffect(() => {
     if (!open) return
@@ -129,7 +131,7 @@ function NotificationBell({ toasts, dismiss, dismissAll }) {
         aria-label="Notifications"
       >
         🔔
-        {(warnCount > 0 || endCount > 0 || messageCount > 0 || crossBranchCount > 0 || taskCount > 0) && (
+        {(warnCount > 0 || endCount > 0 || messageCount > 0 || crossBranchCount > 0 || taskCount > 0 || newEnquiryCount > 0) && (
           <span style={{ position: 'absolute', top: -6, right: -10, display: 'flex', gap: 2 }}>
             {warnCount > 0 && (
               <span style={{
@@ -160,6 +162,12 @@ function NotificationBell({ toasts, dismiss, dismissAll }) {
                 background: '#4ade80', color: '#0d1a0d', borderRadius: '50%', width: 16, height: 16,
                 fontSize: '0.62rem', fontWeight: 700, display: 'flex', alignItems: 'center', justifyContent: 'center',
               }}>{taskCount}</span>
+            )}
+            {newEnquiryCount > 0 && (
+              <span style={{
+                background: '#38bdf8', color: '#0a1a24', borderRadius: '50%', width: 16, height: 16,
+                fontSize: '0.62rem', fontWeight: 700, display: 'flex', alignItems: 'center', justifyContent: 'center',
+              }}>{newEnquiryCount}</span>
             )}
           </span>
         )}
@@ -215,7 +223,10 @@ export default function Shell() {
   // selected — both already no-op on a falsy branchId, so this just borrows that guard
   // instead of sending the '__combined_hall__' sentinel to the backend as a branch filter.
   const session = useSessionAlerts(isCombinedHall ? null : branchId)
-  const messages = useMessageAlerts(isCombinedHall ? null : branchId, staff?.id)
+  // isOwner means owner-or-admin (see AuthContext) — either way, someone who oversees
+  // every branch needs a system notice (new enquiry, cross-branch visit) regardless of
+  // which single branch they currently have open, Combined Hall included.
+  const messages = useMessageAlerts(isCombinedHall ? null : branchId, staff?.id, isOwner)
   // Task assignment doesn't depend on branch context (list_tasks allBranches:true sidesteps
   // it entirely — see the hook), so this one runs the same in Combined Hall as anywhere else.
   const taskAlerts = useTaskAlerts(staff?.id)
