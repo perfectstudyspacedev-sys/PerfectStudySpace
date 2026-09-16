@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback } from 'react'
 import { api } from '../lib/api'
-import { nowTimeStr, localTimeStrToISO, formatCurrency, openWhatsApp, getWelcomeTemplate } from '../lib/utils'
+import { nowTimeStr, localTimeStrToISO, formatCurrency, openWhatsApp, DEFAULT_WELCOME_TEMPLATE } from '../lib/utils'
 import PaymentModeSelector, { isSplitValid } from './PaymentModeSelector'
 
 // Fallback used only until live fee config loads from the backend.
@@ -22,6 +22,13 @@ export default function WalkInModal({ branchId, onClose, onDone }) {
   const [selectedStudent, setSelectedStudent] = useState(null)
   const [nameMatches, setNameMatches] = useState([])
   const [fees, setFees] = useState(FALLBACK_FEES)
+  // Same shared app_settings-backed template the Membership page's "New Registration" tab
+  // edits — fetched here too since walk-ins send the same welcome message on a new student.
+  const [waTemplate, setWaTemplate] = useState(DEFAULT_WELCOME_TEMPLATE)
+
+  useEffect(() => {
+    api('get_welcome_template').then(({ value }) => setWaTemplate(value)).catch(() => {})
+  }, [])
 
   useEffect(() => {
     api('list_fee_config').then(data => {
@@ -88,7 +95,7 @@ export default function WalkInModal({ branchId, onClose, onDone }) {
       setReceipt(result.booking)
       if (result.isNewStudent) {
         setIsNewStudent(true)
-        openWhatsApp(phone, getWelcomeTemplate().replace(/\{name\}/gi, name))
+        openWhatsApp(phone, waTemplate.replace(/\{name\}/gi, name))
         setWaSent(true)
       }
     } catch (err) {
@@ -118,7 +125,7 @@ export default function WalkInModal({ branchId, onClose, onDone }) {
                 </p>
                 <button
                   type="button"
-                  onClick={() => openWhatsApp(phone, getWelcomeTemplate().replace(/\{name\}/gi, name))}
+                  onClick={() => openWhatsApp(phone, waTemplate.replace(/\{name\}/gi, name))}
                   style={{
                     width: '100%', padding: '0.6rem', borderRadius: 999, fontWeight: 700, cursor: 'pointer',
                     background: 'rgba(74,222,128,0.1)', border: '1px solid rgba(74,222,128,0.4)', color: '#4ade80',

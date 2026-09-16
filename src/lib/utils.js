@@ -151,18 +151,17 @@ export function getMultiMonthDiscount(months) {
 }
 
 // Shared WhatsApp welcome-message template — used by both new membership registration
-// and new walk-in registration, so there's a single reusable template (editable from the
-// Membership page's "New Registration" tab) instead of each flow having its own hardcoded
-// copy. Persisted in localStorage so an edit is picked up by every future send, not just
-// the current form session.
-const WELCOME_TEMPLATE_KEY = 'pss_welcome_template'
-export const DEFAULT_WELCOME_TEMPLATE = 'Hi {name}, welcome to Perfect Study Space! 🎉 Thanks for joining us — '
-  + "we're excited to have you with us. If you have any questions, feel free to reach out anytime."
+// and new walk-in registration, so there's a single reusable template (editable by
+// owner/admin from the Membership page's "New Registration" tab) instead of each flow
+// having its own hardcoded copy. The live value is server-side (app_settings.welcome_template,
+// via the get_welcome_template/update_welcome_template actions) so every staff member's
+// device sends the same message; this is only the local fallback used before that first
+// fetch resolves or if it fails.
+export const DEFAULT_WELCOME_TEMPLATE = `Hi {name}, welcome to Perfect Study Space! 🎉
 
-export function getWelcomeTemplate() {
-  return localStorage.getItem(WELCOME_TEMPLATE_KEY) || DEFAULT_WELCOME_TEMPLATE
-}
+Thanks for joining us — we're excited to have you with us. Please take a moment to fill out this form so we can complete your registration:
 
-export function saveWelcomeTemplate(text) {
-  localStorage.setItem(WELCOME_TEMPLATE_KEY, text)
-}
+📝 Fill out the form here:
+https://docs.google.com/forms/d/e/1FAIpQLSeolzoVIDAsOq35SZ0MbsJb1qBrBcInBG4VER6As5yc8A0oEA/viewform?usp=header
+
+If you have any questions, feel free to reach out anytime. We're happy to help! 😊`

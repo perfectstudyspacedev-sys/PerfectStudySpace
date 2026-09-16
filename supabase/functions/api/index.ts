@@ -233,6 +233,17 @@ function membershipTotalDays(mem: { start_date: string; end_date: string; months
 // check-in gate would then treat as still-expired.
 const MEMBERSHIP_GRACE_DAYS = 10;
 
+// Fallback only — used if the app_settings row is ever missing (e.g. a fresh DB before the
+// seed insert ran). The row from migration 048 is the actual source of truth once it exists.
+const DEFAULT_WELCOME_TEMPLATE = `Hi {name}, welcome to Perfect Study Space! 🎉
+
+Thanks for joining us — we're excited to have you with us. Please take a moment to fill out this form so we can complete your registration:
+
+📝 Fill out the form here:
+https://docs.google.com/forms/d/e/1FAIpQLSeolzoVIDAsOq35SZ0MbsJb1qBrBcInBG4VER6As5yc8A0oEA/viewform?usp=header
+
+If you have any questions, feel free to reach out anytime. We're happy to help! 😊`;
+
 // A membership's end date is billing-cycle style: one day short of the same day N months
 // out, so the period ends the day before it would "restart" on and grace begins on that
 // restart day — e.g. start Aug 20, 1 month ends Sep 19, grace begins Sep 20 (not Sep 20
@@ -3210,6 +3221,23 @@ Deno.serve(async (req) => {
       if (!isOwnerOrAdmin(staff)) return err("Owner only", 403);
       const { id, fee } = payload;
       await db.from("fee_config").update({ fee }).eq("id", id);
+      return json({ ok: true });
+    }
+
+    // Shared WhatsApp welcome-message template (app_settings row keyed 'welcome_template') —
+    // every staff member's device reads the same value, and only owner/admin can change it.
+    if (action === "get_welcome_template") {
+      const { data } = await db.from("app_settings").select("value").eq("key", "welcome_template").maybeSingle();
+      return json({ value: data?.value ?? DEFAULT_WELCOME_TEMPLATE });
+    }
+
+    if (action === "update_welcome_template") {
+      if (!isOwnerOrAdmin(staff)) return err("Owner only", 403);
+      const { value } = payload;
+      if (!value || !String(value).trim()) return err("Template cannot be empty");
+      await db.from("app_settings").upsert({
+        key: "welcome_template", value: String(value), updated_by_staff_id: staff.id, updated_at: new Date().toISOString(),
+      });
       return json({ ok: true });
     }
 

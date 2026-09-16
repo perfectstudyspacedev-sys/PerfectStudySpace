@@ -2,7 +2,7 @@ import { useState, useEffect, useCallback } from 'react'
 import { useNavigate, Link } from 'react-router-dom'
 import { useAuth } from '../context/AuthContext'
 import { api } from '../lib/api'
-import { formatCurrency, formatDate, getMultiMonthDiscount, todayISO, shiftDate, openWhatsApp, getWelcomeTemplate, saveWelcomeTemplate } from '../lib/utils'
+import { formatCurrency, formatDate, getMultiMonthDiscount, todayISO, shiftDate, openWhatsApp, DEFAULT_WELCOME_TEMPLATE } from '../lib/utils'
 import PaymentModeSelector, { isSplitValid } from '../components/PaymentModeSelector'
 import { DEV_MODE } from '../lib/devMode'
 
@@ -857,11 +857,32 @@ function NewMembershipForm({ branchId, onCreated, tempPackages, permPackages }) 
   const [loading, setLoading] = useState(false)
   const [receipt, setReceipt] = useState(null)
   const [waSent, setWaSent] = useState(false)
-  const [waTemplate, setWaTemplate] = useState(getWelcomeTemplate)
+  // Shared across every staff member's device (app_settings row) rather than per-browser
+  // localStorage — an owner/admin edit here is what everyone's "Create Membership" sends.
+  const [waTemplate, setWaTemplate] = useState('')
+  const [waTemplateDraft, setWaTemplateDraft] = useState('')
+  const [waTemplateSaving, setWaTemplateSaving] = useState(false)
+  const [waTemplateMsg, setWaTemplateMsg] = useState('')
 
-  const updateWaTemplate = (text) => {
-    setWaTemplate(text)
-    saveWelcomeTemplate(text)
+  useEffect(() => {
+    api('get_welcome_template').then(({ value }) => {
+      setWaTemplate(value)
+      setWaTemplateDraft(value)
+    }).catch(() => {})
+  }, [])
+
+  const saveWaTemplate = async () => {
+    setWaTemplateSaving(true)
+    setWaTemplateMsg('')
+    try {
+      await api('update_welcome_template', { value: waTemplateDraft })
+      setWaTemplate(waTemplateDraft)
+      setWaTemplateMsg('Saved — applies to every staff member now')
+    } catch (e) {
+      setWaTemplateMsg(e.message)
+    } finally {
+      setWaTemplateSaving(false)
+    }
   }
 
   useEffect(() => {
@@ -1017,7 +1038,7 @@ function NewMembershipForm({ branchId, onCreated, tempPackages, permPackages }) 
         customDaysAmount: isCustomDays ? Number(customDaysAmount) : undefined,
       })
       setReceipt({ ...result, name, phone, total: grandTotal, amountPaid, amountRemaining })
-      openWhatsApp(phone, waTemplate.replace(/\{name\}/gi, name))
+      openWhatsApp(phone, (waTemplate || DEFAULT_WELCOME_TEMPLATE).replace(/\{name\}/gi, name))
       setWaSent(true)
     } catch (err) {
       setError(err.message)
@@ -1050,7 +1071,7 @@ function NewMembershipForm({ branchId, onCreated, tempPackages, permPackages }) 
             </p>
             <button
               type="button"
-              onClick={() => openWhatsApp(receipt.phone, waTemplate.replace(/\{name\}/gi, receipt.name))}
+              onClick={() => openWhatsApp(receipt.phone, (waTemplate || DEFAULT_WELCOME_TEMPLATE).replace(/\{name\}/gi, receipt.name))}
               style={{
                 width: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '0.5rem',
                 padding: '0.65rem', borderRadius: 999, fontWeight: 700, cursor: 'pointer',
@@ -1352,11 +1373,19 @@ function NewMembershipForm({ branchId, onCreated, tempPackages, permPackages }) 
         <h3 style={{ color: 'var(--accent)', marginBottom: '0.5rem' }}>💬 WhatsApp Welcome Message</h3>
         <p style={{ color: 'var(--text-muted)', fontSize: '0.8rem', marginBottom: '0.75rem' }}>
           Sent automatically to the phone number above as soon as the membership is created. Use <code>{'{name}'}</code> where
-          the student's name should go — it's filled in for each new membership. This is a reusable template, not tied to any
-          one registration.
+          the student's name should go — it's filled in for each new membership. Shared across every staff member and device —
+          saving here changes what everyone sends.
         </p>
-        <div className="form-group" style={{ marginBottom: 0 }}>
-          <textarea rows={6} value={waTemplate} onChange={(e) => updateWaTemplate(e.target.value)} />
+        <div className="form-group" style={{ marginBottom: '0.5rem' }}>
+          <textarea rows={6} value={waTemplateDraft} onChange={(e) => setWaTemplateDraft(e.target.value)} />
+        </div>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
+          <button
+            type="button" className="btn btn-primary"
+            disabled={waTemplateSaving || waTemplateDraft === waTemplate}
+            onClick={saveWaTemplate}
+          >{waTemplateSaving ? 'Saving…' : 'Save for All Staff'}</button>
+          {waTemplateMsg && <span style={{ fontSize: '0.8rem', color: 'var(--text-muted)' }}>{waTemplateMsg}</span>}
         </div>
       </div>
     )}
