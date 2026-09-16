@@ -4008,7 +4008,7 @@ Deno.serve(async (req) => {
       const {
         membershipId, monthsPaid, paymentMode, cashAmount, upiAmount, advanceAmount, category, hoursPerDay,
         isCustomPlan, customAmount, weekendHours,
-        isCustomDays, customDays, customDaysAmount,
+        isCustomDays, customDays, customDaysAmount, startDate: customStartDate,
       } = payload;
       const { data: mem } = await db.from("memberships").select("*").eq("id", membershipId).single();
       if (!mem) return err("Membership not found");
@@ -4095,7 +4095,12 @@ Deno.serve(async (req) => {
       // would double-count it. Only once grace has actually run out does the new period
       // start "fresh" from today, since there's no reasonable continuation left to preserve.
       const daysSinceExpiry = daysBetween(mem.end_date, today);
-      const startDate = daysSinceExpiry > MEMBERSHIP_GRACE_DAYS ? today : addDays(mem.end_date, 1);
+      const defaultStartDate = daysSinceExpiry > MEMBERSHIP_GRACE_DAYS ? today : addDays(mem.end_date, 1);
+      // Staff can override the computed default (e.g. backdating a renewal that was actually
+      // paid a few days ago) but never push it into the future — same rule create_membership
+      // enforces, for the same reason: a future-dated membership shouldn't be "active" yet.
+      const startDate = customStartDate || defaultStartDate;
+      if (startDate > today) return err("Start date cannot be in the future");
       const endDate = isCustomDaysPlan ? addDays(startDate, customDaysCount! - 1) : endDateForMonths(startDate, months);
       const dueDate = isCustomDaysPlan ? addDays(endDate, 1) : addDays(endDateForMonths(startDate, 1), 1);
       const monthLabel = new Date(startDate).toLocaleString("en-US", { month: "long", year: "numeric" });

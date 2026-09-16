@@ -2,7 +2,7 @@ import { useState, useEffect, useCallback } from 'react'
 import { useNavigate, Link } from 'react-router-dom'
 import { useAuth } from '../context/AuthContext'
 import { api } from '../lib/api'
-import { formatCurrency, formatDate, getMultiMonthDiscount, todayISO, openWhatsApp, getWelcomeTemplate, saveWelcomeTemplate } from '../lib/utils'
+import { formatCurrency, formatDate, getMultiMonthDiscount, todayISO, shiftDate, openWhatsApp, getWelcomeTemplate, saveWelcomeTemplate } from '../lib/utils'
 import PaymentModeSelector, { isSplitValid } from '../components/PaymentModeSelector'
 import { DEV_MODE } from '../lib/devMode'
 
@@ -15,6 +15,14 @@ const DEFAULT_PERM_PACKAGES = [
   { hours: 12, fee: 2100 }, { hours: 13, fee: 2200 }, { hours: 14, fee: 2300 },
   { hours: 15, fee: 2400 }, { hours: 24, fee: 2500 },
 ]
+// Mirrors MEMBERSHIP_GRACE_DAYS / the startDate calc in renew_membership (supabase/functions/api/index.ts)
+// so the modal's default matches exactly what the server would pick if left unedited.
+const MEMBERSHIP_GRACE_DAYS = 10
+function defaultRenewStartDate(endDate) {
+  const today = todayISO()
+  const daysSinceExpiry = Math.round((new Date(today) - new Date(endDate)) / 86_400_000)
+  return daysSinceExpiry > MEMBERSHIP_GRACE_DAYS ? today : shiftDate(endDate, 1)
+}
 const REFERRAL_OPTIONS = [
   { value: 'google_search', label: 'Google Search' },
   { value: 'instagram', label: 'Social Media' },
@@ -40,6 +48,7 @@ function ActiveMembersTab({ branchId, tempPackages, permPackages }) {
   const [renewMonths, setRenewMonths] = useState(1) // number, or the string 'custom' for a custom day count
   const [renewCustomDays, setRenewCustomDays] = useState('')
   const [renewCustomDaysAmount, setRenewCustomDaysAmount] = useState('')
+  const [renewStartDate, setRenewStartDate] = useState(todayISO())
   const [renewPayMode, setRenewPayMode] = useState({ mode: 'cash', cashAmount: '', upiAmount: '' })
   const [renewPayType, setRenewPayType] = useState('full')
   const [renewAdvance, setRenewAdvance] = useState('')
@@ -184,6 +193,7 @@ function ActiveMembersTab({ branchId, tempPackages, permPackages }) {
     setRenewMonths(1)
     setRenewCustomDays('')
     setRenewCustomDaysAmount('')
+    setRenewStartDate(defaultRenewStartDate(m.end_date))
     setRenewPayMode({ mode: 'cash', cashAmount: '', upiAmount: '' })
     setRenewPayType('full')
     setRenewAdvance('')
@@ -264,6 +274,7 @@ function ActiveMembersTab({ branchId, tempPackages, permPackages }) {
         isCustomDays: renewIsCustomDays || undefined,
         customDays: renewIsCustomDays ? Number(renewCustomDays) : undefined,
         customDaysAmount: renewIsCustomDays ? Number(renewCustomDaysAmount) : undefined,
+        startDate: renewStartDate || undefined,
       })
       setRenewModal(null)
       if (res.cashbackApplied || res.overtimeCharged) {
@@ -568,6 +579,11 @@ function ActiveMembersTab({ branchId, tempPackages, permPackages }) {
                 </div>
               </div>
             )}
+
+            <div className="form-group">
+              <label>Start Date</label>
+              <input type="date" value={renewStartDate} max={todayISO()} onChange={(e) => setRenewStartDate(e.target.value)} />
+            </div>
 
             {renewPayType !== 'pending' && (
               <div className="form-group">
