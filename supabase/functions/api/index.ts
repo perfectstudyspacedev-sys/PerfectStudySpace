@@ -2097,7 +2097,9 @@ Deno.serve(async (req) => {
       if (!requireBranch(staff, student.branch_id)) return err("Branch access denied", 403);
 
       const { data: memberships } = await db.from("memberships").select("*").eq("student_id", studentId).order("created_at", { ascending: false });
-      const { data: bookings } = await db.from("bookings").select("*, desks!desk_id(label)").eq("student_id", studentId).order("created_at", { ascending: false }).limit(50);
+      // 100, not 50: the WhatsApp study report reads its 21-day window from this list, and a
+      // student with a few sessions a day would otherwise push the oldest days off the end.
+      const { data: bookings } = await db.from("bookings").select("*, desks!desk_id(label)").eq("student_id", studentId).order("created_at", { ascending: false }).limit(100);
       const { data: transactions } = await db.from("transactions").select("*").eq("student_id", studentId).order("created_at", { ascending: false }).limit(50);
       const { data: locker } = await db.from("lockers").select("*").eq("student_id", studentId).eq("is_active", true).maybeSingle();
       const { data: overtimeSessions } = await db.from("overtime_sessions").select("*").eq("student_id", studentId).order("session_date", { ascending: false }).limit(50);

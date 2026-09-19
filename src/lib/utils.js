@@ -119,7 +119,10 @@ export function openWhatsApp(phone, message) {
   // Numbers are stored as plain 10-digit Indian mobile numbers with no country code —
   // wa.me requires the full international number (no leading +), so default to +91.
   if (clean.length === 10) clean = `91${clean}`
-  window.open(`https://wa.me/${clean}?text=${encodeURIComponent(message || '')}`, '_blank')
+  // noopener,noreferrer: the opened wa.me tab would otherwise keep a window.opener handle
+  // back to this app (reverse tabnabbing) — low real risk since the destination is fixed,
+  // not user-controlled, but a one-line close either way.
+  window.open(`https://wa.me/${clean}?text=${encodeURIComponent(message || '')}`, '_blank', 'noopener,noreferrer')
 }
 
 export function monthName(date = new Date()) {

@@ -18,6 +18,9 @@ const DEFAULT_PERM_PACKAGES = [
 // Mirrors MEMBERSHIP_GRACE_DAYS / the startDate calc in renew_membership (supabase/functions/api/index.ts)
 // so the modal's default matches exactly what the server would pick if left unedited.
 const MEMBERSHIP_GRACE_DAYS = 10
+// How many days of history the WhatsApp study report covers. get_student_profile caps the
+// bookings it returns (see limit there) — keep that cap comfortably above days × sessions/day.
+const STUDY_REPORT_DAYS = 21
 function defaultRenewStartDate(endDate) {
   const today = todayISO()
   const daysSinceExpiry = Math.round((new Date(today) - new Date(endDate)) / 86_400_000)
@@ -114,14 +117,14 @@ function ActiveMembersTab({ branchId, tempPackages, permPackages }) {
     setWaLoadingId(m.membership_id)
     try {
       const { bookings } = await api('get_student_profile', { studentId: m.student_id })
-      const cutoff = new Date(Date.now() - 15 * 86_400_000)
+      const cutoff = new Date(Date.now() - STUDY_REPORT_DAYS * 86_400_000)
       const recent = (bookings ?? [])
         .filter(b => new Date(b.start_time) >= cutoff)
         .sort((a, b) => new Date(a.start_time) - new Date(b.start_time))
 
       let message
       if (!recent.length) {
-        message = `Hi *${m.student_name}*...\n\nNo study attendance was recorded in the last 15 days at Perfect Study Space.\n\n-Perfect Study Space`
+        message = `Hi *${m.student_name}*...\n\nNo study attendance was recorded in the last ${STUDY_REPORT_DAYS} days at Perfect Study Space.\n\n-Perfect Study Space`
       } else {
         // Sum duration studied per calendar day (a still-active session counts up to now)
         const now = Date.now()
