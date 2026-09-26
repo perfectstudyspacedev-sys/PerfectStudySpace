@@ -1,160 +1,330 @@
-# Graph Report - perfect-study-space  (2026-08-31)
+# Graph Report - perfect-study-space  (2026-09-26)
 
 ## Corpus Check
-- 136 files · ~187,478 words
+- 23 files · ~200,301 words
 - Verdict: corpus is large enough that graph structure adds value.
 
 ## Summary
-- 539 nodes · 1127 edges · 52 communities (16 shown, 8 thin omitted)
-- Extraction: 97% EXTRACTED · 3% INFERRED · 0% AMBIGUOUS · INFERRED: 37 edges (avg confidence: 0.83)
-- Token cost: 0 input · 0 output
+- 671 nodes · 1270 edges · 131 communities (37 shown, 65 thin omitted)
+- Extraction: 97% EXTRACTED · 3% INFERRED · 0% AMBIGUOUS · INFERRED: 40 edges (avg confidence: 0.82)
+- Token cost: 627,656 input · 0 output
 
 ## Community Hubs (Navigation)
-- pages
-- .claude/agents
-- migrations
-- functions/api
-- perfect-study-space/docs
-- pages
-- hooks
-- package.json
-- .claude/rules
-- .claude/rules
-- .claude/rules
-- .claude/rules
-- perfect-study-space/docs
-- PERFECT-STUDY-SPACE/perfect-study-space
-- PERFECT-STUDY-SPACE/perfect-study-space
-- tools
-- migrations
-- hooks
-- hooks
-- hooks
-- misc
-- migrations
-- vercel.json
-- skills/find-skills
+- Edge Function API Core
+- Core Database Schema
+- App Shell, Auth & API Client
+- Missions, WAT Audit & Tools
+- NPM Package Manifest
+- CTO Orchestration & Learning Loop
+- Membership & Students UI
+- Agent Discipline & Report Format
+- Release, DevOps & Docs Roles
+- QA, Frontend & Design Roles
+- Notification Bell & Alert Hooks
+- Backend, Database & Ownership Map
+- Delivery Pipeline & Review Roles
+- Revenue & Reports Pages
+- Claude OS Setup & Merge Notes
+- Student Profile & Payment Modes
+- Food Menu & Formatting Utils
+- Enquiries Pipeline UI
+- Active Session & Checkout UI
+- Dashboard & Walk-in Flow
+- Architect & Plan Review Gate
+- Explain & Find Skills
+- Project Overview & Access Roles
+- Enquiries Schema
+- Inventory Schema
+- Tasks & Recurring Routines UI
+- Membership Plan Changes Schema
+- Membership Edit History Schema
+- Food Stock Logs Schema
+- Food Inventory Logs Schema
+- Planning, Review & Safety Gates
+- Skills CLI Discovery
+- Browser Ownership & Auto-Commit Rules
+- Teammate Tool & Skill Limits
+- Untrusted Input Rules
+- Authorization & Least Privilege
+- Secrets & File Discipline
+- Locker Orphan Guard
+- App Settings Schema
+- Vercel Deploy Config
+- Task Completed Gate Hook
+- Teammate Idle Gate Hook
+- Tool Cost Guard Hook
+- Contracts & Failure Reporting
+- Cost & Paid-Call Approval
+- Approval Gates & Rollback
+- Tracing & Smoke Verification
+- Quality Gates & Success Criteria
+- Brand Logo
+- Hopes Locker Renumbering
+- Bookings Table
+- Core Operating Principles
+- Team Sizing — start at 3
+- Degrade Honestly
+- Ships With An Eval Set, Or Does Not Ship
+- Non-Determinism Changes Debugging
+- Avoid Architecture Solving Hypothetical Scale
+- Document Important Irreversible Decisions
+- Prefer Explicit Boundaries And Simple Dependenci
+- No New Framework/Service Without Concrete Requir
+- Prefer Reversible, Migration-Safe Rollout Patter
+- Separate Domain Logic From Transport/Infra
+- Commit/PR Messages Describe The Outcome
+- Keep Commits Focused And Understandable
+- Inspect The Diff Before Committing
+- Use Isolated Branches/Worktrees For Parallel Wor
+- Do Not Mix Unrelated Refactors With Feature Work
+- Do Not Rewrite Shared History Without Approval
+- Use Canary/Observability Workflows For Meaningfu
+- Escalate Uncertainty Instead Of Guessing
+- Treat Database Migrations As Production Code
+- Do Not Disable Security Controls To Make Deploym
+- Verify Environment Configuration Before Deployme
+- For AI Systems, Evaluate Prompt Injection/Tool A
+- Review SSRF/XSS/CSRF/Injection/Privesc/Leakage/S
+- Check Dependency And Supply-Chain Risk
+- Protect Sensitive Logs And Telemetry
+- Review Authentication And Authorization Separate
+- Treat Webhooks As Untrusted; Design For Replay/I
+- Use E2E/Browser Tests For Critical User Journeys
+- Treat Test Failures As Evidence, Not Noise
+- Integration Test Boundaries
+- Do Not Hide Failing Tests With Skips
+- Prefer Tests That Exercise Real Business Behavio
+- Add Regression Coverage For Important Bug Fixes
+- Re-Run The Relevant Test Suite After Changes
+- Unit Test Core Logic
+- Codify What Repeats
+- The Failure Loop (read error, fix, verify, appen
+- Never Invent A Tool's Behaviour
+- Reliability Argument: 5 Chained Steps At 90% = 5
+- Tool-First, Always
+- Workflows Are Preserved, Not Replaced
+- HTML Entry Point
+- Overtime Sessions Table
+- Payouts Table
+- /unfreeze
+- Staff Attendance Table
+- Students Table
+- Staff Table
+- Memberships Table
+- Staff Table (2)
 
 ## God Nodes (most connected - your core abstractions)
-1. `api()` - 60 edges
-2. `useAuth()` - 35 edges
-3. `formatDate()` - 29 edges
-4. `branches` - 29 edges
-5. `formatCurrency()` - 27 edges
-6. `todayISO()` - 25 edges
-7. `Agent Handbook` - 25 edges
-8. `Tools Layer (WAT) Convention` - 21 edges
-9. `Standard Agent Report Format` - 21 edges
-10. `staff` - 20 edges
+1. `CTO / Delivery Lead` - 35 edges
+2. `formatDate()` - 29 edges
+3. `api()` - 29 edges
+4. `formatCurrency()` - 27 edges
+5. `todayISO()` - 26 edges
+6. `QA / Browser Engineering Lead` - 26 edges
+7. `Frontend Lead` - 25 edges
+8. `useAuth()` - 24 edges
+9. `Database / Data Engineer` - 24 edges
+10. `Release Manager` - 23 edges
 
 ## Surprising Connections (you probably didn't know these)
-- `Skills CLI (npx skills)` --semantically_similar_to--> `/skillify`  [INFERRED] [semantically similar]
-  .agents/skills/find-skills/SKILL.md → .claude/agents/01-cto-delivery-lead.md
-- `Parallelism Guidance` --conceptually_related_to--> `Agent Teams Rules`  [INFERRED]
-  docs/AGENT-FLOW.md → .claude/rules/agent-teams.md
-- `Explain Codebase Skill` --semantically_similar_to--> `21 Documentation Engineer`  [INFERRED] [semantically similar]
-  .claude/skills/explain-codebase/SKILL.md → docs/AGENT-HANDBOOK.md
-- `The gbrain Optimisation (Coverage Doc)` --semantically_similar_to--> `The gbrain Optimisation`  [INFERRED] [semantically similar]
-  docs/SKILL-COVERAGE.md → SETUP.md
-- `The 21 Roles Table` --conceptually_related_to--> `Agent Handbook`  [INFERRED]
-  SETUP.md → docs/AGENT-HANDBOOK.md
+- `QA / Browser Engineering Lead` --semantically_similar_to--> `Security / CSO`  [INFERRED] [semantically similar]
+  .claude/agents/12-qa-browser-lead.md → docs/AGENT-HANDBOOK.md
+- `WAT Operating Model` --semantically_similar_to--> `gbrain Semantic Search Optimisation`  [INFERRED] [semantically similar]
+  CLAUDE.md → SETUP.md
+- `Staff Code Reviewer` --references--> `Greptile`  [EXTRACTED]
+  docs/AGENT-HANDBOOK.md → .claude/agents/15-staff-code-reviewer.md
+- `Mission 6 — Infrastructure migration` --references--> `/guard`  [EXTRACTED]
+  docs/MISSIONS.md → .claude/agents/09-database-data-engineer.md
+- `Mission 3 — Competing-hypothesis debug` --references--> `/investigate`  [EXTRACTED]
+  docs/MISSIONS.md → .claude/agents/04-solutions-architect.md
 
 ## Import Cycles
 - None detected.
 
 ## Hyperedges (group relationships)
-- **Independent Review Pipeline (QA -> Security -> Performance -> Staff -> Adversarial -> Release)** — claude_agents_12_qa_browser_lead_qa_browser_lead, claude_agents_13_security_cso_security_cso, claude_agents_14_performance_engineer_performance_engineer, claude_agents_15_staff_code_reviewer_staff_code_reviewer, claude_agents_16_adversarial_second_model_reviewer_adversarial_second_model_reviewer, claude_agents_19_release_manager_release_manager [INFERRED 0.85]
-- **Single Browser Owner Convention (QA/Browser Lead exclusivity)** — claude_agents_12_qa_browser_lead_qa_browser_lead, claude_agents_14_performance_engineer_performance_engineer, claude_agents_17_devex_engineer_devex_engineer, claude_agents_06_design_director_design_director, claude_agents_18_devops_sre_devops_sre, claude_agents_19_release_manager_release_manager, claude_agents_20_observability_learning_engineer_observability_learning_engineer [INFERRED 0.85]
-- **Numbered Company Delivery Pipeline (01 CTO -> 21 Documentation)** — claude_agents_01_cto_delivery_lead_cto_delivery_lead, claude_agents_02_product_ceo_strategist_product_ceo_strategist, claude_agents_03_business_analyst_spec_business_analyst_spec, claude_agents_04_solutions_architect_solutions_architect, claude_agents_05_ux_researcher_ux_researcher, claude_agents_06_design_director_design_director, claude_agents_07_frontend_lead_frontend_lead, claude_agents_08_backend_lead_backend_lead, claude_agents_09_database_data_engineer_database_data_engineer, claude_agents_10_ai_agent_engineer_ai_agent_engineer, claude_agents_11_integration_engineer_integration_engineer, claude_agents_12_qa_browser_lead_qa_browser_lead, claude_agents_13_security_cso_security_cso, claude_agents_14_performance_engineer_performance_engineer, claude_agents_15_staff_code_reviewer_staff_code_reviewer, claude_agents_16_adversarial_second_model_reviewer_adversarial_second_model_reviewer, claude_agents_17_devex_engineer_devex_engineer, claude_agents_18_devops_sre_devops_sre, claude_agents_19_release_manager_release_manager, claude_agents_20_observability_learning_engineer_observability_learning_engineer, claude_agents_21_documentation_engineer_documentation_engineer [INFERRED 0.85]
-- **WAT Framework Three Layers (Workflows, Agents, Tools)** — claude_rules_wat, tools_readme, workflows_readme [INFERRED 0.85]
-- **Three Rules That Prevent Data Loss in Agent Teams** — claude_rules_agent_teams_one_browser_owner, claude_rules_agent_teams_auto_committing_skills, claude_rules_agent_teams_freeze_first [EXTRACTED 1.00]
-- **Mission 1 Four-Lens Plan Review Team** — docs_agent_handbook_product_ceo_strategist, docs_agent_handbook_design_director, docs_agent_handbook_devex_engineer, docs_agent_handbook_solutions_architect [EXTRACTED 1.00]
+- **Single Browser Owner Constraint** — claude_agents_12_qa_browser_lead_qa_browser_lead, docs_agent_handbook_05_ux_researcher, docs_agent_handbook_06_design_director, docs_agent_handbook_07_frontend_lead, docs_agent_handbook_08_backend_lead, docs_agent_handbook_14_performance_engineer, docs_agent_handbook_17_devex_engineer, docs_agent_handbook_18_devops_sre, docs_agent_handbook_19_release_manager, docs_agent_handbook_20_observability_learning_engineer [EXTRACTED 1.00]
+- **Pre-Implementation Planning Review Gate** — docs_agent_handbook_02_product_ceo_strategist, docs_agent_handbook_03_business_analyst_spec_author, docs_agent_handbook_04_solutions_architect, docs_agent_handbook_06_design_director, docs_agent_handbook_17_devex_engineer [EXTRACTED 1.00]
+- **Read-Only Parallel Review Roles** — docs_agent_handbook_13_security_cso, docs_agent_handbook_14_performance_engineer, docs_agent_handbook_15_staff_code_reviewer, docs_agent_handbook_16_adversarial_second_model_reviewer, docs_agent_handbook_17_devex_engineer [INFERRED 0.85]
+- **Safety Gates For Risky/Irreversible Actions** — claude_rules_ai_systems_irreversible_action_approval_gate, claude_rules_production_no_disabling_security_controls, claude_rules_production_rollback_strategy, claude_rules_wat_paid_calls_need_approval [INFERRED 0.75]
+- **Verification-Before-Completion Discipline** — claude_rules_testing_define_success_before_implementing, claude_rules_testing_failures_as_evidence, claude_rules_production_quality_gates_required, claude_rules_git_inspect_diff_before_commit [INFERRED 0.75]
+- **Browser Session Single-Ownership Pattern** — claude_rules_agent_teams_browser_exclusivity, claude_rules_agent_teams_qa_browser_lead, claude_rules_agent_teams_auto_committing_skills_segregation [INFERRED 0.80]
+- **Four Mechanisms Fixed From v1 to v2** — merge_notes_skills_frontmatter_ignored, merge_notes_permissionmode_not_applied, merge_notes_tools_allowlist_enforced, merge_notes_browser_daemon_collision [EXTRACTED 1.00]
+- **Rules Preventing Data Loss in Agent Teams** — setup_three_rules_data_loss, merge_notes_browser_daemon_collision, merge_notes_file_ownership_mechanism, claude_safety [INFERRED 0.85]
+- **Read-only Attack Phase Agents (safe to run parallel with implementers)** — docs_agent_handbook_12_qa_browser_lead, docs_agent_handbook_13_security_cso, docs_agent_handbook_14_performance_engineer, docs_agent_handbook_15_staff_code_reviewer, docs_agent_handbook_16_adversarial_second_model_reviewer, docs_agent_handbook_17_devex_engineer [EXTRACTED 1.00]
+- **Auto-Committing Skills Run Only In Lead Session** — docs_agent_handbook_review, docs_agent_handbook_qa, docs_agent_handbook_design_review, docs_agent_handbook_skillify, docs_agent_handbook_ship, docs_agent_handbook_land_and_deploy, docs_agent_handbook_01_cto_delivery_lead [EXTRACTED 1.00]
+- **Execution Graph Build-Phase Agents (parallel after interfaces defined)** — docs_agent_handbook_07_frontend_lead, docs_agent_handbook_08_backend_lead, docs_agent_handbook_09_database_data_engineer, docs_agent_handbook_10_ai_agent_engineer, docs_agent_handbook_11_integration_engineer [EXTRACTED 1.00]
+- **WAT Three-Layer Framework** — concept_wat_layer_workflows, concept_wat_layer_agents, concept_wat_layer_tools [EXTRACTED 1.00]
+- **Read-only review missions 1-3** — docs_missions_mission1_four_lens_plan_review, docs_missions_mission2_four_lens_code_review, docs_missions_mission3_competing_hypothesis_debug [EXTRACTED 1.00]
+- **Lead-only auto-committing skill governance** — concept_lead_only_skills, skill_qa, skill_design_review, skill_ship [EXTRACTED 1.00]
 
-## Communities (52 total, 8 thin omitted)
+## Communities (131 total, 65 thin omitted)
 
-### Community 0 - "pages"
+### Community 0 - "Edge Function API Core"
 Cohesion: 0.06
-Nodes (81): App(), OwnerRoute(), ProtectedRoute(), Shell(), isSplitValid(), PaymentModeSelector(), FALLBACK_FEES, WALKIN_HOUR_OPTIONS (+73 more)
+Nodes (33): addDays(), addMonths(), adminClient(), authStaff(), buildDateBuckets(), CbRow, computeDeleteSettlement(), computeStudentStatus() (+25 more)
 
-### Community 1 - ".claude/agents"
-Cohesion: 0.07
-Nodes (69): Find Skills Skill, Skills CLI (npx skills), /autoplan, /context-save, CTO / Delivery Lead, /health, /landing-report, /learn (+61 more)
+### Community 1 - "Core Database Schema"
+Cohesion: 0.13
+Nodes (25): alerts, bookings, branches, desks, fee_config, food_bill_items, food_bills, food_items (+17 more)
 
-### Community 2 - "migrations"
+### Community 2 - "App Shell, Auth & API Client"
+Cohesion: 0.15
+Nodes (21): OwnerRoute(), ProtectedRoute(), AuthContext, AuthProvider(), useAuth(), api(), COMBINED_HALL_ID, getStoredBranchId() (+13 more)
+
+### Community 3 - "Missions, WAT Audit & Tools"
 Cohesion: 0.09
-Nodes (34): alerts, bookings, branches, desks, fee_config, food_bill_items, food_bills, food_items (+26 more)
+Nodes (21): .tmp/ disposable intermediates directory, Five chained steps at 90% accuracy = 59% argument, WAT Layer 2 — Agents, WAT Layer 3 — Tools, WAT Layer 1 — Workflows, .claude/rules/wat.md, Mission 0 — Discovery, Mission 3 — Competing-hypothesis debug (+13 more)
 
-### Community 3 - "functions/api"
-Cohesion: 0.06
-Nodes (31): addDays(), addMonths(), adminClient(), authStaff(), buildDateBuckets(), CbRow, computeDeleteSettlement(), computeStudentStatus() (+23 more)
-
-### Community 4 - "perfect-study-space/docs"
-Cohesion: 0.09
-Nodes (40): Explain Codebase Skill, Agent Flow, Escalation Triggers, Parallelism Guidance, Standard Software Delivery Pipeline, Agent Handbook, 16 Adversarial / Second-Model Reviewer, 10 AI / Agent Engineer (+32 more)
-
-### Community 5 - "pages"
-Cohesion: 0.09
-Nodes (34): chartTooltip(), exportToCSV(), formatDateTime(), paymentModeLabel(), ACT_ICON, CombinedEnquiriesView(), dupKey(), EnquiriesPage() (+26 more)
-
-### Community 6 - "hooks"
-Cohesion: 0.12
-Nodes (25): TOAST_META, AuthContext, AuthProvider(), isToday(), loadSeen(), saveSeen(), seenKey(), useMessageAlerts() (+17 more)
-
-### Community 7 - "package.json"
+### Community 4 - "NPM Package Manifest"
 Cohesion: 0.07
 Nodes (26): dependencies, react, react-dom, react-router-dom, recharts, @supabase/supabase-js, devDependencies, @types/deno (+18 more)
 
-### Community 8 - ".claude/rules"
-Cohesion: 0.18
-Nodes (16): WAT Rules — Workflows · Agents · Tools, The Failure Loop, Paid Calls Need Approval, Tool-First, Always, Workflows Are Preserved, Not Replaced, WAT Operating Model (§14), WAT Framework Compliance Audit, Five Chained Steps at 90% Accuracy Leaves You at 59% (+8 more)
+### Community 5 - "CTO Orchestration & Learning Loop"
+Cohesion: 0.11
+Nodes (26): Lead-only auto-committing skills, Escalation Criteria to CTO, CTO / Delivery Lead, Observability / Learning Engineer, Auto-Committing Skills Run Only In Lead (destructive in a team, safe solo), /context-restore skill, /context-save skill, /landing-report skill (+18 more)
 
-### Community 9 - ".claude/rules"
+### Community 6 - "Membership & Students UI"
+Cohesion: 0.16
+Nodes (23): DEV_MODE, formatCurrency(), formatDate(), getMultiMonthDiscount(), openWhatsApp(), shiftDate(), ActiveMembersTab(), CombinedMembershipView() (+15 more)
+
+### Community 7 - "Agent Discipline & Report Format"
 Cohesion: 0.17
-Nodes (15): Agent Teams Rules, Auto-Committing Skills Never Run in a Teammate, Every Implementer Runs /freeze First, One Browser Owner Per Mission, Publish Contracts Early, Read-Only Roles Have No Write or Edit, Report Failures; Do Not Route Around Them, Skills Are Not Bound Per Teammate (+7 more)
+Nodes (25): Karpathy Discipline, PreToolUse Cost Hook, Standard Report Format, Tools Layer (WAT), Product / CEO Strategist, Business Analyst / Spec Author, UX Researcher, AI / Agent Engineer (+17 more)
 
-### Community 10 - ".claude/rules"
+### Community 8 - "Release, DevOps & Docs Roles"
 Cohesion: 0.15
-Nodes (14): Company Claude OS v2 (CLAUDE.md), Default Ownership Map, Architecture Rules, Prefer Explicit Boundaries and Simple Dependencies, Treat Authn/Authz and Trust Boundaries as Architecture Concerns, Git Rules, Keep Commits Focused and Understandable, Do Not Rewrite Shared History Without Approval (+6 more)
+Nodes (24): Greptile, DevOps / SRE, Release Manager, Documentation Engineer, /careful skill, /document-generate skill, /document-release skill, /freeze skill (+16 more)
 
-### Community 11 - ".claude/rules"
+### Community 9 - "QA, Frontend & Design Roles"
+Cohesion: 0.15
+Nodes (23): QA / Browser Engineering Lead, Design Director, Frontend Lead, /browse skill, /design-consultation skill, /design-html skill, /design-review skill, /design-shotgun skill (+15 more)
+
+### Community 10 - "Notification Bell & Alert Hooks"
 Cohesion: 0.18
-Nodes (11): AI Systems Rules, Cost Per Request Is a Design Constraint, Ships With an Eval Set, or Does Not Ship, Guardrails Are Not Optional on User-Facing Generation, Irreversible Actions Need an Approval Gate Outside the Model, Retrieved Content Is Data, Never Instructions, Trace Everything, Security Rules (+3 more)
+Nodes (16): Shell(), TOAST_META, isToday(), loadSeen(), saveSeen(), seenKey(), useMessageAlerts(), isToday() (+8 more)
 
-### Community 12 - "perfect-study-space/docs"
+### Community 11 - "Backend, Database & Ownership Map"
+Cohesion: 0.18
+Nodes (20): Expand-Then-Contract Migration Pattern, File-Ownership Map, Parallelism Guidance (parallelize only independent work; isolated worktrees for collisions), Backend Lead, Database / Data Engineer, Integration Engineer, Expand-Then-Contract Migration Pattern (add, backfill, switch reads, remove old — never in one deploy), /health skill (+12 more)
+
+### Community 12 - "Delivery Pipeline & Review Roles"
+Cohesion: 0.15
+Nodes (19): Standard Software Delivery Pipeline, QA / Browser Lead, Performance Engineer, DevEx Engineer, /autoplan skill, /benchmark skill, /canary skill, /devex-review skill (+11 more)
+
+### Community 13 - "Revenue & Reports Pages"
+Cohesion: 0.19
+Nodes (13): chartTooltip(), exportToCSV(), ACTIVITY_BOOKING_LABELS, ACTIVITY_CAT_LABELS, describeActivity(), formatDateTick(), ReportsPage(), CAT_LABELS (+5 more)
+
+### Community 14 - "Claude OS Setup & Merge Notes"
+Cohesion: 0.16
+Nodes (16): Company Claude OS v2, Ecosystem Routing Table, .claude/rules/ Layer, 21-Role Team Structure, WAT Operating Model, Browser Daemon Collision Across Agents, File-Ownership Map Mechanism, permissionMode: Not Applied At Spawn (+8 more)
+
+### Community 15 - "Student Profile & Payment Modes"
+Cohesion: 0.19
+Nodes (12): isSplitValid(), PaymentModeSelector(), AddPaymentModal(), AttendanceModal(), combineDateTime(), DEFAULT_PERM_PACKAGES, DEFAULT_TEMP_PACKAGES, formatAttendanceEdit() (+4 more)
+
+### Community 16 - "Food Menu & Formatting Utils"
 Cohesion: 0.22
-Nodes (9): gstack Skill Coverage Audit, Skills Assigned to Teammate Roles, The gbrain Optimisation (Coverage Doc), Lead-Only Skills, Skill Routing, Ecosystem Stack Responsibilities Table, Preload Versus Discover, Quality Routing Table (+1 more)
+Nodes (10): addHoursToTime(), formatDateTime(), isOverdue(), paymentModeLabel(), timeToMinutes(), billDateRange(), branchNamesUnion(), CombinedFoodMenu() (+2 more)
 
-### Community 13 - "PERFECT-STUDY-SPACE/perfect-study-space"
+### Community 17 - "Enquiries Pipeline UI"
+Cohesion: 0.20
+Nodes (14): ACT_ICON, CombinedEnquiriesView(), dupKey(), EnquiriesPage(), findDuplicateGroups(), fmtDate(), fmtDT(), groupByBranchName() (+6 more)
+
+### Community 18 - "Active Session & Checkout UI"
+Cohesion: 0.23
+Nodes (12): BookingsPage(), categoryLabel(), CheckoutModal(), CombinedSessionsView(), computeOvertimeCharge(), EditStartTimeModal(), FoodOrderModal(), getTimeStatus() (+4 more)
+
+### Community 19 - "Dashboard & Walk-in Flow"
+Cohesion: 0.27
+Nodes (11): FALLBACK_FEES, WALKIN_HOUR_OPTIONS, WalkInModal(), DEFAULT_WELCOME_TEMPLATE, localTimeStrToISO(), nowTimeStr(), autoShift(), branchNamesUnion() (+3 more)
+
+### Community 20 - "Architect & Plan Review Gate"
+Cohesion: 0.24
+Nodes (11): Sole Browser Owner, Solutions Architect, /diagram skill, /learn skill, /plan-eng-review skill, Mission 1 — Four-lens plan review, eng-manager role, /autoplan (+3 more)
+
+### Community 21 - "Explain & Find Skills"
+Cohesion: 0.27
+Nodes (10): Explain Codebase (skill), Data Flow End-To-End (UI to api() to Edge Function to Postgres), How To Explain (why-before-how methodology), Non-Goals (don't refactor while explaining), This Project's Map (PSS orientation), Ground Rule: Read Before You Explain, Find Skills (skill), Check skills.sh Leaderboard First (+2 more)
+
+### Community 22 - "Project Overview & Access Roles"
+Cohesion: 0.29
+Nodes (7): Perfect Study Space Project Section, Supabase Migrations Sole-Owner Rule, Cue Court Coffee (Reference Project), README Features List, Perfect Study Space (App), Role Access Table (Owner vs Staff), README Tech Stack
+
+### Community 23 - "Enquiries Schema"
+Cohesion: 0.43
+Nodes (6): enquiries, enquiry_activities, enquiry_followups, branches, staff, students
+
+### Community 24 - "Inventory Schema"
+Cohesion: 0.29
+Nodes (5): inventory_items, branches, inventory_logs, branches, staff
+
+### Community 25 - "Tasks & Recurring Routines UI"
+Cohesion: 0.47
+Nodes (5): todayISO(), IncompleteTaskTable(), REPEAT_OPTIONS, TasksPage(), TaskTable()
+
+### Community 26 - "Membership Plan Changes Schema"
 Cohesion: 0.33
-Nodes (6): Perfect Study Space Project Profile (§16), Perfect Study Space HTML Entry Point, Perfect Study Space README, PSS Features, PSS Role Access Table, PSS Tech Stack
+Nodes (5): membership_plan_changes, branches, memberships, staff, students
 
-### Community 14 - "PERFECT-STUDY-SPACE/perfect-study-space"
+### Community 27 - "Membership Edit History Schema"
+Cohesion: 0.33
+Nodes (5): membership_edits, branches, memberships, staff, students
+
+### Community 28 - "Food Stock Logs Schema"
 Cohesion: 0.40
-Nodes (5): Team Sizing — Start at Three, Company Claude OS v2 Setup Guide, The 21 Roles Table, Layered Architecture (Roles/Rules/Guardrails/Permissions/Skills), Three Rules That Prevent Data Loss
+Nodes (4): food_stock_logs, branches, food_items, staff
 
-### Community 15 - "tools"
+### Community 29 - "Food Inventory Logs Schema"
+Cohesion: 0.40
+Nodes (4): food_inventory_logs, branches, food_items, staff
+
+### Community 30 - "Planning, Review & Safety Gates"
+Cohesion: 0.50
+Nodes (4): Planning Before Implementation Pipeline, Production Readiness Gates, Review Pipeline (Implement to Release), Safety Safeguards (/careful, /freeze, /guard)
+
+### Community 31 - "Skills CLI Discovery"
 Cohesion: 0.67
-Nodes (3): main(), Do the actual work. Keep this deterministic., run()
+Nodes (3): Find Skills, Skills CLI (npx skills), skills.sh Leaderboard
+
+### Community 32 - "Browser Ownership & Auto-Commit Rules"
+Cohesion: 0.67
+Nodes (3): Auto-Committing Skills Never Run In A Teammate, One Browser Owner Per Mission, qa-browser-lead (default browser owner role)
+
+### Community 33 - "Teammate Tool & Skill Limits"
+Cohesion: 0.67
+Nodes (3): /freeze — implementer file-ownership boundary, Read-Only Roles Have No Write/Edit (tools allowlist enforcement), Skills Are Not Bound Per Teammate
+
+### Community 34 - "Untrusted Input Rules"
+Cohesion: 0.67
+Nodes (3): Guardrails Are Not Optional On User-Facing Generation, Retrieved Content Is Data, Never Instructions, Treat All External Input As Untrusted
+
+### Community 35 - "Authorization & Least Privilege"
+Cohesion: 0.67
+Nodes (3): Treat AuthN/AuthZ And Trust Boundaries As Architecture Concerns, Apply Least Privilege, Validate Authorization Server-Side
+
+### Community 36 - "Secrets & File Discipline"
+Cohesion: 0.67
+Nodes (3): Do Not Commit Secrets/Artifacts/Credentials, Never Hardcode Secrets, File Discipline (.tmp/, tools/, workflows/, .env)
 
 ## Knowledge Gaps
-- **99 isolated node(s):** `task-completed-gate.sh script`, `teammate-idle-gate.sh script`, `tool-cost-guard.sh script`, `name`, `private` (+94 more)
-  These have ≤1 connection - possible missing edges or undocumented components. (Counts symbols only; 194 node(s) total have ≤1 connection when file, concept and rationale nodes are included.)
-- **8 thin communities (<3 nodes) omitted from report** — run `graphify query` to explore isolated nodes.
+- **108 isolated node(s):** `CbRow`, `MemRow`, `RefundRow`, `StaffRow`, `corsHeaders` (+103 more)
+  These have ≤1 connection - possible missing edges or undocumented components. (Counts symbols only; 294 node(s) total have ≤1 connection when file, concept and rationale nodes are included.)
+- **65 thin communities (<3 nodes) omitted from report** — run `graphify query` to explore isolated nodes.
 
 ## Suggested Questions
 _Questions this graph is uniquely positioned to answer:_
 
-- **Why does `api()` connect `pages` to `pages`, `hooks`?**
-  _High betweenness centrality (0.029) - this node is a cross-community bridge._
-- **Why does `Company Claude OS v2 (CLAUDE.md)` connect `.claude/rules` to `.claude/rules`, `.claude/rules`, `.claude/rules`, `perfect-study-space/docs`, `PERFECT-STUDY-SPACE/perfect-study-space`, `PERFECT-STUDY-SPACE/perfect-study-space`?**
-  _High betweenness centrality (0.021) - this node is a cross-community bridge._
-- **Why does `Agent Handbook` connect `perfect-study-space/docs` to `perfect-study-space/docs`, `PERFECT-STUDY-SPACE/perfect-study-space`?**
-  _High betweenness centrality (0.016) - this node is a cross-community bridge._
-- **What connects `task-completed-gate.sh script`, `teammate-idle-gate.sh script`, `tool-cost-guard.sh script` to the rest of the system?**
-  _99 weakly-connected nodes found - possible documentation gaps or missing edges._
-- **Should `pages` be split into smaller, more focused modules?**
-  _Cohesion score 0.05713218820014936 - nodes in this community are weakly interconnected._
-- **Should `.claude/agents` be split into smaller, more focused modules?**
-  _Cohesion score 0.07033248081841433 - nodes in this community are weakly interconnected._
-- **Should `migrations` be split into smaller, more focused modules?**
-  _Cohesion score 0.08525506638714186 - nodes in this community are weakly interconnected._
+- **Why does `CTO / Delivery Lead` connect `CTO Orchestration & Learning Loop` to `Missions, WAT Audit & Tools`, `Agent Discipline & Report Format`, `Release, DevOps & Docs Roles`, `QA, Frontend & Design Roles`, `Backend, Database & Ownership Map`, `Delivery Pipeline & Review Roles`, `Architect & Plan Review Gate`?**
+  _High betweenness centrality (0.013) - this node is a cross-community bridge._
+- **Why does `QA / Browser Engineering Lead` connect `QA, Frontend & Design Roles` to `Missions, WAT Audit & Tools`, `CTO Orchestration & Learning Loop`, `Agent Discipline & Report Format`, `Release, DevOps & Docs Roles`, `Backend, Database & Ownership Map`, `Delivery Pipeline & Review Roles`, `Architect & Plan Review Gate`?**
+  _High betweenness centrality (0.010) - this node is a cross-community bridge._
+- **Why does `/skillify` connect `Missions, WAT Audit & Tools` to `QA, Frontend & Design Roles`, `CTO Orchestration & Learning Loop`?**
+  _High betweenness centrality (0.008) - this node is a cross-community bridge._
+- **What connects `CbRow`, `MemRow`, `RefundRow` to the rest of the system?**
+  _108 weakly-connected nodes found - possible documentation gaps or missing edges._
+- **Should `Edge Function API Core` be split into smaller, more focused modules?**
+  _Cohesion score 0.05952380952380952 - nodes in this community are weakly interconnected._
+- **Should `Core Database Schema` be split into smaller, more focused modules?**
+  _Cohesion score 0.12660028449502134 - nodes in this community are weakly interconnected._
+- **Should `App Shell, Auth & API Client` be split into smaller, more focused modules?**
+  _Cohesion score 0.14717741935483872 - nodes in this community are weakly interconnected._
