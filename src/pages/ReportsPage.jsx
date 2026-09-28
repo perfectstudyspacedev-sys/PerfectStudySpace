@@ -15,6 +15,9 @@ const ACTIVITY_CAT_LABELS = { desk: 'Walk-in Fee', membership: 'Membership Payme
 const ACTIVITY_BOOKING_LABELS = { walkin: 'Walk-in Booking', temporary: 'Temporary Check-in', permanent: 'Permanent Check-in' }
 
 function describeActivity(a) {
+  // Attendance typed in from a student's profile after the fact — say so, and which session
+  // it was for, instead of passing it off as a live check-in at the moment it was typed.
+  if (a.kind === 'booking' && a.manual) return `Past attendance added (${a.sessionLabel})`
   if (a.kind === 'booking') return ACTIVITY_BOOKING_LABELS[a.label] ?? a.label
   if (a.kind === 'membership' || a.kind === 'cashback' || a.kind === 'membership_refund') return a.label
   return `Payment — ${ACTIVITY_CAT_LABELS[a.label] ?? a.label}`

@@ -23,8 +23,10 @@ function computeOvertimeCharge(overtimeMinutes, bookedHours, baseFee, isWalkinTh
   return { overtimeHours, overtimeCharge, totalCost }
 }
 
-function getTimeStatus(endIso, totalPauseMs = 0) {
-  const ms = new Date(endIso).getTime() + totalPauseMs - Date.now()
+// end_time already includes every finished break (resume_session pushes it later by the
+// break's length) — adding total_pause_minutes again here counted each break twice.
+function getTimeStatus(endIso) {
+  const ms = new Date(endIso).getTime() - Date.now()
   if (ms <= 0) {
     const over = Math.abs(ms)
     const h = Math.floor(over / 3_600_000)
@@ -161,8 +163,13 @@ function CheckoutModal({ booking, onConfirm, onCancel, loading }) {
   // what actually gets stamped as the booking's end_time on submit.
   const [checkoutAt, setCheckoutAt] = useState(() => new Date())
 
-  const totalPauseMs = (booking.total_pause_minutes ?? 0) * 60_000
-  const endMs = new Date(booking.end_time).getTime() + totalPauseMs
+  // end_time already includes finished breaks (resume_session extends it). A break still in
+  // progress hasn't been added yet, so it's counted here — otherwise checking someone out
+  // while they're on break would bill the break itself as overtime.
+  const ongoingBreakMs = booking.is_paused && booking.paused_at
+    ? Math.max(checkoutAt.getTime() - new Date(booking.paused_at).getTime(), 0)
+    : 0
+  const endMs = new Date(booking.end_time).getTime() + ongoingBreakMs
   const overtimeMs = Math.max(checkoutAt.getTime() - endMs, 0)
   const overtimeMinutes = Math.ceil(overtimeMs / 60_000)
   const checkoutBeforeStart = checkoutAt.getTime() < new Date(booking.start_time).getTime()
@@ -316,6 +323,18 @@ function CheckoutModal({ booking, onConfirm, onCancel, loading }) {
               {overtimePayNow
                 ? 'Collected now, added to today\'s bill.'
                 : 'Logged to their profile, not added to today\'s bill — settled at their next renewal/closure.'}
+            </p>
+          </div>
+        )}
+
+        {isWalkin && booking.walkinLocker && (
+          <div className="card" style={{ marginBottom: '1rem', background: 'rgba(255,170,0,0.08)', border: '1px solid rgba(255,170,0,0.35)' }}>
+            <p style={{ fontSize: '0.85rem', fontWeight: 700, color: '#ffaa44', marginBottom: '0.25rem' }}>
+              🔑 Still holds Locker {booking.walkinLocker.locker_no} · due {formatDate(booking.walkinLocker.locker_due_date)}
+              {Number(booking.walkinLocker.fee_due) > 0 && ` · ₹${Number(booking.walkinLocker.fee_due).toLocaleString('en-IN')} unpaid`}
+            </p>
+            <p style={{ fontSize: '0.78rem', color: 'var(--text-muted)' }}>
+              Checking out doesn't return the locker. If they're not coming back, you'll be able to return it right after checkout to settle the deposit.
             </p>
           </div>
         )}
@@ -667,6 +686,8 @@ export default function BookingsPage() {
   const [endedAlerts, setEndedAlerts] = useState([])
   const [checkoutBooking, setCheckoutBooking] = useState(null)
   const [foodPassPrompt, setFoodPassPrompt] = useState(null)
+  // Shown after a walk-in who still holds a locker is checked out — { studentId, name, locker }
+  const [lockerReminder, setLockerReminder] = useState(null)
   const [foodPassCollectMode, setFoodPassCollectMode] = useState('cash')
   const [foodOrderBooking, setFoodOrderBooking] = useState(null)
   const [editBooking, setEditBooking] = useState(null)
@@ -696,8 +717,7 @@ export default function BookingsPage() {
   useEffect(() => {
     bookings.forEach(b => {
       if (b.is_paused) return
-      const totalPauseMs = (b.total_pause_minutes ?? 0) * 60_000
-      const ts = getTimeStatus(b.end_time, totalPauseMs)
+      const ts = getTimeStatus(b.end_time)
       if (ts.over && !notifiedIds.current.has(b.id)) {
         notifiedIds.current.add(b.id)
         setEndedAlerts(prev => [...prev, {
@@ -738,6 +758,10 @@ export default function BookingsPage() {
         setFoodPassCollectMode('cash')
         setFoodPassPrompt({ bookingId, shortfall: res.shortfall, overtimeMinutes, overtimePaymentMode, overtimePayNow, settleFoodNow, actualEndTime })
         return
+      }
+      const done = bookings.find(b => b.id === bookingId)
+      if (done?.booking_type === 'walkin' && done.walkinLocker) {
+        setLockerReminder({ studentId: done.student_id, name: done.students?.name, locker: done.walkinLocker })
       }
       setCheckoutBooking(null)
       setFoodPassPrompt(null)
@@ -832,8 +856,7 @@ export default function BookingsPage() {
               {filteredBookings.map(b => {
                 const isPaused  = !!b.is_paused
                 const isWalkin  = b.booking_type === 'walkin'
-                const totalPauseMs = (b.total_pause_minutes ?? 0) * 60_000
-                const ts        = getTimeStatus(b.end_time, totalPauseMs)
+                const ts        = getTimeStatus(b.end_time)
                 const cat       = categoryLabel(b.booking_type)
                 const deskLabel = b.desks?.label ?? null
 
@@ -973,6 +996,31 @@ export default function BookingsPage() {
           onConfirm={(params) => confirmCheckout(checkoutBooking.id, params)}
           onCancel={() => setCheckoutBooking(null)}
         />
+      )}
+
+      {lockerReminder && (
+        <div className="modal-overlay" onClick={() => setLockerReminder(null)}>
+          <div className="modal" style={{ maxWidth: 400 }} onClick={(e) => e.stopPropagation()}>
+            <h2>🔑 Locker Still Assigned</h2>
+            <p style={{ color: 'var(--text-muted)', marginBottom: '0.75rem' }}>
+              {lockerReminder.name} is checked out but still holds <strong>Locker {lockerReminder.locker.locker_no}</strong> (due {formatDate(lockerReminder.locker.locker_due_date)}
+              {Number(lockerReminder.locker.fee_due) > 0 ? `, ₹${Number(lockerReminder.locker.fee_due).toLocaleString('en-IN')} unpaid` : ''}).
+            </p>
+            <p style={{ fontSize: '0.82rem', color: 'var(--text-muted)', marginBottom: '1rem' }}>
+              If they're not coming back, return it now — any unpaid rent is taken from the deposit and the rest is refunded (or kept for damage), the same settlement as a membership closure. Otherwise keep it; they can use it on their next visit.
+            </p>
+            <div className="modal-actions">
+              <button type="button" className="btn btn-ghost" onClick={() => setLockerReminder(null)}>Keep Locker</button>
+              <Link
+                to={`/students/${lockerReminder.studentId}?returnLocker=1`}
+                className="btn btn-primary"
+                onClick={() => setLockerReminder(null)}
+              >
+                Return Locker
+              </Link>
+            </div>
+          </div>
+        </div>
       )}
 
       {foodPassPrompt && (

@@ -1,8 +1,8 @@
 import { useState, useEffect, useCallback } from 'react'
-import { useParams, Link } from 'react-router-dom'
+import { useParams, Link, useSearchParams } from 'react-router-dom'
 import { api } from '../lib/api'
 import { useAuth } from '../context/AuthContext'
-import { formatCurrency, formatDate, paymentModeLabel, getMultiMonthDiscount, todayISO } from '../lib/utils'
+import { formatCurrency, formatDate, paymentModeLabel, getMultiMonthDiscount, todayISO, REFERRAL_OPTIONS } from '../lib/utils'
 import PaymentModeSelector, { isSplitValid } from '../components/PaymentModeSelector'
 
 const PAYMENT_OPTIONS = [
@@ -483,6 +483,10 @@ export default function StudentProfilePage() {
   const [planChangeOpen, setPlanChangeOpen] = useState(false)
   const [cabinChangeOpen, setCabinChangeOpen] = useState(false)
   const [addPaymentOpen, setAddPaymentOpen] = useState(false)
+  const [editOpen, setEditOpen] = useState(false)
+  const [editForm, setEditForm] = useState({ name: '', phone: '', emergencyContact: '', course: '', referralSource: '' })
+  const [editLoading, setEditLoading] = useState(false)
+  const [editError, setEditError] = useState('')
   const [transferOpen, setTransferOpen] = useState(false)
   const [transferBranchId, setTransferBranchId] = useState('')
   const [transferDeskId, setTransferDeskId] = useState('')
@@ -511,6 +515,16 @@ export default function StudentProfilePage() {
   }, [id])
 
   useEffect(() => { refresh() }, [refresh])
+
+  // "Return Locker" from the walk-in checkout reminder lands here with ?returnLocker=1 —
+  // open the Remove Locker settlement straight away (once), if a locker is still assigned.
+  const [searchParams, setSearchParams] = useSearchParams()
+  useEffect(() => {
+    if (searchParams.get('returnLocker') !== '1' || !data) return
+    setSearchParams({}, { replace: true })
+    if (data.locker?.id) openRemoveLocker(data.locker.id)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [data, searchParams])
 
   // Pull live membership fee rates so renewal pricing reflects Branch Settings
   useEffect(() => {
@@ -944,6 +958,35 @@ export default function StudentProfilePage() {
     }
   }
 
+  const openEditDetails = () => {
+    const s = data.student
+    setEditForm({
+      name: s.name ?? '', phone: s.phone ?? '', emergencyContact: s.emergency_contact ?? '',
+      course: s.course ?? '', referralSource: s.referral_source ?? '',
+    })
+    setEditError('')
+    setEditOpen(true)
+  }
+
+  const handleSaveDetails = async () => {
+    const f = { ...editForm, name: editForm.name.trim(), phone: editForm.phone.trim(), emergencyContact: editForm.emergencyContact.trim() }
+    if (!f.name) return setEditError('Name is required')
+    if (!/^\d{10}$/.test(f.phone)) return setEditError('Phone must be a 10 digit number')
+    if (f.emergencyContact && !/^\d{10}$/.test(f.emergencyContact)) return setEditError('Emergency contact must be a 10 digit phone number')
+    if (f.emergencyContact && f.emergencyContact === f.phone) return setEditError('Emergency contact cannot be the same as the primary phone number')
+    setEditLoading(true)
+    setEditError('')
+    try {
+      await api('update_student_details', { studentId: id, ...f })
+      setEditOpen(false)
+      refresh()
+    } catch (err) {
+      setEditError(err.message)
+    } finally {
+      setEditLoading(false)
+    }
+  }
+
   const handleTransferBranch = async () => {
     if (!transferBranchId) return
     setTransferLoading(true)
@@ -1019,6 +1062,9 @@ export default function StudentProfilePage() {
       <div className="page-header">
         <h1>{student.name}</h1>
         <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap' }}>
+          <button type="button" className="btn btn-ghost" onClick={openEditDetails}>
+            ✏️ Edit Details
+          </button>
           {(memberships ?? []).length > 0 && (
             <button
               type="button" className="btn btn-ghost"
@@ -1040,6 +1086,7 @@ export default function StudentProfilePage() {
                 ['Phone', <span className="mono" key="phone">{student.phone}</span>],
                 ['Emergency Contact', <span className="mono" key="emergency">{student.emergency_contact || '—'}</span>],
                 ['Course', student.course || '—'],
+                ['Heard About Us', REFERRAL_OPTIONS.find(r => r.value === student.referral_source)?.label || '—'],
                 activeMem && ['Membership', (
                   <span key="mem">
                     <span className="cap">{activeMem.category}</span> ·{' '}
@@ -1634,7 +1681,9 @@ export default function StudentProfilePage() {
                   )}
                   {lockerPayType === 'later' && (
                     <p style={{ fontSize: '0.78rem', color: 'var(--text-muted)', marginBottom: '0.5rem' }}>
-                      The prorated rent + deposit will be added as a pending amount, and must be cleared before the membership can be closed.
+                      {activeMem
+                        ? 'The prorated rent + deposit will be added as a pending amount, and must be cleared before the membership can be closed.'
+                        : 'The prorated rent + deposit will be added as a pending amount, settled when the locker is returned.'}
                     </p>
                   )}
                   <button
@@ -2143,6 +2192,50 @@ export default function StudentProfilePage() {
             )}
             <div className="modal-actions">
               <button type="button" className="btn btn-primary" onClick={() => setCashbackNotice(null)}>Got it</button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {editOpen && (
+        <div className="modal-overlay" onClick={() => setEditOpen(false)}>
+          <div className="modal" style={{ maxWidth: 420 }} onClick={(e) => e.stopPropagation()}>
+            <h2 style={{ color: 'var(--accent)', marginBottom: '0.75rem' }}>✏️ Edit Student Details</h2>
+            <div className="form-group">
+              <label>Name</label>
+              <input value={editForm.name} onChange={(e) => setEditForm(f => ({ ...f, name: e.target.value }))} />
+            </div>
+            <div className="form-group">
+              <label>Phone</label>
+              <input
+                inputMode="numeric" maxLength={10} value={editForm.phone}
+                onChange={(e) => setEditForm(f => ({ ...f, phone: e.target.value.replace(/\D/g, '') }))}
+              />
+            </div>
+            <div className="form-group">
+              <label>Emergency Contact</label>
+              <input
+                inputMode="numeric" maxLength={10} value={editForm.emergencyContact} placeholder="Optional"
+                onChange={(e) => setEditForm(f => ({ ...f, emergencyContact: e.target.value.replace(/\D/g, '') }))}
+              />
+            </div>
+            <div className="form-group">
+              <label>Course</label>
+              <input value={editForm.course} onChange={(e) => setEditForm(f => ({ ...f, course: e.target.value }))} placeholder="What are they preparing for?" />
+            </div>
+            <div className="form-group">
+              <label>How did they hear about us?</label>
+              <select value={editForm.referralSource} onChange={(e) => setEditForm(f => ({ ...f, referralSource: e.target.value }))}>
+                <option value="">Not specified</option>
+                {REFERRAL_OPTIONS.map(r => <option key={r.value} value={r.value}>{r.label}</option>)}
+              </select>
+            </div>
+            {editError && <p className="error-msg">{editError}</p>}
+            <div className="modal-actions">
+              <button type="button" className="btn btn-ghost" onClick={() => setEditOpen(false)} disabled={editLoading}>Cancel</button>
+              <button type="button" className="btn btn-primary" onClick={handleSaveDetails} disabled={editLoading}>
+                {editLoading ? 'Saving…' : 'Save Changes'}
+              </button>
             </div>
           </div>
         </div>

@@ -168,3 +168,13 @@ Thanks for joining us — we're excited to have you with us. Please take a momen
 https://docs.google.com/forms/d/e/1FAIpQLSeolzoVIDAsOq35SZ0MbsJb1qBrBcInBG4VER6As5yc8A0oEA/viewform?usp=header
 
 If you have any questions, feel free to reach out anytime. We're happy to help! 😊`
+
+// How a student heard about us — shared by registration and the profile's Edit Details form.
+// Values must match the students.referral_source CHECK constraint (024 migration).
+export const REFERRAL_OPTIONS = [
+  { value: 'google_search', label: 'Google Search' },
+  { value: 'instagram', label: 'Social Media' },
+  { value: 'word_of_mouth', label: 'Word of Mouth' },
+  { value: 'flex', label: 'Flex (Banner/Hoarding)' },
+  { value: 'ai_platform', label: 'Claude/ChatGPT/AI Platforms' },
+]

@@ -9,6 +9,8 @@ const COLUMNS = [
   { key: 'sNo', label: 'S.No' },
   { key: 'name', label: 'Name' },
   { key: 'cabin', label: 'Cabin' },
+  { key: 'startDate', label: 'Start Date', isDate: true },
+  { key: 'endDate', label: 'Expiry', isDate: true },
   { key: 'month', label: 'Month' },
   { key: 'hours', label: 'Hours' },
   { key: 'locker', label: 'Locker' },

@@ -41,8 +41,9 @@ export function useSessionAlerts(branchId) {
         if (!bk?.id || !bk?.start_time || !bk?.hours) continue
         if (bk.is_paused) continue // skip paused sessions
 
-        const totalPauseMs = (bk.total_pause_minutes ?? 0) * 60_000
-        const endMs = new Date(bk.end_time ?? bk.start_time).getTime() + totalPauseMs
+        // end_time already includes finished breaks (resume_session extends it) — adding
+        // total_pause_minutes on top made these alerts fire late by every break taken.
+        const endMs = new Date(bk.end_time ?? bk.start_time).getTime()
         const studentName = bk.students?.name || bk.student_name || 'Student'
 
         // 5-minute warning

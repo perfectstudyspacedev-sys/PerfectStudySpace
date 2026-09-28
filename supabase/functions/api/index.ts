@@ -419,16 +419,26 @@ async function upsertStudent(db: ReturnType<typeof adminClient>, name: string, p
 // displaying a status derives it through here against today's date rather than trusting
 // the stored value, so it can never go stale again.
 function computeStudentStatus(
-  mem: { fee_due: number; due_date: string; end_date: string } | null | undefined,
-  locker: { locker_due_date: string | null } | null | undefined,
+  mem: { fee_due: number; end_date: string } | null | undefined,
+  locker: { locker_due_date: string | null; fee_due?: number | null } | null | undefined,
   today: string,
 ) {
-  if (!mem) return "inactive";
-  if (Number(mem.fee_due) > 0 || mem.due_date < today) return "pending";
-  if (mem.end_date < today) return "inactive";
-  // An otherwise-active membership still reads as Pending if the student's locker rent is
-  // overdue — a student shouldn't look fully settled while they owe locker money.
-  if (locker?.locker_due_date && locker.locker_due_date < today) return "pending";
+  // Locker money counts the same with or without a membership: rent past its due date, or
+  // an unpaid (Pay Later) rent/deposit balance, means the student still owes the branch.
+  const lockerOwes = !!locker && (
+    (!!locker.locker_due_date && locker.locker_due_date < today) || Number(locker.fee_due ?? 0) > 0
+  );
+  // No membership: a walk-in (or ex-member) still holding a locker is a current customer,
+  // not "inactive" — otherwise they vanish from the default Students list with the locker
+  // (and its deposit) forgotten. Only no membership AND no locker is truly inactive.
+  if (!mem) return locker ? (lockerOwes ? "pending" : "active") : "inactive";
+  // Pending = owes money, or the paid period has run out and needs renewing. Deliberately
+  // not due_date: it's set one month after the start however many months were paid, so a
+  // student who paid 3 months upfront read as Pending from month 2 with nothing owed.
+  if (Number(mem.fee_due) > 0 || mem.end_date < today) return "pending";
+  // An otherwise-active membership still reads as Pending while locker money is owed — a
+  // student shouldn't look fully settled while they owe locker rent.
+  if (lockerOwes) return "pending";
   return "active";
 }
 
@@ -436,7 +446,7 @@ async function refreshStudentStatus(db: ReturnType<typeof adminClient>, studentI
   const today = todayISO();
   const { data: mem } = await db.from("memberships").select("*")
     .eq("student_id", studentId).eq("is_active", true).order("end_date", { ascending: false }).limit(1).maybeSingle();
-  const { data: locker } = await db.from("lockers").select("locker_due_date")
+  const { data: locker } = await db.from("lockers").select("locker_due_date, fee_due")
     .eq("student_id", studentId).eq("is_active", true).maybeSingle();
   const status = computeStudentStatus(mem, locker, today);
   await db.from("students").update({ status, updated_at: new Date().toISOString() }).eq("id", studentId);
@@ -478,6 +488,39 @@ async function hasOpenSession(db: ReturnType<typeof adminClient>, studentId: str
   const { data } = await db.from("bookings").select("id")
     .eq("student_id", studentId).eq("status", "active").limit(1);
   return !!data?.length;
+}
+
+// One student can't be in two sessions at once. add_attendance / update_attendance write
+// sessions straight into history with staff-typed times, skipping the one-active-session
+// guard live check-in has — so re-saving a session that was already recorded silently made
+// a duplicate: double the visits and hours studied, and a second unbilled overtime row that
+// gets charged at the next renewal. An active session is open-ended (it runs until checkout,
+// however long ago it started), so it's fetched separately from the time-windowed query.
+async function findOverlappingSession(
+  db: ReturnType<typeof adminClient>, studentId: string, startIso: string, endIso: string, excludeBookingId?: string,
+) {
+  const startMs = new Date(startIso).getTime();
+  // A closed session never runs past a day, so only ones that started in the 24h before this
+  // one can reach into it — keeps this off the student's whole history.
+  const windowStart = new Date(startMs - 86_400_000).toISOString();
+  const [{ data: closed }, { data: open }] = await Promise.all([
+    db.from("bookings").select("id, status, start_time, end_time")
+      .eq("student_id", studentId).eq("status", "completed")
+      .gte("start_time", windowStart).lt("start_time", endIso),
+    db.from("bookings").select("id, status, start_time, end_time")
+      .eq("student_id", studentId).eq("status", "active").lt("start_time", endIso),
+  ]);
+  return [...(open ?? []), ...(closed ?? [])].find(b =>
+    b.id !== excludeBookingId && (b.status === "active" || new Date(b.end_time).getTime() > startMs),
+  ) ?? null;
+}
+
+// "25-09-26, 09:00–15:00" in IST (or just "25-09-26, 09:00" without an end) — how the rest
+// of the app shows a session to staff.
+function formatISTSession(startIso: string, endIso?: string) {
+  const d = toISTDateStr(startIso);
+  const hhmm = (iso: string) => new Date(new Date(iso).getTime() + IST_OFFSET_MS).toISOString().slice(11, 16);
+  return `${d.slice(8, 10)}-${d.slice(5, 7)}-${d.slice(2, 4)}, ${hhmm(startIso)}${endIso ? `–${hhmm(endIso)}` : ""}`;
 }
 
 // Claims a desk for a student, atomically. Picking a free desk and then reserving it are two
@@ -747,10 +790,12 @@ Deno.serve(async (req) => {
       const { data: expiredToday } = await db.from("memberships").select("*, students(name, phone)")
         .eq("branch_id", branchId).eq("is_active", true).lt("end_date", today);
 
+      // By when the session started, not when the row was written — past attendance added
+      // from a student's profile today would otherwise count as someone who came in today.
       const { count: checkedInToday } = await db.from("bookings")
         .select("*", { count: "exact", head: true })
         .eq("branch_id", branchId)
-        .gte("created_at", istDayStart(today)).lte("created_at", istDayEnd(today));
+        .gte("start_time", istDayStart(today)).lte("start_time", istDayEnd(today));
 
       return json({
         seats: { free, occupied, reserved, total: desks?.length ?? 0 },
@@ -789,7 +834,7 @@ Deno.serve(async (req) => {
       const toMs = new Date(toTs).getTime();
 
       const [{ data: recentBookings }, { data: recentMemberships }, { data: recentTxns }, { data: recentCashbacks }, { data: recentPayouts }] = await Promise.all([
-        db.from("bookings").select("id, booking_type, status, created_at, students(name, phone)")
+        db.from("bookings").select("id, booking_type, status, created_at, start_time, end_time, students(name, phone)")
           .eq("branch_id", branchId).gte("created_at", fromTs).lte("created_at", toTs),
         db.from("memberships").select("id, category, total_paid, created_at, students(name, phone)")
           .eq("branch_id", branchId).gte("created_at", fromTs).lte("created_at", toTs),
@@ -829,6 +874,12 @@ Deno.serve(async (req) => {
           id: `booking-${b.id}`, kind: "booking", label: b.booking_type,
           studentName: b.students?.name, studentPhone: b.students?.phone,
           time: b.created_at, status: b.status, amount: null,
+          // A row written after its own session had already ended was typed in from the
+          // student's profile (Add Attendance), not a live check-in — a live one is created
+          // at check-in and only gets its end_time at checkout, later. Without this, ten past
+          // days entered back to back read as ten check-ins minutes apart.
+          manual: b.status === "completed" && !!b.end_time && new Date(b.created_at).getTime() > new Date(b.end_time).getTime(),
+          sessionLabel: formatISTSession(b.start_time, b.end_time ?? undefined),
         })),
         ...(recentMemberships ?? []).map(m => ({
           id: `membership-${m.id}`, kind: "membership", label: `New ${m.category} membership`,
@@ -1003,7 +1054,20 @@ Deno.serve(async (req) => {
       if (!requireBranch(staff, branchId)) return err("Branch access denied", 403);
       if (!name || !phone || !hours) return err("Name, phone, and hours required");
 
-      const { id: studentId, isNew: isNewStudent } = await upsertStudent(db, name, phone, branchId);
+      // A walk-in by someone who already holds a membership must leave that member's record
+      // alone. upsertStudent re-homes a student to whichever branch the call came from and
+      // renames them to whatever was typed — so a member dropping into another branch for a
+      // day got moved there: their own cabin then read as a cross-branch visit (no cabin at
+      // check-in) and their home branch lost access to their profile. Walk-in-only students
+      // still follow the branch they visit, as before.
+      const { data: phoneOwner } = await db.from("students").select("id").eq("phone", phone).maybeSingle();
+      const { count: ownerActiveMemberships } = phoneOwner
+        ? await db.from("memberships").select("*", { count: "exact", head: true }).eq("student_id", phoneOwner.id).eq("is_active", true)
+        : { count: 0 };
+      const isExistingMember = !!phoneOwner && (ownerActiveMemberships ?? 0) > 0;
+      const { id: studentId, isNew: isNewStudent } = isExistingMember
+        ? { id: phoneOwner!.id, isNew: false }
+        : await upsertStudent(db, name, phone, branchId);
 
       // Desk is optional for walk-ins — staff no longer assigns a desk
       let desk = null;
@@ -1037,7 +1101,9 @@ Deno.serve(async (req) => {
       await db.from("students").update({
         total_visits: (st?.total_visits ?? 0) + 1,
         total_hours_studied: Number(st?.total_hours_studied ?? 0) + Number(hours),
-        status: "active",
+        // A member's status comes from their membership (dues, expiry) — a paid walk-in
+        // doesn't make a member with pending dues "active".
+        ...(isExistingMember ? {} : { status: "active" }),
       }).eq("id", studentId);
 
       return json({ booking: { ...booking, deskLabel: desk?.label ?? null, amount, studentName: name }, isNewStudent });
@@ -1079,6 +1145,22 @@ Deno.serve(async (req) => {
             `Use Renew on their profile to extend it, Transfer Branch to move them, or close/delete that membership first — registering again would create a duplicate.`,
           );
         }
+      }
+
+      // Locker checks run here, before anything is written. They used to run after the
+      // membership, payment and cabin were already saved, so "No lockers available" left a
+      // half-registered student behind (and a retry was then blocked as a duplicate).
+      if (withLocker) {
+        if (!lockerNo) return err("Pick a locker number, or choose Avail Later for the locker");
+        const { data: lockerBranch } = await db.from("branches").select("locker_capacity").eq("id", branchId).single();
+        const { count: lockersInUse } = await db.from("lockers")
+          .select("*", { count: "exact", head: true }).eq("branch_id", branchId).eq("is_active", true);
+        if ((lockersInUse ?? 0) >= (lockerBranch?.locker_capacity ?? 0)) {
+          return err("No lockers available at this branch — choose Avail Later for the locker");
+        }
+        const { data: lockerTaken } = await db.from("lockers").select("id")
+          .eq("branch_id", branchId).eq("locker_no", lockerNo).eq("is_active", true).maybeSingle();
+        if (lockerTaken) return err(`Locker ${lockerNo} is already assigned to another student — pick another one`);
       }
 
       // Reaching here with an existing record means a returning student (the guard above
@@ -1142,6 +1224,29 @@ Deno.serve(async (req) => {
       const totalPaid = gross * (1 - discount / 100);
       const startDate = customStartDate ? customStartDate : todayISO();
       if (startDate > todayISO()) return err("Start date cannot be in the future");
+
+      // What's collected right now, and the locker's ₹200 share of it. Full payment takes
+      // membership + locker together in one cash/UPI split (that's what the form totals up),
+      // so the locker's share is carved out of the split here. Recording the membership alone
+      // against the whole split never added up — it threw after the membership and cabin were
+      // already saved, leaving a half-registered student with no payment recorded.
+      const membershipPaidNow = advanceAmount != null ? Number(advanceAmount) : totalPaid;
+      const lockerInSplit = withLocker && advanceAmount == null ? 200 : 0;
+      let lockerCash = 0;
+      let lockerUpi = 0;
+      let membershipCash: number | string | undefined = cashAmount;
+      let membershipUpi: number | string | undefined = upiAmount;
+      if (paymentMode === "split") {
+        const cash = Math.round((Number(cashAmount) || 0) * 100) / 100;
+        const upi = Math.round((Number(upiAmount) || 0) * 100) / 100;
+        if (Math.round((cash + upi) * 100) !== Math.round((membershipPaidNow + lockerInSplit) * 100)) {
+          return err("Cash + UPI amounts must add up to the total");
+        }
+        lockerCash = Math.min(lockerInSplit, cash);
+        lockerUpi = lockerInSplit - lockerCash;
+        membershipCash = Math.round((cash - lockerCash) * 100) / 100;
+        membershipUpi = Math.round((upi - lockerUpi) * 100) / 100;
+      }
       const endDate = isCustomDaysPlan ? addDays(startDate, customDaysCount! - 1) : endDateForMonths(startDate, months);
       // Derived the same clamp-aware way as endDate (not a raw addMonths) so a start date
       // on the 29th/30th/31st can't make dueDate collide with a 1-month endDate instead of
@@ -1184,32 +1289,41 @@ Deno.serve(async (req) => {
       }).select("id").single();
       if (mErr) return err(mErr.message);
 
-      const actualPaid = advanceAmount != null ? Number(advanceAmount) : totalPaid;
       await insertPaymentTransactions(db, {
         student_id: studentId, branch_id: branchId, membership_id: mem!.id,
         category: "membership", created_by_staff_id: staff.id,
-      }, paymentMode, actualPaid, cashAmount, upiAmount);
+      }, paymentMode, membershipPaidNow, membershipCash, membershipUpi);
 
-      if (withLocker && lockerNo) {
-        const { data: branchRow } = await db.from("branches").select("locker_capacity").eq("id", branchId).single();
-        const { count: usedLockers } = await db.from("lockers")
-          .select("*", { count: "exact", head: true }).eq("branch_id", branchId).eq("is_active", true);
-        if ((usedLockers ?? 0) >= (branchRow?.locker_capacity ?? 0)) return err("No lockers available at this branch");
-
+      // Availability was checked before anything was written; this only fails if another
+      // registration took the same number in the moments since. The membership and its
+      // payment are real and stay — the locker just isn't assigned, and its ₹200 isn't
+      // recorded, instead of charging for a locker that was never created.
+      let lockerWarning: string | null = null;
+      if (withLocker) {
         const lockerDue = addMonths(startDate, 1);
-        await db.from("lockers").insert({
+        const { error: lockerErr } = await db.from("lockers").insert({
           branch_id: branchId, student_id: studentId, locker_no: lockerNo,
           locker_due_date: lockerDue, deposit_amount: 100, monthly_fee: 100,
         });
-        await db.from("transactions").insert({
+        const lockerTxnBase = {
           student_id: studentId, branch_id: branchId, category: "locker",
-          amount: 200, payment_mode: storedPaymentMode(paymentMode) === "other" ? "cash" : storedPaymentMode(paymentMode),
           notes: "Locker rent + deposit", created_by_staff_id: staff.id,
-        });
+        };
+        if (lockerErr) {
+          lockerWarning = `Locker ${lockerNo} was taken by another registration a moment ago — no locker was assigned and its ₹200 was not charged. Add one from the student's profile.`;
+        } else if (paymentMode === "split" && lockerInSplit > 0) {
+          if (lockerCash > 0) await db.from("transactions").insert({ ...lockerTxnBase, amount: lockerCash, payment_mode: "cash" });
+          if (lockerUpi > 0) await db.from("transactions").insert({ ...lockerTxnBase, amount: lockerUpi, payment_mode: "upi" });
+        } else {
+          await db.from("transactions").insert({
+            ...lockerTxnBase, amount: 200,
+            payment_mode: storedPaymentMode(paymentMode) === "other" ? "cash" : storedPaymentMode(paymentMode),
+          });
+        }
       }
 
       await refreshStudentStatus(db, studentId);
-      return json({ membership: mem, totalPaid, cabinNo });
+      return json({ membership: mem, totalPaid, cabinNo, lockerWarning });
     }
 
     // ─── PERMANENT MEMBERSHIP WAITLIST ───
@@ -1320,6 +1434,7 @@ Deno.serve(async (req) => {
         }, paymentMode, amountPaid, cashAmount, upiAmount);
       }
 
+      await refreshStudentStatus(db, studentId);
       return json({ ok: true, locker, amountCharged: amountPaid, proratedFee, deposit, totalDue, daysRemaining, payLater: !!payLater });
     }
 
@@ -1350,8 +1465,18 @@ Deno.serve(async (req) => {
       const rentDue = Number(locker.fee_due ?? 0);
       const depositRefund = locker.deposit_returned || withholdDeposit ? 0 : Number(locker.deposit_amount ?? 0);
       const netAmount = rentDue - depositRefund;
+      if (netAmount > 0 && !paymentMode) {
+        return err(`₹${netAmount} still needs to be collected before returning the locker — choose a payment mode.`);
+      }
 
-      await db.from("lockers").update({ is_active: false, fee_due: 0, deposit_returned: true }).eq("id", lockerId);
+      // Claim the locker first, conditional on it still being active: two Remove clicks
+      // landing together both read deposit_returned=false above, and without this guard both
+      // would pay the deposit out (same pattern as close/delete membership).
+      const { data: releasedRows, error: relErr } = await db.from("lockers")
+        .update({ is_active: false, fee_due: 0, deposit_returned: true })
+        .eq("id", lockerId).eq("is_active", true).select("id");
+      if (relErr) return err(relErr.message);
+      if (!releasedRows?.length) return err("This locker has already been returned — refresh to see its current state.");
 
       if (netAmount > 0) {
         // Owed rent exceeds the deposit that would offset it — collect just the difference.
@@ -1369,17 +1494,19 @@ Deno.serve(async (req) => {
         });
       }
 
+      await refreshStudentStatus(db, locker.student_id);
       return json({ ok: true, rentDue, depositRefund, netAmount });
     }
 
     if (action === "update_locker_due_date") {
       const { lockerId, dueDate } = payload;
       if (!dueDate) return err("Due date is required");
-      const { data: locker } = await db.from("lockers").select("branch_id").eq("id", lockerId).single();
+      const { data: locker } = await db.from("lockers").select("branch_id, student_id").eq("id", lockerId).single();
       if (!locker) return err("Locker not found");
       if (!requireBranch(staff, locker.branch_id)) return err("Branch access denied", 403);
 
       await db.from("lockers").update({ locker_due_date: dueDate }).eq("id", lockerId);
+      if (locker.student_id) await refreshStudentStatus(db, locker.student_id);
       return json({ ok: true });
     }
 
@@ -1441,13 +1568,15 @@ Deno.serve(async (req) => {
 
       // Sum actual time already used today (completed sessions' real duration, since end_time
       // is stamped with the true checkout time) to figure out how much of the daily quota
-      // remains for a possible additional split session.
+      // remains for a possible additional split session. Keyed on start_time, not created_at:
+      // a past day's attendance added from the profile today is created today, and counting
+      // it here used to block the student's real check-in with "quota already used".
       const { data: todaysSessions } = await db.from("bookings").select("start_time, end_time")
         .eq("student_id", studentId)
         .in("booking_type", ["temporary", "permanent"])
         .eq("status", "completed")
-        .gte("created_at", istDayStart(today))
-        .lte("created_at", istDayEnd(today));
+        .gte("start_time", istDayStart(today))
+        .lte("start_time", istDayEnd(today));
       const usedMinutesToday = (todaysSessions ?? []).reduce((sum: number, b: { start_time: string; end_time: string }) => {
         return sum + Math.max(0, (new Date(b.end_time).getTime() - new Date(b.start_time).getTime()) / 60_000);
       }, 0);
@@ -1560,9 +1689,25 @@ Deno.serve(async (req) => {
         newHours = Math.round(((new Date(newEndTime).getTime() - new Date(newStartTime).getTime()) / 3_600_000) * 100) / 100;
       } else {
         newHours = hours !== undefined && hours !== null && hours !== "" ? Number(hours) : Number(booking.hours ?? 0);
-        newEndTime = new Date(new Date(newStartTime).getTime() + newHours * 3_600_000).toISOString();
+        // end_time carries every finished break (resume_session extends it), so rebuilding it
+        // from start + hours alone would silently hand those break minutes back as study time.
+        newEndTime = new Date(
+          new Date(newStartTime).getTime() + newHours * 3_600_000 + Number(booking.total_pause_minutes ?? 0) * 60_000,
+        ).toISOString();
       }
       const newStatus = status || booking.status;
+
+      // Only a completed session has a real end to compare — an active one's end_time is
+      // just the scheduled end, and its own overlap is already prevented by the one-active-
+      // session rule at check-in.
+      if (newStatus === "completed") {
+        const clash = await findOverlappingSession(db, booking.student_id, newStartTime, newEndTime, bookingId);
+        if (clash) {
+          return err(clash.status === "active"
+            ? `These times overlap the session they're checked into right now (since ${formatISTSession(clash.start_time)}).`
+            : `These times overlap another attendance record (${formatISTSession(clash.start_time, clash.end_time)}) — adjust them so the two don't overlap.`);
+        }
+      }
 
       await db.from("bookings").update({
         start_time: newStartTime, end_time: newEndTime, hours: newHours, status: newStatus,
@@ -1693,6 +1838,13 @@ Deno.serve(async (req) => {
       const newEndTime = new Date(endTime).toISOString();
       if (new Date(newEndTime).getTime() <= new Date(newStartTime).getTime()) {
         return err("Check-out time must be after check-in time");
+      }
+
+      const clash = await findOverlappingSession(db, studentId, newStartTime, newEndTime);
+      if (clash) {
+        return err(clash.status === "active"
+          ? `This overlaps the session they're checked into right now (since ${formatISTSession(clash.start_time)}) — check them out first, or pick a different time.`
+          : `Attendance for ${formatISTSession(clash.start_time, clash.end_time)} is already recorded and overlaps this one — edit that record instead of adding it again.`);
       }
 
       const { data: student } = await db.from("students").select("*").eq("id", studentId).single();
@@ -1915,10 +2067,16 @@ Deno.serve(async (req) => {
       // end_time was only ever the *scheduled* end time set at check-in — record the real
       // checkout time here so attendance history (and anything reading end_time) is accurate,
       // especially when the student stayed into overtime.
-      await db.from("bookings").update({
+      // This conditional update is the real double-checkout guard: the status check above
+      // is a separate read, so two submissions landing together could both pass it and both
+      // bill food/overtime. Only one request can flip active → completed; the other gets no
+      // row back and stops here, before any money moves.
+      const { data: closedRows, error: closeErr } = await db.from("bookings").update({
         status: "completed", end_time: stampedEndTime,
         is_paused: false, paused_at: null, total_pause_minutes: 0,
-      }).eq("id", bookingId);
+      }).eq("id", bookingId).eq("status", "active").select("id");
+      if (closeErr) return err(closeErr.message);
+      if (!closedRows?.length) return err("This session has already been checked out.");
 
       if (booking.desk_id) {
         const { data: desk } = await db.from("desks").select("seat_type").eq("id", booking.desk_id).single();
@@ -2071,6 +2229,10 @@ Deno.serve(async (req) => {
           name: s.name,
           branches: s.branches,
           cabin: mem?.cabin_no ?? "-",
+          // Start of the current (latest-renewed) membership and the real last paid day —
+          // unlike dueDate, endDate reflects every month paid (same date the status uses).
+          startDate: mem?.start_date ?? "-",
+          endDate: mem?.end_date ?? "-",
           dueDate: mem?.due_date ?? "-",
           month: mem?.month ?? "-",
           hours: mem?.hours_per_day ?? "-",
@@ -2128,11 +2290,57 @@ Deno.serve(async (req) => {
         return { ...c, estimatedAmount };
       });
 
+      // Same live status the Students list shows (computeStudentStatus), not the stored
+      // column — which only refreshes on some events and so drifts (e.g. a locker added to
+      // a walk-in, or a membership lapsing overnight).
+      const liveStatus = computeStudentStatus(activeMemForCashback, locker, todayISO());
+
       return json({
-        student, memberships, bookings, transactions, locker,
+        student: { ...student, status: liveStatus }, memberships, bookings, transactions, locker,
         overtimeSessions: overtimeSessions ?? [], holds: holds ?? [], discounts: discounts ?? [],
         cashbacks, planChanges: planChanges ?? [], edits: edits ?? [],
       });
+    }
+
+    // Edit a student's personal details from their profile — any staff role, limited to
+    // their own branch (owner/admin: any branch). Only identity/contact fields: status,
+    // branch (Transfer Branch), counters and membership data all have their own flows.
+    if (action === "update_student_details") {
+      const { studentId, name, phone, emergencyContact, course, referralSource } = payload;
+      const { data: student } = await db.from("students").select("id, branch_id").eq("id", studentId).maybeSingle();
+      if (!student) return err("Student not found");
+      if (!requireBranch(staff, student.branch_id)) return err("Branch access denied", 403);
+
+      const cleanName = String(name ?? "").trim();
+      const cleanPhone = String(phone ?? "").trim();
+      const cleanEmergency = String(emergencyContact ?? "").trim();
+      const cleanCourse = String(course ?? "").trim();
+      if (!cleanName) return err("Name is required");
+      if (!/^\d{10}$/.test(cleanPhone)) return err("Phone must be a 10 digit number");
+      // Optional so walk-ins (who never gave one) can still be edited, but if present it
+      // follows the registration rules.
+      if (cleanEmergency && !/^\d{10}$/.test(cleanEmergency)) return err("Emergency contact must be a 10 digit phone number");
+      if (cleanEmergency && cleanEmergency === cleanPhone) return err("Emergency contact cannot be the same as the primary phone number");
+      const validReferrals = ["google_search", "instagram", "word_of_mouth", "flex", "ai_platform"];
+      if (referralSource && !validReferrals.includes(referralSource)) return err("Invalid referral source");
+
+      // Phone is the unique key used to recognise returning students and walk-ins, so it
+      // can't collide with anyone else's (friendly message instead of the DB unique error).
+      const { data: phoneOwner } = await db.from("students").select("id, name").eq("phone", cleanPhone).neq("id", studentId).maybeSingle();
+      if (phoneOwner) return err(`Phone ${cleanPhone} already belongs to another student (${phoneOwner.name})`);
+
+      const { data: updated, error: upErr } = await db.from("students").update({
+        name: cleanName, phone: cleanPhone,
+        emergency_contact: cleanEmergency || null,
+        course: cleanCourse || null,
+        referral_source: referralSource || null,
+        updated_at: new Date().toISOString(),
+      }).eq("id", studentId).select("*").single();
+      if (upErr) {
+        if (upErr.code === "23505") return err(`Phone ${cleanPhone} already belongs to another student`);
+        return err(upErr.message);
+      }
+      return json({ ok: true, student: updated });
     }
 
     // Owner-only: permanently move a student (and their active membership) to a
@@ -2276,9 +2484,11 @@ Deno.serve(async (req) => {
       if (period === "month") {
         // First of the current IST month (todayISO() is already IST), not the server's UTC month.
         const monthStart = `${todayISO().slice(0, 7)}-01`;
+        // Sessions that happened this month (start_time) — not rows typed in this month, which
+        // would credit a backfilled last-month session to this month's leaderboard.
         const { data: bookings } = await db.from("bookings")
           .select("student_id, hours, students(id, name, phone, course)")
-          .eq("branch_id", branchId).gte("created_at", istDayStart(monthStart));
+          .eq("branch_id", branchId).gte("start_time", istDayStart(monthStart));
         const byStudent = new Map<string, { id: string; name: string; phone: string; course: string | null; visits: number; hours: number }>();
         for (const b of bookings ?? []) {
           const s = b.students as unknown as { id: string; name: string; phone: string; course: string | null } | null;
@@ -2538,6 +2748,7 @@ Deno.serve(async (req) => {
         category: "locker", notes: "Locker pending payment", created_by_staff_id: staff.id,
       }, paymentMode, payAmount, cashAmount, upiAmount);
 
+      await refreshStudentStatus(db, locker.student_id);
       return json({ ok: true });
     }
 
@@ -2622,6 +2833,7 @@ Deno.serve(async (req) => {
         }, paymentMode, monthlyFee, cashAmount, upiAmount);
       }
 
+      await refreshStudentStatus(db, locker.student_id);
       return json({ ok: true, newDueDate, amountCharged: monthlyFee, payLater: !!payLater });
     }
 
@@ -3138,10 +3350,12 @@ Deno.serve(async (req) => {
       // members vs plain walk-ins, counted by distinct student (not by session, so a member
       // who split their day into two sessions only counts once). With allBranches this
       // dedupes org-wide too — a student who visited two branches the same day (a "cross-
-      // branch visit") is one person, counted once in the combined total.
-      const { data: rangeBookingsRaw } = await db.from("bookings").select("student_id, booking_type, created_at, branch_id, branches(name)")
-        .in("branch_id", branchFilter).gte("created_at", fromTs).lte("created_at", toTs);
-      const rangeBookings = (rangeBookingsRaw ?? []) as { student_id: string; booking_type: string; created_at: string; branch_id: string; branches: { name: string } | null }[];
+      // branch visit") is one person, counted once in the combined total. Ranged on
+      // start_time (when they attended), not created_at (when the row was written) — past
+      // attendance added from a profile would otherwise land on the day it was typed in.
+      const { data: rangeBookingsRaw } = await db.from("bookings").select("student_id, booking_type, start_time, branch_id, branches(name)")
+        .in("branch_id", branchFilter).gte("start_time", fromTs).lte("start_time", toTs);
+      const rangeBookings = (rangeBookingsRaw ?? []) as { student_id: string; booking_type: string; start_time: string; branch_id: string; branches: { name: string } | null }[];
       const attendanceBreakdown = {
         temporary: new Set(rangeBookings.filter(b => b.booking_type === "temporary").map(b => b.student_id)).size,
         permanent: new Set(rangeBookings.filter(b => b.booking_type === "permanent").map(b => b.student_id)).size,
@@ -3196,7 +3410,7 @@ Deno.serve(async (req) => {
         attendanceTrend = buckets.map(b => ({
           label: b.label,
           count: new Set(
-            rangeBookings.filter(r => { const d = toISTDateStr(r.created_at); return d >= b.start && d <= b.end; }).map(r => r.student_id),
+            rangeBookings.filter(r => { const d = toISTDateStr(r.start_time); return d >= b.start && d <= b.end; }).map(r => r.student_id),
           ).size,
         }));
         registrationsTrend = buckets.map(b => ({
@@ -3770,12 +3984,31 @@ Deno.serve(async (req) => {
         : { data: [] };
       const foodPassStudentIds = new Set((foodPasses ?? []).map((p: { student_id: string }) => p.student_id));
 
+      // Walk-ins holding a locker with no membership behind it: nothing releases that locker
+      // automatically (a member's is settled at membership closure), so the checkout screen
+      // reminds staff about it. A walk-in who is also a member is skipped — their locker is
+      // handled when the membership closes.
+      const walkinStudentIds = [...new Set((data ?? []).filter((b: any) => b.booking_type === "walkin" && b.student_id).map((b: any) => b.student_id))];
+      const [{ data: walkinLockers }, { data: walkinMems }] = walkinStudentIds.length
+        ? await Promise.all([
+            db.from("lockers").select("id, student_id, locker_no, locker_due_date, fee_due, deposit_amount, deposit_returned")
+              .in("student_id", walkinStudentIds).eq("is_active", true),
+            db.from("memberships").select("student_id").in("student_id", walkinStudentIds).eq("is_active", true),
+          ])
+        : [{ data: [] }, { data: [] }];
+      const walkinMemberIds = new Set((walkinMems ?? []).map((m: { student_id: string }) => m.student_id));
+      const walkinLockerByStudent = new Map(
+        (walkinLockers ?? []).filter((l: { student_id: string }) => !walkinMemberIds.has(l.student_id))
+          .map((l: { student_id: string }) => [l.student_id, l]),
+      );
+
       const bookings = (data ?? []).map(b => ({
         ...b,
         memberships: activeMemByStudent.get(b.student_id) ?? b.memberships,
         foodTotal: foodTotals.get(b.id) ?? 0,
         unpaidFoodTotal: b.booking_type === "walkin" ? (unpaidFoodTotalsByBooking.get(b.id) ?? 0) : (unpaidFoodTotalsByStudent.get(b.student_id) ?? 0),
         hasFoodPass: foodPassStudentIds.has(b.student_id),
+        walkinLocker: b.booking_type === "walkin" ? (walkinLockerByStudent.get(b.student_id) ?? null) : null,
       }));
       return json({ bookings });
     }
@@ -4131,30 +4364,56 @@ Deno.serve(async (req) => {
       // enforces, for the same reason: a future-dated membership shouldn't be "active" yet.
       const startDate = customStartDate || defaultStartDate;
       if (startDate > today) return err("Start date cannot be in the future");
+      // Checked before anything is written: insertPaymentTransactions throws on a split that
+      // doesn't add up, and by then the renewal would already be half done.
+      if (paymentMode === "split" && feePaid > 0) {
+        const splitPaise = Math.round(((Number(cashAmount) || 0) + (Number(upiAmount) || 0)) * 100);
+        if (splitPaise !== Math.round(feePaid * 100)) return err("Cash + UPI amounts must add up to the total");
+      }
       const endDate = isCustomDaysPlan ? addDays(startDate, customDaysCount! - 1) : endDateForMonths(startDate, months);
       const dueDate = isCustomDaysPlan ? addDays(endDate, 1) : addDays(endDateForMonths(startDate, 1), 1);
       const monthLabel = new Date(startDate).toLocaleString("en-US", { month: "long", year: "numeric" });
 
-      // Plan can change on renewal — reassign the cabin/seat if the category changed
+      // Claim the renewal before writing anything: switch the old membership off only if it's
+      // still active. The is_active check above is a separate read, so two submissions landing
+      // together could both pass it and create two memberships with two charges — only one
+      // request gets a row back here, and the other stops before anything is written. Every
+      // failure below switches the old membership back on, so a failed renewal never leaves
+      // the student with no membership at all.
+      const { data: claimedRows, error: claimErr } = await db.from("memberships").update({ is_active: false })
+        .eq("id", membershipId).eq("is_active", true).select("id");
+      if (claimErr) return err(claimErr.message);
+      if (!claimedRows?.length) {
+        return err("This membership has already been renewed or ended — refresh to see the current one.");
+      }
+      const restoreOldMembership = () => db.from("memberships").update({ is_active: true }).eq("id", membershipId);
+
+      // Plan can change on renewal — reassign the cabin/seat if the category changed. A new
+      // cabin is claimed before the old one is released (and the old one only once the new
+      // membership exists), so a failure part-way can't leave the student without a seat.
       let seatType = mem.seat_type;
       let deskId = mem.desk_id;
       let cabinNo = mem.cabin_no;
-      if (newCategory !== mem.category) {
-        if (mem.desk_id) {
-          await db.from("desks").update({ status: "free", seat_type: "floating", assigned_student_id: null }).eq("id", mem.desk_id);
-          deskId = null;
-          cabinNo = null;
-        }
+      let claimedNewDeskId: string | null = null;
+      const categoryChanged = newCategory !== mem.category;
+      if (categoryChanged) {
+        deskId = null;
+        cabinNo = null;
         seatType = newCategory === "permanent" ? "fixed" : "floating";
         if (newCategory === "permanent") {
           const { data: freeDesk } = await db.from("desks").select("*")
             .eq("branch_id", mem.branch_id).eq("status", "free").order("sort_order").limit(1).maybeSingle();
-          if (!freeDesk) return err("No cabin available for permanent membership");
+          if (!freeDesk) {
+            await restoreOldMembership();
+            return err("No cabin available for permanent membership");
+          }
           if (!(await claimDesk(db, freeDesk.id, mem.student_id))) {
+            await restoreOldMembership();
             return err("That cabin was just taken — please try again.");
           }
           deskId = freeDesk.id;
           cabinNo = freeDesk.label;
+          claimedNewDeskId = freeDesk.id;
         }
       }
 
@@ -4168,15 +4427,24 @@ Deno.serve(async (req) => {
         monthly_fee: monthlyFee, total_paid: feePaid, fee_due: feeDue,
         payment_mode: storedPaymentMode(paymentMode), created_by_staff_id: staff.id,
       }).select("id").single();
-      if (mErr) return err(mErr.message);
+      if (mErr) {
+        if (claimedNewDeskId) {
+          await db.from("desks").update({ status: "free", seat_type: "floating", assigned_student_id: null }).eq("id", claimedNewDeskId);
+        }
+        await restoreOldMembership();
+        return err(mErr.message);
+      }
+      // The new membership exists — only now is it safe to give up the old cabin.
+      if (categoryChanged && mem.desk_id) {
+        await db.from("desks").update({ status: "free", seat_type: "floating", assigned_student_id: null }).eq("id", mem.desk_id);
+      }
 
       await insertPaymentTransactions(db, {
         student_id: mem.student_id, branch_id: mem.branch_id, membership_id: newMem!.id,
         category: "membership", notes: "Renewal", created_by_staff_id: staff.id,
       }, paymentMode, feePaid, cashAmount, upiAmount);
 
-      // Deactivate old membership
-      await db.from("memberships").update({ is_active: false }).eq("id", membershipId);
+      // (The old membership was already switched off above, as the renewal's claim.)
       await db.from("alerts").update({ status: "resolved" }).eq("student_id", mem.student_id).eq("alert_type", "expiry").eq("status", "pending");
 
       for (const c of cashbackContribs) {
@@ -4368,7 +4636,12 @@ Deno.serve(async (req) => {
         return err(`₹${s.netAmount.toFixed(2)} still needs to be collected before deleting — choose a payment mode.`);
       }
 
-      await db.from("memberships").update({ is_active: false, fee_due: 0 }).eq("id", membershipId);
+      // Conditional on is_active so two deletes landing together can't both pay out the
+      // refund/deposit/cashback below — the is_active check above is only a separate read.
+      const { data: endedRows, error: endErr } = await db.from("memberships").update({ is_active: false, fee_due: 0 })
+        .eq("id", membershipId).eq("is_active", true).select("id");
+      if (endErr) return err(endErr.message);
+      if (!endedRows?.length) return err("Membership is not active");
 
       await db.from("membership_edits").insert({
         membership_id: membershipId, student_id: mem.student_id, branch_id: mem.branch_id,
@@ -4515,7 +4788,12 @@ Deno.serve(async (req) => {
         return err(`₹${netAmount.toFixed(2)} still needs to be collected before closing — choose a payment mode.`);
       }
 
-      await db.from("memberships").update({ is_active: false, fee_due: 0 }).eq("id", membershipId);
+      // Conditional on is_active so two closes landing together can't both pay out the
+      // deposit/Food Pass/cashback refunds below — the is_active check above is only a read.
+      const { data: endedRows, error: endErr } = await db.from("memberships").update({ is_active: false, fee_due: 0 })
+        .eq("id", membershipId).eq("is_active", true).select("id");
+      if (endErr) return err(endErr.message);
+      if (!endedRows?.length) return err("This membership has already been ended — refresh to see its current state.");
 
       // Quitting while on hold would otherwise leave the hold row open forever, showing
       // "Still on hold" in Hold History for a membership that's already ended.

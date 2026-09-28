@@ -2,7 +2,7 @@ import { useState, useEffect, useCallback } from 'react'
 import { useNavigate, Link } from 'react-router-dom'
 import { useAuth } from '../context/AuthContext'
 import { api } from '../lib/api'
-import { formatCurrency, formatDate, getMultiMonthDiscount, todayISO, shiftDate, openWhatsApp, DEFAULT_WELCOME_TEMPLATE } from '../lib/utils'
+import { formatCurrency, formatDate, getMultiMonthDiscount, todayISO, shiftDate, openWhatsApp, DEFAULT_WELCOME_TEMPLATE, REFERRAL_OPTIONS } from '../lib/utils'
 import PaymentModeSelector, { isSplitValid } from '../components/PaymentModeSelector'
 import { DEV_MODE } from '../lib/devMode'
 
@@ -26,13 +26,6 @@ function defaultRenewStartDate(endDate) {
   const daysSinceExpiry = Math.round((new Date(today) - new Date(endDate)) / 86_400_000)
   return daysSinceExpiry > MEMBERSHIP_GRACE_DAYS ? today : shiftDate(endDate, 1)
 }
-const REFERRAL_OPTIONS = [
-  { value: 'google_search', label: 'Google Search' },
-  { value: 'instagram', label: 'Social Media' },
-  { value: 'word_of_mouth', label: 'Word of Mouth' },
-  { value: 'flex', label: 'Flex (Banner/Hoarding)' },
-  { value: 'ai_platform', label: 'Claude/ChatGPT/AI Platforms' },
-]
 
 // ── Active Members tab ─────────────────────────────────────────────────────
 function ActiveMembersTab({ branchId, tempPackages, permPackages }) {
@@ -1040,7 +1033,11 @@ function NewMembershipForm({ branchId, onCreated, tempPackages, permPackages }) 
         customDays: isCustomDays ? Number(customDays) : undefined,
         customDaysAmount: isCustomDays ? Number(customDaysAmount) : undefined,
       })
-      setReceipt({ ...result, name, phone, total: grandTotal, amountPaid, amountRemaining })
+      // The backend skips the locker (and its ₹200) if the number was taken moments before
+      // submit — the receipt must not show money that was never charged.
+      const receiptTotal = withLocker && result.lockerWarning ? grandTotal - lockerExtra : grandTotal
+      const receiptPaid = paymentType === 'full' ? receiptTotal : amountPaid
+      setReceipt({ ...result, name, phone, total: receiptTotal, amountPaid: receiptPaid, amountRemaining: Math.max(receiptTotal - receiptPaid, 0) })
       openWhatsApp(phone, (waTemplate || DEFAULT_WELCOME_TEMPLATE).replace(/\{name\}/gi, name))
       setWaSent(true)
     } catch (err) {
@@ -1057,6 +1054,7 @@ function NewMembershipForm({ branchId, onCreated, tempPackages, permPackages }) 
         <p style={{ color: '#4ade80', fontWeight: 600, margin: '0.35rem 0 0.75rem' }}>✓ Membership successfully created</p>
         <p><strong>{receipt.name}</strong></p>
         {receipt.cabinNo && <p>Cabin: {receipt.cabinNo}</p>}
+        {receipt.lockerWarning && <p className="error-msg">⚠ {receipt.lockerWarning}</p>}
         <p className="mono">Total: {formatCurrency(receipt.total)}</p>
         {receipt.amountRemaining > 0 && (
           <>
