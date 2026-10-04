@@ -591,6 +591,51 @@ async function recordSettlementIncome(
   }
 }
 
+// RSP O1–O3 — overstay after a plan ends, for Quit and for Delete-after-expiry. Counted from the
+// day after end_date up to the student's LAST MEMBER CHECK-IN after it (walk-in visits were paid
+// for separately and don't count); ₹0 if they never came back. Check-in is refused once the
+// MEMBERSHIP_GRACE_DAYS grace is over, so this naturally stops at 10 days — capped here as well.
+// It used to charge every day since expiry, even weeks after the student could no longer get in.
+// Rate is the plan's normal daily rate, monthly fee ÷ 30.
+async function computeOverstay(db: ReturnType<typeof adminClient>, mem: { student_id: string; end_date: string; monthly_fee: number }) {
+  const dailyRate = Number(mem.monthly_fee) / 30;
+  const none = { overstayDays: 0, overstayCharge: 0, lastVisitDate: null as string | null, overstayDailyRate: Math.round(dailyRate * 100) / 100 };
+  if (mem.end_date >= todayISO()) return none;
+  const { data, error } = await db.from("bookings").select("start_time")
+    .eq("student_id", mem.student_id).neq("booking_type", "walkin").neq("status", "cancelled")
+    .gte("start_time", istDayStart(addDays(mem.end_date, 1)))
+    .order("start_time", { ascending: false }).limit(1);
+  if (error) throw new Error(error.message);
+  const lastVisitDate = data?.[0] ? toISTDateStr(data[0].start_time) : null;
+  if (!lastVisitDate) return none;
+  const overstayDays = Math.min(Math.max(daysBetween(mem.end_date, lastVisitDate), 0), MEMBERSHIP_GRACE_DAYS);
+  return { ...none, overstayDays, overstayCharge: Math.round(dailyRate * overstayDays), lastVisitDate };
+}
+
+// RSP D1–D3 — refund for the unused days of a deleted membership, at the rate the student actually
+// paid for the plan: plan price AFTER the multi-month discount ÷ plan days (the owner's choice;
+// it used to use the undiscounted price, refunding more per day than the student had paid).
+// plan_amount/plan_days are stored since migration 050; older rows fall back to the best estimate.
+// Unused days count from today, or from the start date if the period hasn't begun yet. Holds push
+// end_date out without adding paid days, so days-to-end are exactly the unused paid days.
+function unusedDaysRefund(
+  mem: { start_date: string; end_date: string; months_paid: number; monthly_fee: number; discount_percent?: number | null; plan_amount?: number | null; plan_days?: number | null; total_paid: number; fee_due?: number | null },
+  today: string, waive: boolean,
+) {
+  const planAmount = mem.plan_amount != null
+    ? Number(mem.plan_amount)
+    : Number(mem.monthly_fee) * Number(mem.months_paid) * (1 - Number(mem.discount_percent ?? 0) / 100);
+  const planDays = mem.plan_days != null && Number(mem.plan_days) > 0 ? Number(mem.plan_days) : membershipTotalDays(mem);
+  const refDate = mem.start_date > today ? addDays(mem.start_date, -1) : today;
+  const remainingDays = Math.max(0, Math.round(
+    (new Date(mem.end_date + "T00:00:00Z").getTime() - new Date(refDate + "T00:00:00Z").getTime()) / 86_400_000,
+  ));
+  const refundDailyRate = planAmount / planDays;
+  const raw = waive ? 0 : refundDailyRate * remainingDays;
+  const proratedRefund = Math.round(Math.max(0, Math.min(raw, Number(mem.total_paid) + Number(mem.fee_due ?? 0))));
+  return { proratedRefund, remainingDays, totalDays: planDays, planAmount: Math.round(planAmount * 100) / 100, refundDailyRate: Math.round(refundDailyRate * 100) / 100 };
+}
+
 // Food bills a student ran up without paying (no Food Pass, or more than the pass held).
 // Checkout lets a member carry these for up to 3 days, so a membership can end with some
 // still open — closing/deleting it now collects them in the final settlement instead of
@@ -4912,17 +4957,9 @@ Deno.serve(async (req) => {
       const overtimeMinutes = (unbilledOvertime ?? []).reduce((s: number, o: { overtime_minutes: number }) => s + Number(o.overtime_minutes), 0);
       const overtimeDue = (unbilledOvertime ?? []).reduce((s: number, o: { billed_amount: number | null }) => s + Number(o.billed_amount ?? 0), 0);
 
-      // Quitting isn't always same-day — staff sometimes only get around to closing a
-      // membership a few days after it actually expired. Default assumption is the student
-      // kept using the space in the meantime, billed at the same per-day rate as the plan
-      // itself; staff can waive it with waiveOverstayCharge on the actual close if the
-      // student genuinely stopped coming on the expiry date and this is just a late
-      // paperwork close.
-      const today = todayISO();
-      const overstayDays = Math.max(0, daysBetween(mem.end_date, today));
-      const grossFee = Number(mem.monthly_fee) * Number(mem.months_paid);
-      const totalDays = membershipTotalDays(mem);
-      const overstayCharge = overstayDays > 0 ? Math.round((grossFee / totalDays) * overstayDays) : 0;
+      // Overstay (RSP O1–O3): only up to the last member check-in after expiry. This preview
+      // returns the full charge; the dialog strikes it through if staff tick "waive".
+      const { overstayDays, overstayCharge, lastVisitDate, overstayDailyRate } = await computeOverstay(db, mem);
 
       const totalOwed = membershipDue + lockerDue + foodPassOwed + unpaidFoodTotal + overtimeDue + overstayCharge;
       const totalCredit = lockerDepositRefund + foodPassRefund + cashbackAmount;
@@ -4932,7 +4969,7 @@ Deno.serve(async (req) => {
         membershipDue, lockerDue, lockerDepositRefund,
         foodPassBalance, foodPassRefund, foodPassOwed, unpaidFoodTotal,
         cashbackAmount, overtimeMinutes, overtimeDue,
-        overstayDays, overstayCharge,
+        overstayDays, overstayCharge, lastVisitDate, overstayDailyRate,
         totalOwed, totalCredit, netAmount,
         canClose: true,
         locker: locker ?? null,
@@ -4974,27 +5011,15 @@ Deno.serve(async (req) => {
       const overtimeDue = (unbilledOvertime ?? []).reduce((s: number, o: { billed_amount: number | null }) => s + Number(o.billed_amount ?? 0), 0);
 
       const today = todayISO();
-      const grossFee = Number(mem.monthly_fee) * Number(mem.months_paid);
-      const totalDays = membershipTotalDays(mem);
-      // Signed gap between today and end_date splits into exactly one of the two below —
-      // a membership can't simultaneously have unused days left AND be overstayed.
-      const daysSinceEnd = Math.round(
-        (new Date(today + "T00:00:00Z").getTime() - new Date(mem.end_date + "T00:00:00Z").getTime()) / 86_400_000,
-      );
-      const remainingDays = Math.max(0, -daysSinceEnd);
-      // waiveProratedRefund lets staff omit this credit entirely — e.g. the student is
-      // quitting early by choice and the business's policy is no refund for unused days,
-      // rather than the app forcing one.
-      const rawProratedRefund = waiveProratedRefund ? 0 : (grossFee / totalDays) * remainingDays;
-      const proratedRefund = Math.round(Math.max(0, Math.min(rawProratedRefund, Number(mem.total_paid) + membershipDue)));
-
-      // Same overstay concept as close_membership — a Delete Membership done days after the
-      // student's plan already expired defaults to billing those extra days at the plan's
-      // own per-day rate; waiveOverstayCharge lets staff confirm the student actually left
-      // on the expiry date and this is just a late close.
-      const overstayDays = Math.max(0, daysSinceEnd);
-      const overstayCharge = overstayDays > 0 && !waiveOverstayCharge
-        ? Math.round((grossFee / totalDays) * overstayDays) : 0;
+      // A membership is either still running (unused days to refund) or already over (possible
+      // overstay) — never both. waiveProratedRefund lets staff omit the refund entirely (e.g. a
+      // no-refund policy for leaving early by choice).
+      const { proratedRefund, remainingDays, totalDays, planAmount, refundDailyRate } = unusedDaysRefund(mem as any, today, !!waiveProratedRefund);
+      // Same overstay rule as Quit (RSP O1–O3); the full amount is kept for the waiver log.
+      const overstay = await computeOverstay(db, mem as any);
+      const overstayDays = overstay.overstayDays;
+      const overstayChargeBeforeWaive = overstay.overstayCharge;
+      const overstayCharge = waiveOverstayCharge ? 0 : overstayChargeBeforeWaive;
 
       const totalOwed = membershipDue + lockerDue + foodPassOwed + unpaidFoodTotal + overtimeDue + overstayCharge;
       const totalCredit = lockerDepositRefund + foodPassRefund + cashbackAmount + proratedRefund;
@@ -5004,8 +5029,8 @@ Deno.serve(async (req) => {
         membershipDue, lockerDue, lockerDepositRefund,
         foodPassBalance, foodPassRefund, foodPassOwed, unpaidFoodTotal, unpaidFoodBills,
         cashbackAmount, cashbackContribs, overtimeMinutes, overtimeDue,
-        proratedRefund, remainingDays, totalDays, grossFee,
-        overstayDays, overstayCharge,
+        proratedRefund, remainingDays, totalDays, planAmount, refundDailyRate,
+        overstayDays, overstayCharge, overstayChargeBeforeWaive, lastVisitDate: overstay.lastVisitDate, overstayDailyRate: overstay.overstayDailyRate,
         totalOwed, totalCredit, netAmount,
         locker: locker ?? null, foodPass: foodPass ?? null, unbilledOvertime: unbilledOvertime ?? [],
         planChanges: planChanges ?? [],
@@ -5118,7 +5143,7 @@ Deno.serve(async (req) => {
       if (s.proratedRefund > 0) {
         await recordPayout(db, {
           student_id: mem.student_id, branch_id: mem.branch_id, payout_type: "membership_refund",
-          amount: s.proratedRefund, notes: `Prorated refund for ${s.remainingDays} unused of ${s.totalDays} day(s) — membership deleted`,
+          amount: s.proratedRefund, notes: `Refund for ${s.remainingDays} unused day(s) × ₹${s.refundDailyRate} (plan ₹${s.planAmount} ÷ ${s.totalDays} days) — membership deleted`,
           created_by_staff_id: staff.id,
         });
       }
@@ -5190,15 +5215,12 @@ Deno.serve(async (req) => {
       const overtimeMinutes = (unbilledOvertime ?? []).reduce((s: number, o: { overtime_minutes: number }) => s + Number(o.overtime_minutes), 0);
       const overtimeDue = (unbilledOvertime ?? []).reduce((s: number, o: { billed_amount: number | null }) => s + Number(o.billed_amount ?? 0), 0);
 
-      // See get_membership_closure_summary — waiveOverstayCharge lets staff confirm the
-      // student actually left on the expiry date and this is only a late paperwork close,
-      // so nothing gets billed for the gap.
-      const today = todayISO();
-      const overstayDays = Math.max(0, daysBetween(mem.end_date, today));
-      const grossFee = Number(mem.monthly_fee) * Number(mem.months_paid);
-      const totalDays = membershipTotalDays(mem);
-      const overstayCharge = overstayDays > 0 && !waiveOverstayCharge
-        ? Math.round((grossFee / totalDays) * overstayDays) : 0;
+      // Overstay (RSP O1–O3): only up to the last member check-in after expiry; staff can still
+      // waive it (the full amount is kept for the waiver log).
+      const overstay = await computeOverstay(db, mem);
+      const overstayDays = overstay.overstayDays;
+      const overstayChargeBeforeWaive = overstay.overstayCharge;
+      const overstayCharge = waiveOverstayCharge ? 0 : overstayChargeBeforeWaive;
 
       const totalOwed = membershipDue + lockerDue + foodPassOwed + unpaidFoodTotal + overtimeDue + overstayCharge;
       const totalCredit = lockerDepositRefund + foodPassRefund + cashbackAmount;

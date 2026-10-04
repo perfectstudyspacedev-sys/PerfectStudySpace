@@ -2423,8 +2423,11 @@ export default function StudentProfilePage() {
                   {deleteSummary.overtimeDue > 0 && <p className="mono" style={{ fontSize: '0.85rem' }}>Overtime ({deleteSummary.overtimeMinutes}m): {formatCurrency(deleteSummary.overtimeDue)}</p>}
                   {deleteSummary.overstayDays > 0 && (
                     <p className="mono" style={{ fontSize: '0.85rem', textDecoration: deleteWaiveOverstay ? 'line-through' : 'none', color: deleteWaiveOverstay ? 'var(--text-muted)' : undefined }}>
-                      Used {deleteSummary.overstayDays} extra day{deleteSummary.overstayDays === 1 ? '' : 's'} past expiry: {formatCurrency(deleteSummary.overstayCharge)}
+                      Overstay: last visit {formatDate(deleteSummary.lastVisitDate)} → {deleteSummary.overstayDays} day{deleteSummary.overstayDays === 1 ? '' : 's'} × {formatCurrency(deleteSummary.overstayDailyRate)} = {formatCurrency(deleteSummary.overstayCharge)}
                     </p>
+                  )}
+                  {deleteSummary.overstayDays === 0 && activeMem.end_date < todayISO() && (
+                    <p style={{ fontSize: '0.78rem', color: 'var(--text-muted)' }}>No member check-ins since the plan ended — no overstay charged.</p>
                   )}
                   <p className="mono" style={{ fontWeight: 700, marginTop: '0.3rem' }}>
                     Total: {formatCurrency(deleteSummary.totalOwed - (deleteWaiveOverstay ? deleteSummary.overstayCharge : 0))}
@@ -2438,7 +2441,7 @@ export default function StudentProfilePage() {
                       onChange={(e) => setDeleteWaiveOverstay(e.target.checked)}
                       style={{ marginTop: '0.15rem' }}
                     />
-                    <span>Student already vacated on the expiry date — they didn't actually use these {deleteSummary.overstayDays} extra day{deleteSummary.overstayDays === 1 ? '' : 's'}, this is just a late close. Waive the charge.</span>
+                    <span>Waive the overstay charge of {formatCurrency(deleteSummary.overstayCharge)} ({deleteSummary.overstayDays} day{deleteSummary.overstayDays === 1 ? '' : 's'} after the plan ended).</span>
                   </label>
                 )}
 
@@ -2452,7 +2455,10 @@ export default function StudentProfilePage() {
                   {deleteSummary.foodPassRefund > 0 && <p className="mono" style={{ fontSize: '0.85rem' }}>Food Pass balance: {formatCurrency(deleteSummary.foodPassRefund)}</p>}
                   {deleteSummary.cashbackAmount > 0 && <p className="mono" style={{ fontSize: '0.85rem' }}>Unredeemed cashback: {formatCurrency(deleteSummary.cashbackAmount)}</p>}
                   <p className="mono" style={{ fontSize: '0.85rem', textDecoration: deleteWaiveProratedRefund ? 'line-through' : 'none', color: deleteWaiveProratedRefund ? 'var(--text-muted)' : undefined }}>
-                    Unused days ({deleteSummary.remainingDays} of {deleteSummary.totalDays}): {formatCurrency(deleteSummary.proratedRefund)}
+                    Unused days: {deleteSummary.remainingDays} × {formatCurrency(deleteSummary.refundDailyRate)} = {formatCurrency(deleteSummary.proratedRefund)}
+                    <span style={{ display: 'block', fontSize: '0.72rem', color: 'var(--text-muted)' }}>
+                      Rate = plan price paid {formatCurrency(deleteSummary.planAmount)} (after discount) ÷ {deleteSummary.totalDays} days
+                    </span>
                   </p>
                   <p className="mono" style={{ fontWeight: 700, marginTop: '0.3rem' }}>
                     Total: {formatCurrency(deleteSummary.totalCredit

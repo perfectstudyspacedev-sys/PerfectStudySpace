@@ -692,8 +692,11 @@ function ActiveMembersTab({ branchId, tempPackages, permPackages }) {
                   {closeSummary.overtimeDue > 0 && <p className="mono" style={{ fontSize: '0.85rem' }}>Overtime ({closeSummary.overtimeMinutes}m): {formatCurrency(closeSummary.overtimeDue)}</p>}
                   {closeSummary.overstayDays > 0 && (
                     <p className="mono" style={{ fontSize: '0.85rem', textDecoration: waiveOverstayCharge ? 'line-through' : 'none', color: waiveOverstayCharge ? 'var(--text-muted)' : undefined }}>
-                      Used {closeSummary.overstayDays} extra day{closeSummary.overstayDays === 1 ? '' : 's'} past expiry: {formatCurrency(closeSummary.overstayCharge)}
+                      Overstay: last visit {formatDate(closeSummary.lastVisitDate)} → {closeSummary.overstayDays} day{closeSummary.overstayDays === 1 ? '' : 's'} × {formatCurrency(closeSummary.overstayDailyRate)} = {formatCurrency(closeSummary.overstayCharge)}
                     </p>
+                  )}
+                  {closeSummary.overstayDays === 0 && true && (
+                    <p style={{ fontSize: '0.78rem', color: 'var(--text-muted)' }}>No member check-ins since the plan ended — no overstay charged.</p>
                   )}
                   <p className="mono" style={{ fontWeight: 700, marginTop: '0.3rem' }}>
                     Total: {formatCurrency(closeSummary.totalOwed - (waiveOverstayCharge ? closeSummary.overstayCharge : 0))}
@@ -707,7 +710,7 @@ function ActiveMembersTab({ branchId, tempPackages, permPackages }) {
                       onChange={(e) => setWaiveOverstayCharge(e.target.checked)}
                       style={{ marginTop: '0.15rem' }}
                     />
-                    <span>Student already vacated on the expiry date — they didn't actually use these {closeSummary.overstayDays} extra day{closeSummary.overstayDays === 1 ? '' : 's'}, this is just a late close. Waive the charge.</span>
+                    <span>Waive the overstay charge of {formatCurrency(closeSummary.overstayCharge)} ({closeSummary.overstayDays} day{closeSummary.overstayDays === 1 ? '' : 's'} after the plan ended).</span>
                   </label>
                 )}
 

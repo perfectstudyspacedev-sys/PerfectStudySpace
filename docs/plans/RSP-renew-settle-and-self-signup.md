@@ -119,24 +119,24 @@ Profile: shows the new period + **Cancel Early Renewal** button.
 
 ## Part 2 — Overstay charge (Quit, and Delete after expiry)
 
-- **O1.** Overstay = days from the day after expiry **up to the last member check-in after expiry**;
+- ✅ **O1.** Overstay = days from the day after expiry **up to the last member check-in after expiry**;
   ₹0 if they never came.
-- **O2.** Automatically capped at 10 days (check-in is blocked after grace). Walk-in visits do not count.
-- **O3.** Daily rate = **monthly fee ÷ 30** (same as today for normal plans; correct for custom-day plans).
-- **O4.** The bill shows the working, e.g. *"Last visit 22 Oct → 7 days × ₹41.67 = ₹292"*. The waive
+- ✅ **O2.** Automatically capped at 10 days (check-in is blocked after grace). Walk-in visits do not count.
+- ✅ **O3.** Daily rate = **monthly fee ÷ 30** (same as today for normal plans; correct for custom-day plans).
+- ✅ **O4.** The bill shows the working, e.g. *"Last visit 22 Oct → 7 days × ₹41.67 = ₹292"*. The waive
   tickbox stays and now **requires a reason** (W2a).
 
 > By design: a renewal in grace counts all grace days as used; Quit/Delete only charge up to the last visit.
 
 ## Part 3 — Delete refund (unused days)
 
-- **D1.** Refund = unused days × **(plan price after multi-month discount ÷ plan days)**, never more
+- ✅ **D1.** Refund = unused days × **(plan price after multi-month discount ÷ plan days)**, never more
   than what was actually paid. Example: 3 months ₹3,750 → ₹3,375 after 10% → delete after 30 days →
   60 × ₹37.50 = **₹2,250** (was ₹2,500).
-- **D2.** Plan price and plan days are stored at purchase (DB-RSP) so custom-day plans refund exactly.
+- ✅ **D2.** Plan price and plan days are stored at purchase (DB-RSP) so custom-day plans refund exactly.
   Memberships created before this change use the best estimate:
   `monthly_fee × months_paid × (1 − discount_percent/100)` over `membershipTotalDays()`.
-- **D3.** Unused days count from today — or from the start date if the period has not started yet.
+- ✅ **D3.** Unused days count from today — or from the start date if the period has not started yet.
 
 ## Part 4 — Money & records
 
