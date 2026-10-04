@@ -311,15 +311,38 @@ function dateRange(period: string, dateFrom?: string, dateTo?: string) {
   const today = todayISO(); // IST calendar date
   if (period === "today") return { from: today, to: today };
   if (period === "week") {
-    // 7 IST days back from today, derived from the IST date itself (not the server's UTC
-    // clock) so the window doesn't shift by a day near IST midnight.
-    return { from: addDays(today, -7), to: today };
+    // The last 7 IST days including today (today-6 … today), derived from the IST date
+    // itself (not the server's UTC clock) so the window doesn't shift by a day near IST
+    // midnight. This was today-7 … today — 8 days — under a "Last 7 days" label.
+    return { from: addDays(today, -6), to: today };
   }
   if (period === "month") {
     // First of the current IST month.
     return { from: `${today.slice(0, 7)}-01`, to: today };
   }
   return { from: dateFrom ?? today, to: dateTo ?? today };
+}
+
+function isISODate(value: unknown): value is string {
+  return typeof value === "string" && /^\d{4}-\d{2}-\d{2}$/.test(value) && !Number.isNaN(Date.parse(value));
+}
+
+// PostgREST caps every response at the project's max-rows setting (1000 on Supabase by
+// default) and truncates silently — no error, just fewer rows. A report that sums rows over
+// an open-ended range (a month of transactions across every branch passes 1000 easily)
+// would under-report with nothing to show anything was missing, so those queries page
+// through with .range() until a page comes back empty. Pages advance by however many rows
+// actually arrived, so this stays correct even if max-rows is set below pageSize. The query
+// must carry a deterministic .order() (ties broken by id) or pages can overlap or skip rows.
+// deno-lint-ignore no-explicit-any
+async function fetchAllRows<T = Record<string, any>>(buildQuery: () => any, pageSize = 1000): Promise<T[]> {
+  const rows: T[] = [];
+  for (;;) {
+    const { data, error } = await buildQuery().range(rows.length, rows.length + pageSize - 1);
+    if (error) throw new Error(error.message);
+    if (!data?.length) return rows;
+    rows.push(...data);
+  }
 }
 
 // Splits a [from, to] range into day-sized or week-sized buckets for trend charts — a
@@ -3138,7 +3161,11 @@ Deno.serve(async (req) => {
     // ─── REVENUE (owner + staff see own branch only) ───
     if (action === "get_revenue") {
       const { branchId, period, dateFrom, dateTo, allBranches } = payload;
+      if ((dateFrom != null && !isISODate(dateFrom)) || (dateTo != null && !isISODate(dateTo))) {
+        return err("Invalid date — expected YYYY-MM-DD");
+      }
       const range = dateRange(period ?? "today", dateFrom, dateTo);
+      if (range.from > range.to) return err("Start date must be on or before the end date");
 
       let branchFilter: string[] = [];
       if (allBranches && isOwnerOrAdmin(staff)) {
@@ -3150,31 +3177,43 @@ Deno.serve(async (req) => {
         branchFilter = [bid];
       }
 
-      const { data: txns } = await db.from("transactions").select("*")
-        .in("branch_id", branchFilter)
-        .gte("created_at", istDayStart(range.from))
-        .lte("created_at", istDayEnd(range.to));
+      const fromTs = istDayStart(range.from);
+      const toTs = istDayEnd(range.to);
+      type RevenueTxn = { category: string; amount: number; payment_mode: string; branch_id: string; created_at: string };
+      const [txns, payouts] = await Promise.all([
+        fetchAllRows<RevenueTxn>(() => db.from("transactions").select("category, amount, payment_mode, branch_id, created_at")
+          .in("branch_id", branchFilter).gte("created_at", fromTs).lte("created_at", toTs)
+          .order("created_at").order("id")),
+        // Cashback payouts, locker deposit refunds, unused Food Pass balances and membership
+        // refunds handed back to students aren't revenue transactions — net them out below to
+        // show the real final figure.
+        fetchAllRows<{ payout_type: string; amount: number }>(() => db.from("payouts").select("payout_type, amount")
+          .in("branch_id", branchFilter).gte("created_at", fromTs).lte("created_at", toTs)
+          .order("created_at").order("id")),
+      ]);
 
-      const cats = { desk: 0, membership: 0, food: 0, locker: 0, overtime: 0, fine: 0 };
-      const modes = { cash: 0, upi: 0, other: 0 };
-      for (const t of txns ?? []) {
-        cats[t.category as keyof typeof cats] = (cats[t.category as keyof typeof cats] ?? 0) + Number(t.amount);
-        modes[t.payment_mode as keyof typeof modes] = (modes[t.payment_mode as keyof typeof modes] ?? 0) + Number(t.amount);
+      const cats: Record<string, number> = { desk: 0, membership: 0, food: 0, locker: 0, overtime: 0, fine: 0 };
+      const modes: Record<string, number> = { cash: 0, upi: 0, other: 0 };
+      for (const t of txns) {
+        cats[t.category] = (cats[t.category] ?? 0) + Number(t.amount);
+        modes[t.payment_mode] = (modes[t.payment_mode] ?? 0) + Number(t.amount);
       }
       const total = Object.values(cats).reduce((a, b) => a + b, 0);
 
       // Daily trend — bucket by the IST calendar day each transaction falls on, not its raw
       // UTC date (a payment just after IST midnight would otherwise land on the day before).
+      // Every day in the range gets a point, including ₹0 days — plotting only days that had
+      // sales made the chart draw a straight line across quiet days as if money came in.
       const byDay: Record<string, number> = {};
-      for (const t of txns ?? []) {
+      for (const t of txns) {
         const day = toISTDateStr(t.created_at);
         byDay[day] = (byDay[day] ?? 0) + Number(t.amount);
       }
-      const trend = Object.entries(byDay).sort(([a], [b]) => a.localeCompare(b)).map(([date, amount]) => ({ date, amount }));
+      const trend = buildDateBuckets(range.from, range.to, "day").map(b => ({ date: b.label, amount: byDay[b.label] ?? 0 }));
 
       // Branch breakdown (useful when allBranches = true)
       const byBranchMap: Record<string, number> = {};
-      for (const t of txns ?? []) {
+      for (const t of txns) {
         byBranchMap[t.branch_id] = (byBranchMap[t.branch_id] ?? 0) + Number(t.amount);
       }
       let branchRevenue: { name: string; amount: number }[] = [];
@@ -3186,15 +3225,9 @@ Deno.serve(async (req) => {
           .sort((a, b) => b.amount - a.amount);
       }
 
-      // Cashback payouts, locker deposit refunds, and unused Food Pass balances handed back
-      // to students aren't revenue transactions — net them out to show the real final figure.
-      const { data: payouts } = await db.from("payouts").select("payout_type, amount")
-        .in("branch_id", branchFilter)
-        .gte("created_at", istDayStart(range.from))
-        .lte("created_at", istDayEnd(range.to));
-      const payoutTotals = { cashback: 0, locker_deposit: 0, food_pass_refund: 0, membership_refund: 0 };
-      for (const p of payouts ?? []) {
-        payoutTotals[p.payout_type as keyof typeof payoutTotals] = (payoutTotals[p.payout_type as keyof typeof payoutTotals] ?? 0) + Number(p.amount);
+      const payoutTotals: Record<string, number> = { cashback: 0, locker_deposit: 0, food_pass_refund: 0, membership_refund: 0 };
+      for (const p of payouts) {
+        payoutTotals[p.payout_type] = (payoutTotals[p.payout_type] ?? 0) + Number(p.amount);
       }
       const totalPayouts = Object.values(payoutTotals).reduce((a, b) => a + b, 0);
       const netRevenue = total - totalPayouts;
@@ -3218,10 +3251,17 @@ Deno.serve(async (req) => {
         branchFilter = [bid];
       }
 
-      const { data: students } = await db.from("students").select("referral_source")
-        .in("branch_id", branchFilter).not("referral_source", "is", null);
+      // All-time (not tied to the Revenue page's period picker) — paged, since a plain select
+      // stopped counting at the 1000-row response cap once the student base grew past it.
+      const [students, { count: notRecorded, error: notRecordedErr }] = await Promise.all([
+        fetchAllRows<{ referral_source: string }>(() => db.from("students").select("referral_source")
+          .in("branch_id", branchFilter).not("referral_source", "is", null).order("id")),
+        db.from("students").select("id", { count: "exact", head: true })
+          .in("branch_id", branchFilter).is("referral_source", null),
+      ]);
+      if (notRecordedErr) return err(notRecordedErr.message, 500);
       const counts: Record<string, number> = {};
-      for (const s of students ?? []) {
+      for (const s of students) {
         const key = s.referral_source || "unknown";
         counts[key] = (counts[key] ?? 0) + 1;
       }
@@ -3230,7 +3270,7 @@ Deno.serve(async (req) => {
         .map(([source, count]) => ({ source, count, percent: total ? Math.round((count / total) * 1000) / 10 : 0 }))
         .sort((a, b) => b.count - a.count);
 
-      return json({ rows, total });
+      return json({ rows, total, notRecorded: notRecorded ?? 0 });
     }
 
     if (action === "list_transactions") {
@@ -3238,7 +3278,11 @@ Deno.serve(async (req) => {
       // Defaults to "today" to match get_revenue — the Revenue page drives both handlers from
       // one period toggle, so a different fallback here made the Overview and Transactions
       // tabs silently disagree about which window they were showing.
+      if ((dateFrom != null && !isISODate(dateFrom)) || (dateTo != null && !isISODate(dateTo))) {
+        return err("Invalid date — expected YYYY-MM-DD");
+      }
       const range = dateRange(period ?? "today", dateFrom, dateTo);
+      if (range.from > range.to) return err("Start date must be on or before the end date");
       // Owner "All branches (consolidated)" applies here exactly as it does in get_revenue;
       // without it the Transactions tab stayed pinned to one branch while the Overview totals
       // above it were consolidated, which read as the filter working only intermittently.
@@ -3259,64 +3303,98 @@ Deno.serve(async (req) => {
       const fromMs = new Date(fromTs).getTime();
       const toMs = new Date(toTs).getTime();
 
+      // Every payout type the Overview nets out of Net Revenue gets a row here too, so the
+      // ledger reconciles with the Surrendered-to-Students figure above it. Cashback payouts
+      // are the exception: they're already represented per-cashback by the "Cashback
+      // settled" rows below (one payouts row can cover several cashbacks), so listing the
+      // payouts row as well would show the same money twice.
+      const PAYOUT_FEED_LABELS: Record<string, string> = {
+        membership_refund: "Membership deleted — refund",
+        locker_deposit: "Locker deposit returned",
+        food_pass_refund: "Food Pass balance refunded",
+      };
+      const TXN_CATEGORIES = ["desk", "membership", "food", "locker", "overtime", "fine"];
+      const isPayoutCategory = !!category && Object.hasOwn(PAYOUT_FEED_LABELS, category);
+      if (category && category !== "cashback" && !isPayoutCategory && !TXN_CATEGORIES.includes(category)) {
+        return err("Unknown category");
+      }
       const wantCashbacks = !category || category === "cashback";
-      const wantMembershipRefunds = !category || category === "membership_refund";
-      const wantTxns = !category || (category !== "cashback" && category !== "membership_refund");
+      const payoutTypes = !category ? Object.keys(PAYOUT_FEED_LABELS) : isPayoutCategory ? [category] : [];
+      const wantTxns = !category || TXN_CATEGORIES.includes(category);
 
-      let q = db.from("transactions").select("*, students(name, phone), branches(name)")
-        .in("branch_id", branchFilter).gte("created_at", fromTs).lte("created_at", toTs)
-        .order("created_at", { ascending: false });
-      if (category && wantTxns) q = q.eq("category", category);
+      type Joined = { students?: { name?: string; phone?: string } | null; branches?: { name?: string } | null };
+      type TxnRow = Joined & { id: string; category: string; amount: number; payment_mode: string | null; notes: string | null; created_at: string };
+      type CbRow = Joined & { id: string; cashback_type: string; cashback_value: number; status: string; redeemed_amount: number | null; created_at: string; redeemed_at: string | null };
+      type PayoutRow = Joined & { id: string; payout_type: string; amount: number; notes: string | null; created_at: string };
 
-      const [{ data }, { data: cashbackRows }, { data: refundRows }] = await Promise.all([
-        wantTxns ? q : Promise.resolve({ data: [] as unknown[] }),
+      const [data, cashbackRows, payoutRows] = await Promise.all([
+        wantTxns
+          ? fetchAllRows<TxnRow>(() => {
+            let q = db.from("transactions").select("*, students(name, phone), branches(name)")
+              .in("branch_id", branchFilter).gte("created_at", fromTs).lte("created_at", toTs)
+              // Paged oldest-first so a payment recorded mid-fetch lands on the last page
+              // instead of shifting every later page by one; display order is the sort below.
+              .order("created_at").order("id");
+            if (category) q = q.eq("category", category);
+            return q;
+          })
+          : Promise.resolve([] as TxnRow[]),
         wantCashbacks
-          ? db.from("cashbacks").select("id, cashback_type, cashback_value, status, redeemed_amount, created_at, redeemed_at, students(name, phone), branches(name)")
+          ? fetchAllRows<CbRow>(() => db.from("cashbacks").select("id, cashback_type, cashback_value, status, redeemed_amount, created_at, redeemed_at, students(name, phone), branches(name)")
             .in("branch_id", branchFilter)
             .or(`and(created_at.gte.${fromTs},created_at.lte.${toTs}),and(redeemed_at.gte.${fromTs},redeemed_at.lte.${toTs})`)
-          : Promise.resolve({ data: [] as unknown[] }),
-        wantMembershipRefunds
-          ? db.from("payouts").select("id, amount, created_at, students(name, phone), branches(name)")
-            .in("branch_id", branchFilter).eq("payout_type", "membership_refund")
+            .order("created_at").order("id"))
+          : Promise.resolve([] as CbRow[]),
+        payoutTypes.length
+          ? fetchAllRows<PayoutRow>(() => db.from("payouts").select("id, payout_type, amount, notes, created_at, students(name, phone), branches(name)")
+            .in("branch_id", branchFilter).in("payout_type", payoutTypes)
             .gte("created_at", fromTs).lte("created_at", toTs)
-          : Promise.resolve({ data: [] as unknown[] }),
+            .order("created_at").order("id"))
+          : Promise.resolve([] as PayoutRow[]),
       ]);
 
       // Shaped to match a normal transaction row (category/amount/payment_mode/created_at,
       // same students/branches joins) so the existing table/CSV export doesn't need two
       // different row shapes — "category" is a readable label since these aren't real rows
-      // in the transactions table with a fixed category value to translate.
-      type CbRow = { id: string; cashback_type: string; cashback_value: number; status: string; redeemed_amount: number | null; created_at: string; redeemed_at: string | null; students?: unknown; branches?: unknown };
+      // in the transactions table with a fixed category value to translate. entry_type tells
+      // money in ("income", every real transaction) from money handed back ("payout", shown
+      // negative) and bookkeeping-only events ("info": a cashback being granted, or applied
+      // as a discount whose net effect is already inside the renewal's own transaction).
       const cashbackFeed: Record<string, unknown>[] = [];
-      for (const c of (cashbackRows as CbRow[] ?? [])) {
+      for (const c of cashbackRows) {
         const valueLabel = c.cashback_type === "percent" ? `${c.cashback_value}%` : `₹${Number(c.cashback_value)}`;
         if (new Date(c.created_at).getTime() >= fromMs && new Date(c.created_at).getTime() <= toMs) {
           cashbackFeed.push({
-            id: `cashback-grant-${c.id}`, category: `Cashback granted (${valueLabel})`,
+            id: `cashback-grant-${c.id}`, category: `Cashback granted (${valueLabel})`, entry_type: "info",
             amount: c.cashback_type === "fixed" ? Number(c.cashback_value) : null,
-            payment_mode: null, created_at: c.created_at, students: c.students, branches: c.branches,
+            payment_mode: null, notes: null, created_at: c.created_at, students: c.students, branches: c.branches,
           });
         }
         if (c.redeemed_at && c.status !== "pending" && new Date(c.redeemed_at).getTime() >= fromMs && new Date(c.redeemed_at).getTime() <= toMs) {
+          // "settled" = paid out in cash (it has a matching payouts row netted from revenue);
+          // "redeemed" = taken off a renewal fee, so no separate money moved.
+          const paidOut = c.status === "settled";
+          const amount = c.redeemed_amount != null ? Number(c.redeemed_amount) : null;
           cashbackFeed.push({
-            id: `cashback-${c.status}-${c.id}`, category: `Cashback ${c.status}`,
-            amount: c.redeemed_amount != null ? Number(c.redeemed_amount) : null,
-            payment_mode: null, created_at: c.redeemed_at, students: c.students, branches: c.branches,
+            id: `cashback-${c.status}-${c.id}`, category: `Cashback ${c.status}`, entry_type: paidOut ? "payout" : "info",
+            amount: amount != null && paidOut ? -amount : amount,
+            payment_mode: null, notes: null, created_at: c.redeemed_at, students: c.students, branches: c.branches,
           });
         }
       }
 
-      type RefundRow = { id: string; amount: number; created_at: string; students?: unknown; branches?: unknown };
-      const refundFeed = (refundRows as RefundRow[] ?? []).map(r => ({
-        id: `membership-refund-${r.id}`, category: "Membership deleted — refund",
-        amount: -Number(r.amount), payment_mode: null, created_at: r.created_at,
+      const payoutFeed = payoutRows.map(r => ({
+        id: `payout-${r.payout_type}-${r.id}`, category: PAYOUT_FEED_LABELS[r.payout_type] ?? r.payout_type, entry_type: "payout",
+        amount: -Number(r.amount), payment_mode: null, notes: r.notes, created_at: r.created_at,
         students: r.students, branches: r.branches,
       }));
 
-      let rows = [...(data ?? []), ...cashbackFeed, ...refundFeed].sort((a: { created_at: string }, b: { created_at: string }) => b.created_at.localeCompare(a.created_at));
+      let rows: (Joined & { created_at: string })[] = [
+        ...data.map(t => ({ ...t, entry_type: "income" })), ...cashbackFeed as (Joined & { created_at: string })[], ...payoutFeed,
+      ].sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime());
       if (search) {
-        const s = search.toLowerCase();
-        rows = rows.filter((r: { students?: { name?: string; phone?: string } }) => r.students?.name?.toLowerCase().includes(s) || r.students?.phone?.includes(s));
+        const s = String(search).trim().toLowerCase();
+        if (s) rows = rows.filter(r => r.students?.name?.toLowerCase().includes(s) || r.students?.phone?.includes(s));
       }
       return json({ transactions: rows });
     }
