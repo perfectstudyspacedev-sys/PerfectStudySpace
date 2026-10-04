@@ -541,6 +541,28 @@ input[type="week"]::-webkit-calendar-picker-indicator {
   max-width: 400px;
 }
 
+/* New Registration: form on the left, Pending sign-ups (and the owner's WhatsApp message box)
+   on the right. The form spans both rows so the right-hand boxes stack under each other. */
+.registration-layout {
+  display: grid;
+  gap: 1rem;
+  align-items: start;
+  grid-template-columns: minmax(320px, 560px) minmax(0, 1fr);
+  grid-template-rows: auto 1fr;
+  grid-template-areas: "form signups" "form extra";
+}
+.registration-form { grid-area: form; min-width: 0; }
+.registration-signups { grid-area: signups; min-width: 0; }
+.registration-extra { grid-area: extra; min-width: 0; }
+@media (max-width: 900px) {
+  /* One column; staff see who is waiting before the form. */
+  .registration-layout {
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: none;
+    grid-template-areas: "signups" "form" "extra";
+  }
+}
+
 /* Public self sign-up page (/join/<code>) — mostly opened on phones, so a smaller header. */
 .join-page { justify-content: flex-start; padding-top: 1.5rem; }
 .join-page .join-logo { height: 88px; width: 88px; }
