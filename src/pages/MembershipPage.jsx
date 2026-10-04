@@ -2,7 +2,7 @@ import { useState, useEffect, useCallback } from 'react'
 import { useNavigate, Link } from 'react-router-dom'
 import { useAuth } from '../context/AuthContext'
 import { api } from '../lib/api'
-import { formatCurrency, formatDate, getMultiMonthDiscount, todayISO, shiftDate, openWhatsApp, DEFAULT_WELCOME_TEMPLATE, REFERRAL_OPTIONS } from '../lib/utils'
+import { formatCurrency, formatDate, getMultiMonthDiscount, pendingCashbackTotal, todayISO, shiftDate, openWhatsApp, DEFAULT_WELCOME_TEMPLATE, REFERRAL_OPTIONS } from '../lib/utils'
 import PaymentModeSelector, { isSplitValid } from '../components/PaymentModeSelector'
 import { DEV_MODE } from '../lib/devMode'
 
@@ -180,7 +180,11 @@ function ActiveMembersTab({ branchId, tempPackages, permPackages }) {
 
   const openRenewModal = (m) => {
     const wasCustomPlan = m.hours_per_day_weekend != null
-    setRenewModal({ membershipId: m.membership_id, studentName: m.student_name, pendingCashback: m.pending_cashback })
+    setRenewModal({
+      membershipId: m.membership_id, studentName: m.student_name,
+      pendingCashbacks: m.pending_cashbacks ?? (m.pending_cashback ? [m.pending_cashback] : []),
+      overtimeDue: Number(m.unbilled_overtime_due) || 0,
+    })
     setRenewCategory(m.category)
     setRenewHoursPerDay(wasCustomPlan ? 'custom' : m.hours_per_day)
     setRenewCustomAmount(wasCustomPlan ? String(m.monthly_fee) : '')
@@ -248,6 +252,9 @@ function ActiveMembersTab({ branchId, tempPackages, permPackages }) {
     if (renewIsCustomDays && !(Number(renewCustomDays) > 0)) return setRenewError('Enter a valid number of days')
     if (renewIsCustomDays && !(Number(renewCustomDaysAmount) > 0)) return setRenewError('Enter a valid amount collected')
     const renewAmountNow = renewPayType === 'partial' ? renewAdvanceNum : renewPayType === 'pending' ? 0 : renewTotal
+    // An empty Partial advance used to be sent as null — which renew_membership treats as a
+    // Full payment, recording the whole fee as collected.
+    if (renewPayType === 'partial' && !(renewAdvanceNum > 0)) return setRenewError('Enter the advance amount being paid now, or choose Pay Later')
     if (renewAmountNow > 0 && !isSplitValid(renewPayMode, renewAmountNow)) return setRenewError('Cash + UPI must add up to the amount paid now')
     setActionLoading(renewModal.membershipId + ':renew')
     setRenewError('')
@@ -259,7 +266,7 @@ function ActiveMembersTab({ branchId, tempPackages, permPackages }) {
         monthsPaid: renewIsCustomDays ? undefined : renewMonths,
         paymentMode: renewPayMode.mode,
         cashAmount: renewPayMode.cashAmount, upiAmount: renewPayMode.upiAmount,
-        advanceAmount: renewPayType === 'partial' ? (Number(renewAdvance) || null) : renewPayType === 'pending' ? 0 : null,
+        advanceAmount: renewPayType === 'partial' ? renewAdvanceNum : renewPayType === 'pending' ? 0 : null,
         // Explicit true/false, not `|| undefined` — the backend falls back to the expiring
         // membership's own custom-ness when this is omitted (so an old caller that never
         // sent it still works), but that means collapsing false into undefined here would
@@ -271,6 +278,7 @@ function ActiveMembersTab({ branchId, tempPackages, permPackages }) {
         customDays: renewIsCustomDays ? Number(renewCustomDays) : undefined,
         customDaysAmount: renewIsCustomDays ? Number(renewCustomDaysAmount) : undefined,
         startDate: renewStartDate || undefined,
+        expectedTotal: renewTotal,
       })
       setRenewModal(null)
       if (res.cashbackApplied || res.overtimeCharged) {
@@ -318,16 +326,11 @@ function ActiveMembersTab({ branchId, tempPackages, permPackages }) {
   const renewDiscount = renewIsCustomDays ? 0 : getMultiMonthDiscount(renewMonths)
   const renewGross = renewIsCustomDays ? (Number(renewCustomDaysAmount) || 0) : renewMonthlyFee * renewMonths
   const renewBeforeCashback = renewGross * (1 - renewDiscount / 100)
-  const renewPendingCashback = renewModal?.pendingCashback ?? null
-  const renewCashbackAmount = renewPendingCashback
-    ? Math.min(
-        renewPendingCashback.cashback_type === 'percent'
-          ? renewBeforeCashback * (Number(renewPendingCashback.cashback_value) / 100)
-          : Number(renewPendingCashback.cashback_value),
-        renewBeforeCashback,
-      )
-    : 0
-  const renewTotal = renewBeforeCashback - renewCashbackAmount
+  // Same total renew_membership charges: every pending cashback off, unbilled Pay Later
+  // overtime on. A Full payment is recorded at the backend's figure, so this must match it.
+  const renewCashbackAmount = pendingCashbackTotal(renewModal?.pendingCashbacks, renewBeforeCashback)
+  const renewOvertimeDue = renewModal?.overtimeDue ?? 0
+  const renewTotal = renewBeforeCashback - renewCashbackAmount + renewOvertimeDue
   const renewAdvanceNum = Number(renewAdvance) || 0
   const renewRemaining = renewPayType === 'partial' ? Math.max(renewTotal - renewAdvanceNum, 0) : 0
 
@@ -610,11 +613,14 @@ function ActiveMembersTab({ branchId, tempPackages, permPackages }) {
             )}
 
             <div className="card" style={{ marginBottom: '1rem', background: 'rgba(255,215,0,0.05)' }}>
+              {(renewCashbackAmount > 0 || renewOvertimeDue > 0) && (
+                <p className="mono" style={{ color: 'var(--text-muted)' }}>Renewal: {formatCurrency(renewBeforeCashback)}</p>
+              )}
               {renewCashbackAmount > 0 && (
-                <>
-                  <p className="mono" style={{ color: 'var(--text-muted)' }}>Before cashback: {formatCurrency(renewBeforeCashback)}</p>
-                  <p className="mono" style={{ color: '#4ade80' }}>🎁 Cashback applied: -{formatCurrency(renewCashbackAmount)}</p>
-                </>
+                <p className="mono" style={{ color: '#4ade80' }}>🎁 Cashback applied: -{formatCurrency(renewCashbackAmount)}</p>
+              )}
+              {renewOvertimeDue > 0 && (
+                <p className="mono" style={{ color: '#ff8888' }}>⏱ Unbilled overtime: +{formatCurrency(renewOvertimeDue)}</p>
               )}
               <p className="mono">Total: {formatCurrency(renewTotal)}</p>
               {renewPayType === 'pending' && (
@@ -1036,7 +1042,9 @@ function NewMembershipForm({ branchId, onCreated, tempPackages, permPackages }) 
       // The backend skips the locker (and its ₹200) if the number was taken moments before
       // submit — the receipt must not show money that was never charged.
       const receiptTotal = withLocker && result.lockerWarning ? grandTotal - lockerExtra : grandTotal
-      const receiptPaid = paymentType === 'full' ? receiptTotal : amountPaid
+      // (Any part of a partial advance that was meant for that locker is handed back — the
+      // warning says how much — so it can't count as paid toward the smaller total either.)
+      const receiptPaid = paymentType === 'full' ? receiptTotal : Math.min(amountPaid, receiptTotal)
       setReceipt({ ...result, name, phone, total: receiptTotal, amountPaid: receiptPaid, amountRemaining: Math.max(receiptTotal - receiptPaid, 0) })
       openWhatsApp(phone, (waTemplate || DEFAULT_WELCOME_TEMPLATE).replace(/\{name\}/gi, name))
       setWaSent(true)

@@ -146,6 +146,17 @@ export function exportToCSV(filename, headers, rows) {
   URL.revokeObjectURL(a.href)
 }
 
+// What renew_membership will take off for pending cashbacks — mirrors the backend's
+// settlePendingCashbacks: EVERY pending cashback applies (percent ones against `base`),
+// and the sum is capped at `base`. Renewal forms must show exactly this, since a Full
+// payment is recorded at the backend's total.
+export function pendingCashbackTotal(cashbacks, base) {
+  const raw = (cashbacks ?? []).reduce((sum, c) => sum + (c.cashback_type === 'percent'
+    ? base * (Number(c.cashback_value) / 100)
+    : Number(c.cashback_value)), 0)
+  return Math.min(raw, base)
+}
+
 export function getMultiMonthDiscount(months) {
   if (months >= 6) return 15
   if (months >= 3) return 10

@@ -483,22 +483,83 @@ function storedPaymentMode(paymentMode?: string | null): string {
   return paymentMode === "split" ? "other" : (paymentMode ?? "cash");
 }
 
+// Every write to the revenue ledger (transactions = money in, payouts = money handed back)
+// goes through these two. supabase-js reports a failed insert in its return value rather
+// than throwing, and the call sites used to ignore it — so a rejected row (a category or
+// payment mode the enum doesn't have, a dropped connection) vanished from Revenue with no
+// trace while the rest of the action reported success. Failing loudly lets staff see the
+// payment wasn't saved instead of the books silently coming up short.
+async function recordTransaction(db: ReturnType<typeof adminClient>, row: Record<string, unknown>) {
+  const { error } = await db.from("transactions").insert(row);
+  if (error) {
+    console.error("transactions insert failed:", error.message, JSON.stringify(row));
+    throw new Error(`The ₹${row.amount} ${row.category} payment could not be saved to the ledger (${error.message}). Note it down and add it from the student's Payment History.`);
+  }
+}
+
+async function recordPayout(db: ReturnType<typeof adminClient>, row: Record<string, unknown>) {
+  const { error } = await db.from("payouts").insert(row);
+  if (error) {
+    console.error("payouts insert failed:", error.message, JSON.stringify(row));
+    throw new Error(`The ₹${row.amount} refund (${row.payout_type}) could not be saved to the ledger (${error.message}). Note it down and report it.`);
+  }
+}
+
+// Income side of a membership close/delete settlement. Everything the student owed is
+// settled at that moment — the positive net (if any) in cash/UPI, and the rest by netting it
+// against the credits owed back to them (deposit, Food Pass balance, cashback, unused-days
+// refund) — while each of those credits is logged in full as its own payout. Recording only
+// the net as income took the credits off Net Revenue twice (once inside the net, then again
+// as payouts) and, when the net favoured the student, dropped the dues they settled from
+// revenue altogether. The netted part goes in as payment mode "other", since no cash or UPI
+// moved for it, so the payment-channel split still matches what reached the drawer.
+async function recordSettlementIncome(
+  db: ReturnType<typeof adminClient>,
+  base: { student_id: string; branch_id: string; membership_id: string; created_by_staff_id: string },
+  s: { totalOwed: number; netAmount: number; membershipDue: number; overstayCharge: number; overstayDays: number; lockerDue: number; foodPassOwed: number; overtimeDue: number },
+  paymentMode: string | undefined, label: string,
+) {
+  const owedParts = [
+    s.membershipDue > 0 && `membership due ₹${s.membershipDue}`,
+    s.overstayCharge > 0 && `₹${s.overstayCharge} for ${s.overstayDays} day(s) used after expiry`,
+    s.lockerDue > 0 && `locker rent ₹${s.lockerDue}`,
+    s.foodPassOwed > 0 && `Food Pass deficit ₹${s.foodPassOwed}`,
+    s.overtimeDue > 0 && `overtime ₹${s.overtimeDue}`,
+  ].filter(Boolean).join(", ");
+  const collectedNow = Math.max(s.netAmount, 0);
+  const settledByOffset = Math.round((s.totalOwed - collectedNow) * 100) / 100;
+  if (collectedNow > 0) {
+    await recordTransaction(db, {
+      ...base, category: "membership", amount: collectedNow, payment_mode: paymentMode ?? "cash",
+      notes: `Final settlement at ${label}${owedParts ? ` (${owedParts})` : ""}`,
+    });
+  }
+  if (settledByOffset > 0) {
+    await recordTransaction(db, {
+      ...base, category: "membership", amount: settledByOffset, payment_mode: "other",
+      notes: `Dues settled against refunds owed to the student at ${label} — no cash changed hands${owedParts ? ` (${owedParts})` : ""}`,
+    });
+  }
+}
+
 async function insertPaymentTransactions(
   db: ReturnType<typeof adminClient>,
   base: Record<string, unknown>,
   paymentMode: string | undefined, amount: number,
   cashAmount?: number | string, upiAmount?: number | string,
 ) {
+  // Nothing collected (Pay Later, a zero advance) — no ₹0 rows in the ledger.
+  if (!(Number(amount) > 0)) return;
   if (paymentMode === "split") {
     const cash = Math.round((Number(cashAmount) || 0) * 100) / 100;
     const upi = Math.round((Number(upiAmount) || 0) * 100) / 100;
     if (Math.round((cash + upi) * 100) !== Math.round(Number(amount) * 100)) {
       throw new Error("Cash + UPI amounts must add up to the total");
     }
-    if (cash > 0) await db.from("transactions").insert({ ...base, amount: cash, payment_mode: "cash" });
-    if (upi > 0) await db.from("transactions").insert({ ...base, amount: upi, payment_mode: "upi" });
+    if (cash > 0) await recordTransaction(db, { ...base, amount: cash, payment_mode: "cash" });
+    if (upi > 0) await recordTransaction(db, { ...base, amount: upi, payment_mode: "upi" });
   } else {
-    await db.from("transactions").insert({ ...base, amount, payment_mode: paymentMode ?? "cash" });
+    await recordTransaction(db, { ...base, amount, payment_mode: paymentMode ?? "cash" });
   }
 }
 
@@ -1248,25 +1309,38 @@ Deno.serve(async (req) => {
       const startDate = customStartDate ? customStartDate : todayISO();
       if (startDate > todayISO()) return err("Start date cannot be in the future");
 
-      // What's collected right now, and the locker's ₹200 share of it. Full payment takes
-      // membership + locker together in one cash/UPI split (that's what the form totals up),
-      // so the locker's share is carved out of the split here. Recording the membership alone
-      // against the whole split never added up — it threw after the membership and cabin were
-      // already saved, leaving a half-registered student with no payment recorded.
-      const membershipPaidNow = advanceAmount != null ? Number(advanceAmount) : totalPaid;
-      const lockerInSplit = withLocker && advanceAmount == null ? 200 : 0;
+      // What's collected right now, split between the membership and the locker's ₹200
+      // (₹100 deposit + ₹100 first month). The form totals membership + locker together, and
+      // Full/Partial/Pay Later apply to that grand total — so an advance pays the membership
+      // first and only what's left over goes to the locker; whatever the locker is still owed
+      // becomes the locker's own fee_due, same as add_locker's Pay Later. Previously an
+      // advance was credited entirely to the membership and the locker's ₹200 was always
+      // recorded as collected, so a Pay Later registration with a locker put ₹200 into
+      // Revenue that nobody paid, and the student's dues came out ₹200 short.
+      const LOCKER_SIGNUP_TOTAL = 200;
+      const grandTotal = totalPaid + (withLocker ? LOCKER_SIGNUP_TOTAL : 0);
+      let paidNow = grandTotal;
+      if (advanceAmount != null) {
+        paidNow = Number(advanceAmount);
+        if (!(paidNow >= 0)) return err("Enter a valid advance amount");
+        if (Math.round(paidNow * 100) > Math.round(grandTotal * 100)) {
+          return err(`The advance (₹${paidNow}) is more than the total of ₹${grandTotal} — choose Full payment instead.`);
+        }
+      }
+      const membershipPaidNow = Math.min(paidNow, totalPaid);
+      const lockerPaidNow = withLocker ? Math.round((paidNow - membershipPaidNow) * 100) / 100 : 0;
       let lockerCash = 0;
       let lockerUpi = 0;
       let membershipCash: number | string | undefined = cashAmount;
       let membershipUpi: number | string | undefined = upiAmount;
-      if (paymentMode === "split") {
+      if (paymentMode === "split" && paidNow > 0) {
         const cash = Math.round((Number(cashAmount) || 0) * 100) / 100;
         const upi = Math.round((Number(upiAmount) || 0) * 100) / 100;
-        if (Math.round((cash + upi) * 100) !== Math.round((membershipPaidNow + lockerInSplit) * 100)) {
+        if (Math.round((cash + upi) * 100) !== Math.round(paidNow * 100)) {
           return err("Cash + UPI amounts must add up to the total");
         }
-        lockerCash = Math.min(lockerInSplit, cash);
-        lockerUpi = lockerInSplit - lockerCash;
+        lockerCash = Math.min(lockerPaidNow, cash);
+        lockerUpi = Math.round((lockerPaidNow - lockerCash) * 100) / 100;
         membershipCash = Math.round((cash - lockerCash) * 100) / 100;
         membershipUpi = Math.round((upi - lockerUpi) * 100) / 100;
       }
@@ -1306,8 +1380,8 @@ Deno.serve(async (req) => {
         timings: timings ?? '', start_date: startDate, end_date: endDate,
         due_date: dueDate, months_paid: months, discount_percent: discount,
         monthly_fee: monthlyFee,
-        total_paid: advanceAmount != null ? Number(advanceAmount) : totalPaid,
-        fee_due: advanceAmount != null ? Math.max(totalPaid - Number(advanceAmount), 0) : 0,
+        total_paid: membershipPaidNow,
+        fee_due: Math.max(Math.round((totalPaid - membershipPaidNow) * 100) / 100, 0),
         payment_mode: storedPaymentMode(paymentMode), created_by_staff_id: staff.id,
       }).select("id").single();
       if (mErr) return err(mErr.message);
@@ -1319,28 +1393,31 @@ Deno.serve(async (req) => {
 
       // Availability was checked before anything was written; this only fails if another
       // registration took the same number in the moments since. The membership and its
-      // payment are real and stay — the locker just isn't assigned, and its ₹200 isn't
-      // recorded, instead of charging for a locker that was never created.
+      // payment are real and stay — the locker just isn't assigned, and nothing is recorded
+      // for it, instead of charging for a locker that was never created.
       let lockerWarning: string | null = null;
       if (withLocker) {
         const lockerDue = addMonths(startDate, 1);
         const { error: lockerErr } = await db.from("lockers").insert({
           branch_id: branchId, student_id: studentId, locker_no: lockerNo,
           locker_due_date: lockerDue, deposit_amount: 100, monthly_fee: 100,
+          amount_paid: lockerPaidNow,
+          fee_due: Math.round((LOCKER_SIGNUP_TOTAL - lockerPaidNow) * 100) / 100,
         });
         const lockerTxnBase = {
           student_id: studentId, branch_id: branchId, category: "locker",
           notes: "Locker rent + deposit", created_by_staff_id: staff.id,
         };
         if (lockerErr) {
-          lockerWarning = `Locker ${lockerNo} was taken by another registration a moment ago — no locker was assigned and its ₹200 was not charged. Add one from the student's profile.`;
-        } else if (paymentMode === "split" && lockerInSplit > 0) {
-          if (lockerCash > 0) await db.from("transactions").insert({ ...lockerTxnBase, amount: lockerCash, payment_mode: "cash" });
-          if (lockerUpi > 0) await db.from("transactions").insert({ ...lockerTxnBase, amount: lockerUpi, payment_mode: "upi" });
-        } else {
-          await db.from("transactions").insert({
-            ...lockerTxnBase, amount: 200,
-            payment_mode: storedPaymentMode(paymentMode) === "other" ? "cash" : storedPaymentMode(paymentMode),
+          lockerWarning = lockerPaidNow > 0
+            ? `Locker ${lockerNo} was taken by another registration a moment ago — no locker was assigned. Hand back the ₹${lockerPaidNow} collected for it, then add a locker from the student's profile.`
+            : `Locker ${lockerNo} was taken by another registration a moment ago — no locker was assigned and nothing was charged for it. Add one from the student's profile.`;
+        } else if (paymentMode === "split") {
+          if (lockerCash > 0) await recordTransaction(db, { ...lockerTxnBase, amount: lockerCash, payment_mode: "cash" });
+          if (lockerUpi > 0) await recordTransaction(db, { ...lockerTxnBase, amount: lockerUpi, payment_mode: "upi" });
+        } else if (lockerPaidNow > 0) {
+          await recordTransaction(db, {
+            ...lockerTxnBase, amount: lockerPaidNow, payment_mode: paymentMode ?? "cash",
           });
         }
       }
@@ -1510,7 +1587,7 @@ Deno.serve(async (req) => {
         }, paymentMode, netAmount, cashAmount, upiAmount);
       } else if (netAmount < 0) {
         // Deposit refund exceeds any owed rent — the branch owes the student the difference.
-        await db.from("payouts").insert({
+        await recordPayout(db, {
           student_id: locker.student_id, branch_id: locker.branch_id, payout_type: "locker_deposit",
           amount: -netAmount, notes: "Locker caution deposit returned — locker removed",
           created_by_staff_id: staff.id,
@@ -1788,7 +1865,7 @@ Deno.serve(async (req) => {
               await db.from("transactions").delete().eq("id", existingTxn.id);
             }
           } else if (overtimeCharge > 0) {
-            await db.from("transactions").insert({
+            await recordTransaction(db, {
               student_id: booking.student_id, branch_id: booking.branch_id,
               booking_id: bookingId, category: "overtime", amount: overtimeCharge,
               payment_mode: booking.payment_mode ?? "cash",
@@ -2124,7 +2201,7 @@ Deno.serve(async (req) => {
           }
         }
         if (foodPassShortfall > 0) {
-          await db.from("transactions").insert({
+          await recordTransaction(db, {
             student_id: booking.student_id, branch_id: booking.branch_id,
             category: "food", amount: foodPassShortfall, payment_mode: foodPassPaymentMode,
             notes: "Food Pass shortfall collected at checkout", created_by_staff_id: staff.id,
@@ -2143,7 +2220,7 @@ Deno.serve(async (req) => {
           const settleMode = overtimePaymentMode ?? booking.payment_mode ?? "cash";
           for (const bill of unpaidBills) {
             await db.from("food_bills").update({ paid: true, payment_mode: settleMode }).eq("id", bill.id);
-            await db.from("transactions").insert({
+            await recordTransaction(db, {
               student_id: booking.student_id, branch_id: booking.branch_id,
               food_bill_id: bill.id, category: "food", amount: bill.total,
               payment_mode: settleMode, created_by_staff_id: staff.id,
@@ -2174,7 +2251,7 @@ Deno.serve(async (req) => {
             });
           }
           if (overtimeCharge > 0) {
-            await db.from("transactions").insert({
+            await recordTransaction(db, {
               student_id: booking.student_id, branch_id: booking.branch_id,
               booking_id: bookingId, category: "overtime",
               amount: overtimeCharge,
@@ -2206,7 +2283,7 @@ Deno.serve(async (req) => {
               billed_at: payNow ? new Date().toISOString() : null,
             });
             if (payNow && overtimeCharge > 0) {
-              await db.from("transactions").insert({
+              await recordTransaction(db, {
                 student_id: booking.student_id, branch_id: booking.branch_id,
                 booking_id: bookingId, category: "overtime",
                 amount: overtimeCharge, payment_mode: overtimePaymentMode ?? "cash",
@@ -2435,7 +2512,7 @@ Deno.serve(async (req) => {
           .eq("id", transferLocker.id);
 
         if (lockerDepositRefunded > 0) {
-          await db.from("payouts").insert({
+          await recordPayout(db, {
             student_id: studentId, branch_id: transferLocker.branch_id, payout_type: "locker_deposit",
             amount: lockerDepositRefunded, notes: "Locker caution deposit returned — student transferred branch",
             created_by_staff_id: staff.id,
@@ -2682,7 +2759,7 @@ Deno.serve(async (req) => {
           status: "settled", redeemed_amount: c.amount, redeemed_at: new Date().toISOString(),
         }).eq("id", c.id);
       }
-      await db.from("payouts").insert({
+      await recordPayout(db, {
         student_id: studentId, branch_id: mem.branch_id, payout_type: "cashback",
         amount: cashbackAmount, notes: "Cashback redeemed immediately as cash, outside a renewal/closure",
         created_by_staff_id: staff.id,
@@ -2895,7 +2972,7 @@ Deno.serve(async (req) => {
         await db.from("food_passes").insert({ student_id: studentId, branch_id: branchId, balance: newBalance });
       }
       // Real revenue collected now — record it (topups are the only Food Pass event that's actual new money).
-      await db.from("transactions").insert({
+      await recordTransaction(db, {
         student_id: studentId, branch_id: branchId, category: "food",
         amount: amt, payment_mode: paymentMode ?? "cash", notes: "Food Pass top-up",
         created_by_staff_id: staff.id,
@@ -2916,7 +2993,7 @@ Deno.serve(async (req) => {
       if (!requireBranch(staff, bill.branch_id)) return err("Branch access denied", 403);
       if (bill.paid) return err("This bill is already settled");
       await db.from("food_bills").update({ paid: true, payment_mode: paymentMode ?? "cash" }).eq("id", billId);
-      await db.from("transactions").insert({
+      await recordTransaction(db, {
         student_id: bill.student_id, branch_id: bill.branch_id, food_bill_id: bill.id,
         category: "food", amount: bill.total, payment_mode: paymentMode ?? "cash",
         notes: "Food Pass shortfall collected at order time", created_by_staff_id: staff.id,
@@ -3026,7 +3103,7 @@ Deno.serve(async (req) => {
       }
 
       if (isPaid && !payFromPass) {
-        await db.from("transactions").insert({
+        await recordTransaction(db, {
           student_id: studentId, branch_id: branchId, food_bill_id: bill!.id,
           category: "food", amount: total, payment_mode: paymentMode,
           created_by_staff_id: staff.id,
@@ -4146,6 +4223,20 @@ Deno.serve(async (req) => {
         ? await db.from("cashbacks").select("student_id, cashback_type, cashback_value").in("student_id", studentIds).eq("status", "pending")
         : { data: [] };
       const cashbackByStudent = new Map((pendingCashbacks ?? []).map((c: { student_id: string; cashback_type: string; cashback_value: number }) => [c.student_id, c]));
+      // The renewal dialog has to show the same total renew_membership will charge, which
+      // applies EVERY pending cashback (not just one) and adds any unbilled Pay Later overtime.
+      const allCashbacksByStudent = new Map<string, { cashback_type: string; cashback_value: number }[]>();
+      for (const c of (pendingCashbacks ?? []) as { student_id: string; cashback_type: string; cashback_value: number }[]) {
+        allCashbacksByStudent.set(c.student_id, [...(allCashbacksByStudent.get(c.student_id) ?? []), { cashback_type: c.cashback_type, cashback_value: c.cashback_value }]);
+      }
+      const unbilledOvertimeRows = studentIds.length
+        ? await fetchAllRows<{ student_id: string; billed_amount: number | null }>(() => db.from("overtime_sessions").select("student_id, billed_amount")
+          .in("student_id", studentIds).is("billed_at", null).eq("excluded", false).order("id"))
+        : [];
+      const overtimeDueByStudent = new Map<string, number>();
+      for (const o of unbilledOvertimeRows) {
+        overtimeDueByStudent.set(o.student_id, (overtimeDueByStudent.get(o.student_id) ?? 0) + Number(o.billed_amount ?? 0));
+      }
 
       const members = (data as MemRow[] ?? []).map(m => ({
         membership_id: m.id,
@@ -4166,6 +4257,8 @@ Deno.serve(async (req) => {
         fee_due: m.fee_due,
         total_paid: m.total_paid,
         pending_cashback: m.students?.id ? (cashbackByStudent.get(m.students.id) ?? null) : null,
+        pending_cashbacks: m.students?.id ? (allCashbacksByStudent.get(m.students.id) ?? []) : [],
+        unbilled_overtime_due: m.students?.id ? (overtimeDueByStudent.get(m.students.id) ?? 0) : 0,
       }));
 
       // Remind staff to collect renewal during the student's final week of validity —
@@ -4349,7 +4442,7 @@ Deno.serve(async (req) => {
       const {
         membershipId, monthsPaid, paymentMode, cashAmount, upiAmount, advanceAmount, category, hoursPerDay,
         isCustomPlan, customAmount, weekendHours,
-        isCustomDays, customDays, customDaysAmount, startDate: customStartDate,
+        isCustomDays, customDays, customDaysAmount, startDate: customStartDate, expectedTotal,
       } = payload;
       const { data: mem } = await db.from("memberships").select("*").eq("id", membershipId).single();
       if (!mem) return err("Membership not found");
@@ -4424,6 +4517,27 @@ Deno.serve(async (req) => {
       const overtimeDue = (unbilledOvertime ?? []).reduce((s: number, o: { billed_amount: number | null }) => s + Number(o.billed_amount ?? 0), 0);
 
       const totalFee = totalBeforeCashback - cashbackAmount + overtimeDue;
+
+      // Full payment records totalFee as collected, so it has to be the amount the renewal
+      // form showed staff. The forms used to leave out unbilled overtime and count only one
+      // of several pending cashbacks, so the ledger could claim money nobody was asked for
+      // (or a split payment was rejected as not adding up). expectedTotal is what the form
+      // displayed; a mismatch means its data was stale, so stop before anything is written.
+      if (advanceAmount == null && expectedTotal != null && Math.abs(Number(expectedTotal) - totalFee) > 0.5) {
+        const parts = [
+          `₹${Math.round(totalBeforeCashback * 100) / 100} renewal`,
+          cashbackAmount > 0 && `− ₹${Math.round(cashbackAmount * 100) / 100} cashback`,
+          overtimeDue > 0 && `+ ₹${overtimeDue} unbilled overtime`,
+        ].filter(Boolean).join(" ");
+        return err(`The amount due is ₹${Math.round(totalFee * 100) / 100} (${parts}), but the form showed ₹${expectedTotal}. Close the form, refresh, and renew again.`);
+      }
+      if (advanceAmount != null) {
+        const adv = Number(advanceAmount);
+        if (!(adv >= 0)) return err("Enter a valid advance amount");
+        if (Math.round(adv * 100) > Math.round(totalFee * 100)) {
+          return err(`The advance (₹${adv}) is more than the ₹${Math.round(totalFee * 100) / 100} due — choose Full payment instead.`);
+        }
+      }
 
       const feePaid = advanceAmount != null ? Number(advanceAmount) : totalFee;
       const feeDue = Math.max(totalFee - feePaid, 0);
@@ -4517,9 +4631,16 @@ Deno.serve(async (req) => {
         await db.from("desks").update({ status: "free", seat_type: "floating", assigned_student_id: null }).eq("id", mem.desk_id);
       }
 
+      // Unbilled member overtime is settled inside this payment rather than as its own
+      // "overtime" row (a partial advance can't be split between the two meaningfully), so
+      // the note carries the breakdown for anyone reading the ledger.
+      const renewalNoteParts = [
+        cashbackAmount > 0 && `₹${Math.round(cashbackAmount * 100) / 100} cashback applied`,
+        overtimeDue > 0 && `includes ₹${overtimeDue} overtime`,
+      ].filter(Boolean).join(", ");
       await insertPaymentTransactions(db, {
         student_id: mem.student_id, branch_id: mem.branch_id, membership_id: newMem!.id,
-        category: "membership", notes: "Renewal", created_by_staff_id: staff.id,
+        category: "membership", notes: renewalNoteParts ? `Renewal (${renewalNoteParts})` : "Renewal", created_by_staff_id: staff.id,
       }, paymentMode, feePaid, cashAmount, upiAmount);
 
       // (The old membership was already switched off above, as the renewal's claim.)
@@ -4747,7 +4868,7 @@ Deno.serve(async (req) => {
       if (s.locker) {
         await db.from("lockers").update({ is_active: false, fee_due: 0, deposit_returned: true }).eq("id", s.locker.id);
         if (s.lockerDepositRefund > 0) {
-          await db.from("payouts").insert({
+          await recordPayout(db, {
             student_id: mem.student_id, branch_id: mem.branch_id, payout_type: "locker_deposit",
             amount: s.lockerDepositRefund, notes: "Locker caution deposit returned — membership deleted",
             created_by_staff_id: staff.id,
@@ -4757,7 +4878,7 @@ Deno.serve(async (req) => {
       if (s.foodPass) {
         await db.from("food_passes").update({ balance: 0, updated_at: new Date().toISOString() }).eq("id", s.foodPass.id);
         if (s.foodPassRefund > 0) {
-          await db.from("payouts").insert({
+          await recordPayout(db, {
             student_id: mem.student_id, branch_id: mem.branch_id, payout_type: "food_pass_refund",
             amount: s.foodPassRefund, notes: "Unused Food Pass balance returned — membership deleted",
             created_by_staff_id: staff.id,
@@ -4770,14 +4891,14 @@ Deno.serve(async (req) => {
         }).eq("id", c.id);
       }
       if (s.cashbackAmount > 0) {
-        await db.from("payouts").insert({
+        await recordPayout(db, {
           student_id: mem.student_id, branch_id: mem.branch_id, payout_type: "cashback",
           amount: s.cashbackAmount, notes: "Cashback settled — membership deleted",
           created_by_staff_id: staff.id,
         });
       }
       if (s.proratedRefund > 0) {
-        await db.from("payouts").insert({
+        await recordPayout(db, {
           student_id: mem.student_id, branch_id: mem.branch_id, payout_type: "membership_refund",
           amount: s.proratedRefund, notes: `Prorated refund for ${s.remainingDays} unused of ${s.totalDays} day(s) — membership deleted`,
           created_by_staff_id: staff.id,
@@ -4786,18 +4907,12 @@ Deno.serve(async (req) => {
 
       await db.from("alerts").update({ status: "resolved" }).eq("student_id", mem.student_id).eq("alert_type", "expiry").eq("status", "pending");
 
-      // Only a positive net is real revenue collected — money flowing the other way is
-      // already logged per-type as payouts above, same convention as close_membership.
-      if (s.netAmount > 0) {
-        await db.from("transactions").insert({
-          student_id: mem.student_id, branch_id: mem.branch_id, membership_id: membershipId,
-          category: "membership", amount: s.netAmount, payment_mode: paymentMode,
-          notes: s.overstayCharge > 0
-            ? `Final settlement at membership deletion (includes ₹${s.overstayCharge} for ${s.overstayDays} day(s) used after expiry)`
-            : "Final settlement at membership deletion",
-          created_by_staff_id: staff.id,
-        });
-      }
+      // Credits were logged in full as payouts above; this records every owed line as income
+      // (cash/UPI for the net collected, "other" for the part netted off) — see
+      // recordSettlementIncome for why the net alone double-counted the credits.
+      await recordSettlementIncome(db, {
+        student_id: mem.student_id, branch_id: mem.branch_id, membership_id: membershipId, created_by_staff_id: staff.id,
+      }, s, paymentMode, "membership deletion");
 
       await refreshStudentStatus(db, mem.student_id);
       return json({
@@ -4891,7 +5006,7 @@ Deno.serve(async (req) => {
           is_active: false, fee_due: 0, deposit_returned: true,
         }).eq("id", locker.id);
         if (lockerDepositRefund > 0) {
-          await db.from("payouts").insert({
+          await recordPayout(db, {
             student_id: mem.student_id, branch_id: mem.branch_id, payout_type: "locker_deposit",
             amount: lockerDepositRefund, notes: "Locker caution deposit returned at membership closure",
             created_by_staff_id: staff.id,
@@ -4901,7 +5016,7 @@ Deno.serve(async (req) => {
       if (foodPass) {
         await db.from("food_passes").update({ balance: 0, updated_at: new Date().toISOString() }).eq("id", foodPass.id);
         if (foodPassRefund > 0) {
-          await db.from("payouts").insert({
+          await recordPayout(db, {
             student_id: mem.student_id, branch_id: mem.branch_id, payout_type: "food_pass_refund",
             amount: foodPassRefund, notes: "Unused Food Pass balance returned at membership closure",
             created_by_staff_id: staff.id,
@@ -4914,7 +5029,7 @@ Deno.serve(async (req) => {
         }).eq("id", c.id);
       }
       if (cashbackAmount > 0) {
-        await db.from("payouts").insert({
+        await recordPayout(db, {
           student_id: mem.student_id, branch_id: mem.branch_id, payout_type: "cashback",
           amount: cashbackAmount, notes: "Cashback settled at membership closure",
           created_by_staff_id: staff.id,
@@ -4930,18 +5045,12 @@ Deno.serve(async (req) => {
 
       await db.from("alerts").update({ status: "resolved" }).eq("student_id", mem.student_id).eq("alert_type", "expiry").eq("status", "pending");
 
-      // Only a positive net is real revenue collected — a refund going the other way
-      // isn't logged as a transaction, same as the cashback-payout convention.
-      if (netAmount > 0) {
-        await db.from("transactions").insert({
-          student_id: mem.student_id, branch_id: mem.branch_id, membership_id: membershipId,
-          category: "membership", amount: netAmount, payment_mode: paymentMode,
-          notes: overstayCharge > 0
-            ? `Final settlement at membership closure (includes ₹${overstayCharge} for ${overstayDays} day(s) used after expiry)`
-            : "Final settlement at membership closure",
-          created_by_staff_id: staff.id,
-        });
-      }
+      // Credits were logged in full as payouts above; this records every owed line as income
+      // (cash/UPI for the net collected, "other" for the part netted off) — see
+      // recordSettlementIncome for why the net alone double-counted the credits.
+      await recordSettlementIncome(db, {
+        student_id: mem.student_id, branch_id: mem.branch_id, membership_id: membershipId, created_by_staff_id: staff.id,
+      }, { totalOwed, netAmount, membershipDue, overstayCharge, overstayDays, lockerDue, foodPassOwed, overtimeDue }, paymentMode, "membership closure");
 
       await refreshStudentStatus(db, mem.student_id);
       return json({
