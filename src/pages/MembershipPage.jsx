@@ -1228,17 +1228,19 @@ function NewMembershipForm({ branchId, onCreated, tempPackages, permPackages, si
         <strong style={{ color: 'var(--text)' }}>{denyTarget.name}</strong>'s details will be deleted. They can fill in the sign-up link again if needed.
       </ConfirmDialog>
     )}
-    <div style={{ display: 'grid', gridTemplateColumns: isOwner ? 'minmax(320px, 560px) 1fr' : '1fr', gap: '1rem', alignItems: 'start' }}>
-    {/* Pending sign-ups sit in the same column as the form, so the two line up. */}
-    <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem', maxWidth: 560, minWidth: 0 }}>
+    {/* Form on the left; Pending sign-ups on the right (with the owner's WhatsApp message under
+        it). On narrow screens Pending sign-ups comes first — see .registration-layout. */}
+    <div className="registration-layout">
     {signups && (
-      <PendingSignupsPanel
-        requests={signups.requests} branchId={branchId} activeSignupId={activeSignup?.id}
-        busyId={signupBusyId} error={signupError || signups.error}
-        onApprove={approveSignup} onDeny={denySignup}
-      />
+      <div className="registration-signups">
+        <PendingSignupsPanel
+          requests={signups.requests} branchId={branchId} activeSignupId={activeSignup?.id}
+          busyId={signupBusyId} error={signupError || signups.error}
+          onApprove={approveSignup} onDeny={denySignup}
+        />
+      </div>
     )}
-    <div className="card" ref={formTopRef}>
+    <div className="card registration-form" ref={formTopRef}>
       {activeSignup && (
         <div data-testid="signup-prefill-banner" style={{ background: 'rgba(244,114,182,0.08)', border: '1px solid rgba(244,114,182,0.4)', borderRadius: 6, padding: '0.55rem 0.7rem', marginBottom: '1rem', fontSize: '0.82rem' }}>
           <strong style={{ color: '#f472b6' }}>From self sign-up #{activeSignup.ref}</strong> — check the details with the student, then choose the plan and payment and press Create Membership.
@@ -1518,10 +1520,9 @@ function NewMembershipForm({ branchId, onCreated, tempPackages, permPackages, si
         </button>
       </form>
     </div>
-    </div>
 
     {isOwner && (
-      <div className="card">
+      <div className="card registration-extra">
         <h3 style={{ color: 'var(--accent)', marginBottom: '0.5rem' }}>💬 WhatsApp Welcome Message</h3>
         <p style={{ color: 'var(--text-muted)', fontSize: '0.8rem', marginBottom: '0.75rem' }}>
           Sent automatically to the phone number above as soon as the membership is created. Use <code>{'{name}'}</code> where
