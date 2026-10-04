@@ -237,6 +237,22 @@ function membershipTotalDays(mem: { start_date: string; end_date: string; months
 // check-in gate would then treat as still-expired.
 const MEMBERSHIP_GRACE_DAYS = 10;
 
+// RSP R2 — which kind of renewal this is, decided only from the current plan's last day:
+// "early" up to and including the end date, "grace" within MEMBERSHIP_GRACE_DAYS after it
+// (the student can still check in then), "late" after that. Staff never pick the type.
+// RSP R5: between an early renewal and its start date the membership hasn't begun yet, so the
+// refund / plan / closing maths for it don't apply. Those actions are blocked with a pointer to
+// Cancel Early Renewal (which restores the previous membership) instead of new special cases.
+function notStartedYetMessage(mem: { start_date: string }, what: string): string | null {
+  if (mem.start_date <= todayISO()) return null;
+  return `This membership was renewed early and only starts on ${mem.start_date}. Cancel the early renewal first, then ${what}.`;
+}
+
+function renewalKind(endDate: string, today: string): "early" | "grace" | "late" {
+  if (today <= endDate) return "early";
+  return daysBetween(endDate, today) <= MEMBERSHIP_GRACE_DAYS ? "grace" : "late";
+}
+
 // Fallback only — used if the app_settings row is ever missing (e.g. a fresh DB before the
 // seed insert ran). The row from migration 048 is the actual source of truth once it exists.
 const DEFAULT_WELCOME_TEMPLATE = `Hi {name}, welcome to Perfect Study Space! 🎉
@@ -1427,6 +1443,10 @@ Deno.serve(async (req) => {
         total_paid: membershipPaidNow,
         fee_due: Math.max(Math.round((totalPaid - membershipPaidNow) * 100) / 100, 0),
         payment_mode: storedPaymentMode(paymentMode), created_by_staff_id: staff.id,
+        // RSP: the plan's own price (after the multi-month discount) and length, for an exact
+        // per-day rate if the membership is deleted early.
+        plan_amount: Math.round(totalPaid * 100) / 100,
+        plan_days: isCustomDaysPlan ? customDaysCount : daysBetween(startDate, endDate) + 1,
       }).select("id").single();
       if (mErr) return err(mErr.message);
 
@@ -4346,6 +4366,7 @@ Deno.serve(async (req) => {
       const { data: mem } = await db.from("memberships").select("*").eq("id", membershipId).single();
       if (!mem) return err("Membership not found");
       if (!requireBranch(staff, mem.branch_id)) return err("Branch access denied", 403);
+      { const gap = notStartedYetMessage(mem, "change the plan from the membership that is running now"); if (gap) return err(gap); }
       if (!mem.is_active) return err("Membership is not active");
 
       const newHours = Number(newHoursPerDay);
@@ -4517,6 +4538,14 @@ Deno.serve(async (req) => {
       if (Number(mem.fee_due ?? 0) > 0) {
         return err(`This membership still has ₹${Number(mem.fee_due)} pending — clear it before renewing.`);
       }
+      // RSP R4: an on-hold membership has a moving end date (resuming extends it) and an open
+      // hold row — renewing it used to leave that hold open forever on the old membership.
+      if (mem.is_paused) return err("This membership is on hold — resume it before renewing.");
+      // RSP R4: this membership is itself an early renewal that hasn't started yet.
+      if (mem.start_date > todayISO()) {
+        return err(`This student has already renewed early — the new period starts on ${mem.start_date}. Cancel that early renewal first if it needs to change.`);
+      }
+      const kind = renewalKind(mem.end_date, todayISO());
 
       const wasCustomPlan = mem.hours_per_day_weekend != null;
       const newCategory = category ?? mem.category;
@@ -4539,6 +4568,17 @@ Deno.serve(async (req) => {
         const pkgFee = await getMembershipPackage(db, newHoursPerDay, newCategory);
         if (!pkgFee) return err("Invalid membership package");
         monthlyFee = pkgFee;
+      }
+
+      // RSP R3: an early renewal keeps the same plan. The new membership becomes the active one
+      // straight away, so a different plan would apply to the days the student already paid for
+      // under the old one (a free upgrade, or a downgrade nobody asked for). Change Plan works
+      // normally once the new period has started.
+      if (kind === "early") {
+        const oldWeekend = mem.hours_per_day_weekend != null ? Number(mem.hours_per_day_weekend) : null;
+        if (newCategory !== mem.category || newHoursPerDay !== Number(mem.hours_per_day) || (newWeekendHours ?? null) !== oldWeekend) {
+          return err(`An early renewal keeps the same plan (${mem.category}, ${mem.hours_per_day}h/day). Renew on the same plan now, then use Change Plan from ${addDays(mem.end_date, 1)} when the new period starts.`);
+        }
       }
 
       // Same custom-day-count model as create_membership — bypasses the whole-month billing
@@ -4602,19 +4642,31 @@ Deno.serve(async (req) => {
       const feeDue = Math.max(totalFee - feePaid, 0);
 
       const today = todayISO();
-      // A renewal made before the current period lapses — or within the same grace window
-      // that still lets the student check in (MEMBERSHIP_GRACE_DAYS) — picks up the very
-      // next day after end_date. The current end_date is already the last day the student
-      // is covered through under the inclusive-end convention above, so starting there again
-      // would double-count it. Only once grace has actually run out does the new period
-      // start "fresh" from today, since there's no reasonable continuation left to preserve.
-      const daysSinceExpiry = daysBetween(mem.end_date, today);
-      const defaultStartDate = daysSinceExpiry > MEMBERSHIP_GRACE_DAYS ? today : addDays(mem.end_date, 1);
-      // Staff can override the computed default (e.g. backdating a renewal that was actually
-      // paid a few days ago) but never push it into the future — same rule create_membership
-      // enforces, for the same reason: a future-dated membership shouldn't be "active" yet.
-      const startDate = customStartDate || defaultStartDate;
-      if (startDate > today) return err("Start date cannot be in the future");
+      // RSP R2 — the start date follows from the renewal kind:
+      //  • early (on or before end_date): the day after end_date, fixed. The student keeps every
+      //    remaining day; this is the one case where the new period starts in the future.
+      //  • grace (within MEMBERSHIP_GRACE_DAYS after end_date): also the day after end_date, fixed
+      //    — the owner's rule is that grace days count as used whether or not the student came.
+      //  • late: today by default; staff may backdate (a renewal actually paid a few days ago),
+      //    but never into the old period and never into the future.
+      // The current end_date is the last day covered (inclusive), so starting on it again would
+      // double-count it — and staff picking "today" during the early window used to silently
+      // throw away the student's remaining days.
+      const continuationStart = addDays(mem.end_date, 1);
+      let startDate: string;
+      if (kind === "late") {
+        startDate = customStartDate || today;
+        if (!isISODate(startDate)) return err("Invalid start date");
+        if (startDate > today) return err("Start date cannot be in the future");
+        if (startDate < continuationStart) {
+          return err(`The start date can't be before ${continuationStart} — that would overlap the previous plan.`);
+        }
+      } else {
+        if (customStartDate && customStartDate !== continuationStart) {
+          return err(`This is ${kind === "early" ? "an early" : "a grace-period"} renewal — the new period starts on ${continuationStart}, the day after the current plan ends.`);
+        }
+        startDate = continuationStart;
+      }
       // Checked before anything is written: insertPaymentTransactions throws on a split that
       // doesn't add up, and by then the renewal would already be half done.
       if (paymentMode === "split" && feePaid > 0) {
@@ -4677,6 +4729,11 @@ Deno.serve(async (req) => {
         due_date: dueDate, months_paid: months, discount_percent: discount,
         monthly_fee: monthlyFee, total_paid: feePaid, fee_due: feeDue,
         payment_mode: storedPaymentMode(paymentMode), created_by_staff_id: staff.id,
+        // RSP: which membership this continued (Cancel Early Renewal restores it) and the plan's
+        // own price/length (the exact per-day rate for a Delete refund).
+        renewed_from_membership_id: mem.id,
+        plan_amount: Math.round(totalBeforeCashback * 100) / 100,
+        plan_days: isCustomDaysPlan ? customDaysCount : daysBetween(startDate, endDate) + 1,
       }).select("id").single();
       if (mErr) {
         if (claimedNewDeskId) {
@@ -4714,7 +4771,10 @@ Deno.serve(async (req) => {
       }, paymentMode, overtimePaidNow, otCash, otUpi);
       await insertPaymentTransactions(db, {
         ...ledgerBase, category: "membership",
-        notes: cashbackAmount > 0 ? `Renewal (₹${r2(cashbackAmount)} cashback applied)` : "Renewal",
+        notes: [
+          kind === "early" ? `Renewal (early — starts ${startDate})` : kind === "grace" ? `Renewal (grace — from ${startDate})` : "Renewal",
+          cashbackAmount > 0 ? `₹${r2(cashbackAmount)} cashback applied` : null,
+        ].filter(Boolean).join(", "),
       }, paymentMode, renewalPaidNow, renCash, renUpi);
 
       // (The old membership was already switched off above, as the renewal's claim.)
@@ -4736,10 +4796,89 @@ Deno.serve(async (req) => {
 
       await refreshStudentStatus(db, mem.student_id);
       return json({
-        ok: true, membershipId: newMem!.id,
+        ok: true, membershipId: newMem!.id, kind, startDate, endDate,
         cashbackApplied: cashbackAmount > 0 ? cashbackAmount : null,
         overtimeCharged: overtimeDue > 0 ? overtimeDue : null,
       });
+    }
+
+    // RSP R6 — undo an early renewal before its new period starts (a mistake, or the student
+    // changed their mind). Puts the student back exactly where they were: the previous
+    // membership active again with its own end date, the renewal money refunded, cashbacks
+    // that renewal used back to pending, and anything recorded in the meantime moved back.
+    // Overtime that was settled inside the renewal stays settled — it was owed regardless.
+    // Money is never deleted from the books: the refund is its own payout row.
+    if (action === "cancel_early_renewal") {
+      const { membershipId, reason } = payload;
+      if (!reason || !String(reason).trim()) return err("A reason is required to cancel an early renewal");
+      const { data: mem } = await db.from("memberships").select("*").eq("id", membershipId).single();
+      if (!mem) return err("Membership not found");
+      if (!requireBranch(staff, mem.branch_id)) return err("Branch access denied", 403);
+      if (!mem.is_active) return err("This membership is no longer active — refresh to see the current one.");
+      if (!(mem.start_date > todayISO())) {
+        return err("This renewal has already started — it can't be cancelled. Use Delete Membership instead.");
+      }
+      if (!mem.renewed_from_membership_id) return err("This membership isn't an early renewal.");
+      if (mem.is_paused) return err("This membership is on hold — resume it before cancelling the early renewal.");
+
+      const { data: prev } = await db.from("memberships").select("*").eq("id", mem.renewed_from_membership_id).single();
+      if (!prev) return err("The membership this renewed could not be found.");
+      if (prev.is_active) return err("The previous membership is already active — refresh to see the current state.");
+      if (prev.branch_id !== mem.branch_id) {
+        return err("The student was moved to another branch after renewing early, so the previous membership can't be restored here. Use Delete Membership once the new period starts.");
+      }
+
+      // Renewal money actually received for the new membership: its "membership" ledger rows
+      // (the renewal payment plus anything paid later against its dues). Its "overtime" rows
+      // were old overtime settled at renewal and stay settled.
+      const { data: paidRows, error: paidErr } = await db.from("transactions").select("amount")
+        .eq("membership_id", mem.id).eq("category", "membership");
+      if (paidErr) return err(paidErr.message, 500);
+      const refund = Math.round((paidRows ?? []).reduce((sum, t: { amount: number }) => sum + Number(t.amount), 0) * 100) / 100;
+
+      // Claim first (only one cancel can win), then restore — same pattern as renewal itself.
+      const { data: endedRows, error: endErr } = await db.from("memberships").update({ is_active: false, fee_due: 0 })
+        .eq("id", mem.id).eq("is_active", true).select("id");
+      if (endErr) return err(endErr.message);
+      if (!endedRows?.length) return err("This membership is no longer active — refresh to see the current one.");
+
+      // Hold days taken during the gap pushed the NEW end date out; they belong to the old period.
+      const gapHoldDays = Number(mem.hold_days ?? 0);
+      const { error: restoreErr } = await db.from("memberships").update({
+        is_active: true,
+        end_date: gapHoldDays > 0 ? addDays(prev.end_date, gapHoldDays) : prev.end_date,
+        hold_days: Number(prev.hold_days ?? 0) + gapHoldDays,
+      }).eq("id", prev.id);
+      if (restoreErr) {
+        await db.from("memberships").update({ is_active: true }).eq("id", mem.id);
+        return err(`Couldn't restore the previous membership: ${restoreErr.message}`, 500);
+      }
+
+      // Attendance / overtime / holds recorded against the new membership during the gap belong
+      // to the period that was actually running.
+      await db.from("bookings").update({ membership_id: prev.id }).eq("membership_id", mem.id);
+      await db.from("overtime_sessions").update({ membership_id: prev.id }).eq("membership_id", mem.id);
+      await db.from("membership_holds").update({ membership_id: prev.id }).eq("membership_id", mem.id);
+      // Cashbacks this renewal used as a discount go back to pending for the next renewal.
+      await db.from("cashbacks").update({
+        status: "pending", redeemed_membership_id: null, redeemed_amount: null, redeemed_at: null,
+      }).eq("redeemed_membership_id", mem.id).eq("status", "redeemed");
+
+      if (refund > 0) {
+        await recordPayout(db, {
+          student_id: mem.student_id, branch_id: mem.branch_id, payout_type: "membership_refund",
+          amount: refund, notes: `Early renewal cancelled — renewal money refunded. Reason: ${String(reason).trim()}`,
+          created_by_staff_id: staff.id,
+        });
+      }
+      await db.from("membership_edits").insert({
+        membership_id: mem.id, student_id: mem.student_id, branch_id: mem.branch_id,
+        edit_type: "cancel_early_renewal", old_value: `${mem.start_date} → ${mem.end_date}`,
+        new_value: String(reason).trim(), changed_by_staff_id: staff.id,
+      });
+
+      await refreshStudentStatus(db, mem.student_id);
+      return json({ ok: true, refund, restoredMembershipId: prev.id, restoredEndDate: gapHoldDays > 0 ? addDays(prev.end_date, gapHoldDays) : prev.end_date });
     }
 
     // ─── CLOSE MEMBERSHIP ───
@@ -4748,6 +4887,7 @@ Deno.serve(async (req) => {
       const { data: mem } = await db.from("memberships").select("*").eq("id", membershipId).single();
       if (!mem) return err("Membership not found");
       if (!requireBranch(staff, mem.branch_id)) return err("Branch access denied", 403);
+      { const gap = notStartedYetMessage(mem, "close the membership that is running now"); if (gap) return err(gap); }
 
       const { data: locker } = await db.from("lockers").select("*")
         .eq("student_id", mem.student_id).eq("is_active", true).maybeSingle();
@@ -4879,6 +5019,7 @@ Deno.serve(async (req) => {
       const { data: mem } = await db.from("memberships").select("*").eq("id", membershipId).single();
       if (!mem) return err("Membership not found");
       if (!requireBranch(staff, mem.branch_id)) return err("Branch access denied", 403);
+      { const gap = notStartedYetMessage(mem, "delete the membership that is running now"); if (gap) return err(gap); }
       if (!mem.is_active) return err("Membership is not active");
 
       const settlement = await computeDeleteSettlement(mem);
@@ -4900,6 +5041,7 @@ Deno.serve(async (req) => {
       const { data: mem } = await db.from("memberships").select("*").eq("id", membershipId).single();
       if (!mem) return err("Membership not found");
       if (!requireBranch(staff, mem.branch_id)) return err("Branch access denied", 403);
+      { const gap = notStartedYetMessage(mem, "delete the membership that is running now"); if (gap) return err(gap); }
       if (!mem.is_active) return err("Membership is not active");
       if (await hasOpenSession(db, mem.student_id)) {
         return err("This student is currently checked in — check them out before deleting the membership.");
@@ -5012,6 +5154,7 @@ Deno.serve(async (req) => {
       const { data: mem } = await db.from("memberships").select("*").eq("id", membershipId).single();
       if (!mem) return err("Membership not found");
       if (!requireBranch(staff, mem.branch_id)) return err("Branch access denied", 403);
+      { const gap = notStartedYetMessage(mem, "close the membership that is running now"); if (gap) return err(gap); }
       // Most of this settlement self-heals on a re-run (the deposit is marked returned, the
       // pass is zeroed, fee_due is cleared), but the overstay charge does not — it's derived
       // from end_date vs today, which nothing here resets, so a second Quit would re-bill the

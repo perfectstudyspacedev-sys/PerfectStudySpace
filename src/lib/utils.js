@@ -157,6 +157,33 @@ export function pendingCashbackTotal(cashbacks, base) {
   return Math.min(raw, base)
 }
 
+// How many days after a plan ends the student may still check in — mirrors MEMBERSHIP_GRACE_DAYS
+// in the edge function (the check-in gate and renewal rules there must agree with it).
+export const MEMBERSHIP_GRACE_DAYS = 10
+
+// RSP R2 — mirrors renewalKind() and the start-date rules in renew_membership. The server decides
+// and enforces; this only lets both renewal forms show the same thing up front.
+//   early: on or before the end date → starts the day after the end date (fixed, same plan)
+//   grace: up to MEMBERSHIP_GRACE_DAYS after → starts the day after the end date (fixed)
+//   late:  after that → starts today; may be backdated, never before the day after the end date
+export function renewalInfo(endDate) {
+  const today = todayISO()
+  const continuationStart = shiftDate(endDate, 1)
+  if (today <= endDate) {
+    return { kind: 'early', startDate: continuationStart, fixed: true, minStart: continuationStart, maxStart: continuationStart }
+  }
+  const daysSinceExpiry = Math.round((new Date(today + 'T12:00:00') - new Date(endDate + 'T12:00:00')) / 86_400_000)
+  if (daysSinceExpiry <= MEMBERSHIP_GRACE_DAYS) {
+    return { kind: 'grace', startDate: continuationStart, fixed: true, minStart: continuationStart, maxStart: continuationStart }
+  }
+  return { kind: 'late', startDate: today, fixed: false, minStart: continuationStart, maxStart: today }
+}
+
+// A membership whose period hasn't begun yet — i.e. an early renewal waiting for its start date.
+export function isNotStartedYet(membership) {
+  return !!membership?.start_date && membership.start_date > todayISO()
+}
+
 export function getMultiMonthDiscount(months) {
   if (months >= 6) return 15
   if (months >= 3) return 10

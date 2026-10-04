@@ -2,8 +2,9 @@ import { useState, useEffect, useCallback } from 'react'
 import { useNavigate, Link } from 'react-router-dom'
 import { useAuth } from '../context/AuthContext'
 import { api } from '../lib/api'
-import { formatCurrency, formatDate, getMultiMonthDiscount, pendingCashbackTotal, todayISO, shiftDate, openWhatsApp, DEFAULT_WELCOME_TEMPLATE, REFERRAL_OPTIONS } from '../lib/utils'
+import { formatCurrency, formatDate, getMultiMonthDiscount, pendingCashbackTotal, todayISO, openWhatsApp, DEFAULT_WELCOME_TEMPLATE, REFERRAL_OPTIONS, renewalInfo, isNotStartedYet } from '../lib/utils'
 import PaymentModeSelector, { isSplitValid } from '../components/PaymentModeSelector'
+import RenewalKindBanner from '../components/RenewalKindBanner'
 import { DEV_MODE } from '../lib/devMode'
 
 // Fallback packages — used only until live rates are fetched from fee_config (Branch Settings)
@@ -15,17 +16,9 @@ const DEFAULT_PERM_PACKAGES = [
   { hours: 12, fee: 2100 }, { hours: 13, fee: 2200 }, { hours: 14, fee: 2300 },
   { hours: 15, fee: 2400 }, { hours: 24, fee: 2500 },
 ]
-// Mirrors MEMBERSHIP_GRACE_DAYS / the startDate calc in renew_membership (supabase/functions/api/index.ts)
-// so the modal's default matches exactly what the server would pick if left unedited.
-const MEMBERSHIP_GRACE_DAYS = 10
 // How many days of history the WhatsApp study report covers. get_student_profile caps the
 // bookings it returns (see limit there) — keep that cap comfortably above days × sessions/day.
 const STUDY_REPORT_DAYS = 21
-function defaultRenewStartDate(endDate) {
-  const today = todayISO()
-  const daysSinceExpiry = Math.round((new Date(today) - new Date(endDate)) / 86_400_000)
-  return daysSinceExpiry > MEMBERSHIP_GRACE_DAYS ? today : shiftDate(endDate, 1)
-}
 
 // ── Active Members tab ─────────────────────────────────────────────────────
 function ActiveMembersTab({ branchId, tempPackages, permPackages }) {
@@ -179,11 +172,16 @@ function ActiveMembersTab({ branchId, tempPackages, permPackages }) {
   }
 
   const openRenewModal = (m) => {
+    // Same rule the server enforces — checked here too so staff aren't sent through the whole
+    // form only to be refused at the end.
+    if (m.is_paused) return window.alert('This membership is on hold — resume it before renewing.')
     const wasCustomPlan = m.hours_per_day_weekend != null
+    const renewal = renewalInfo(m.end_date)
     setRenewModal({
       membershipId: m.membership_id, studentName: m.student_name,
       pendingCashbacks: m.pending_cashbacks ?? (m.pending_cashback ? [m.pending_cashback] : []),
       overtimeDue: Number(m.unbilled_overtime_due) || 0,
+      renewal, endDate: m.end_date,
     })
     setRenewCategory(m.category)
     setRenewHoursPerDay(wasCustomPlan ? 'custom' : m.hours_per_day)
@@ -193,7 +191,7 @@ function ActiveMembersTab({ branchId, tempPackages, permPackages }) {
     setRenewMonths(1)
     setRenewCustomDays('')
     setRenewCustomDaysAmount('')
-    setRenewStartDate(defaultRenewStartDate(m.end_date))
+    setRenewStartDate(renewal.startDate)
     setRenewPayMode({ mode: 'cash', cashAmount: '', upiAmount: '' })
     setRenewPayType('full')
     setRenewAdvance('')
@@ -320,6 +318,7 @@ function ActiveMembersTab({ branchId, tempPackages, permPackages }) {
   // Compute renewal fee for the renewal modal — plan (category/hours) is editable at renewal time
   const renewIsCustomPlan = renewHoursPerDay === 'custom'
   const renewIsCustomDays = renewMonths === 'custom'
+  const renewPlanLocked = renewModal?.renewal?.kind === 'early'
   const renewPackages = renewCategory === 'permanent' ? permPackages : tempPackages
   const renewPkg = renewPackages.find(p => p.hours === renewHoursPerDay) ?? renewPackages[0]
   const renewMonthlyFee = renewIsCustomPlan ? (Number(renewCustomAmount) || 0) : (renewPkg?.fee ?? 0)
@@ -419,6 +418,11 @@ function ActiveMembersTab({ branchId, tempPackages, permPackages }) {
                     {isExpired && (
                       <div style={{ color: '#ff6b6b', fontSize: '0.7rem', fontWeight: 700 }}>EXPIRED</div>
                     )}
+                    {isNotStartedYet(m) && (
+                      <div data-testid="renewed-early" style={{ color: '#4ade80', fontSize: '0.7rem', fontWeight: 700 }}>
+                        Renewed early · starts {formatDate(m.start_date)}
+                      </div>
+                    )}
                   </td>
                   <td className="mono" style={{ fontSize: '0.85rem', fontWeight: 700, color: isExpired ? '#ff6b6b' : expiringSoonRow ? '#ffaa44' : undefined }}>
                     {isExpired ? `${Math.abs(daysLeft)}d ago` : `${daysLeft}d`}
@@ -515,11 +519,12 @@ function ActiveMembersTab({ branchId, tempPackages, permPackages }) {
         <div className="modal-overlay" onClick={() => setRenewModal(null)}>
           <div className="modal" style={{ maxWidth: 420 }} onClick={(e) => e.stopPropagation()}>
             <h2>Renew Membership</h2>
-            <p style={{ color: 'var(--text-muted)', marginBottom: '1rem' }}>{renewModal.studentName}</p>
+            <p style={{ color: 'var(--text-muted)', marginBottom: '0.75rem' }}>{renewModal.studentName}</p>
+            <RenewalKindBanner renewal={renewModal.renewal} endDate={renewModal.endDate} />
 
             <div className="form-group">
               <label>Plan</label>
-              <select value={renewCategory} onChange={(e) => setRenewCategory(e.target.value)}>
+              <select value={renewCategory} disabled={renewPlanLocked} onChange={(e) => setRenewCategory(e.target.value)}>
                 <option value="temporary">Temporary (floating seat)</option>
                 <option value="permanent">Permanent (fixed cabin)</option>
               </select>
@@ -527,12 +532,17 @@ function ActiveMembersTab({ branchId, tempPackages, permPackages }) {
 
             <div className="form-group">
               <label>Hours per Day</label>
-              <select value={renewHoursPerDay} onChange={(e) => setRenewHoursPerDay(e.target.value === 'custom' ? 'custom' : Number(e.target.value))}>
+              <select value={renewHoursPerDay} disabled={renewPlanLocked} onChange={(e) => setRenewHoursPerDay(e.target.value === 'custom' ? 'custom' : Number(e.target.value))}>
                 {renewPackages.map(p => (
                   <option key={p.hours} value={p.hours}>{p.hours} hrs/day — {formatCurrency(p.fee)}/mo</option>
                 ))}
                 <option value="custom">Custom Plan</option>
               </select>
+              {renewPlanLocked && (
+                <p style={{ fontSize: '0.75rem', color: 'var(--text-muted)', marginTop: '0.3rem' }}>
+                  Early renewals keep the same plan. Use Change Plan once the new period starts.
+                </p>
+              )}
             </div>
             {renewIsCustomPlan && (
               <div className="form-group">
@@ -543,11 +553,11 @@ function ActiveMembersTab({ branchId, tempPackages, permPackages }) {
                     value={renewCustomAmount} onChange={(e) => setRenewCustomAmount(e.target.value)}
                   />
                   <input
-                    type="number" min={0} step={0.5} placeholder="Weekday Hours"
+                    type="number" min={0} step={0.5} placeholder="Weekday Hours" disabled={renewPlanLocked}
                     value={renewCustomWeekdayHours} onChange={(e) => setRenewCustomWeekdayHours(e.target.value)}
                   />
                   <input
-                    type="number" min={0} step={0.5} placeholder="Weekend Hours (defaults to weekday if left blank)"
+                    type="number" min={0} step={0.5} placeholder="Weekend Hours (defaults to weekday if left blank)" disabled={renewPlanLocked}
                     value={renewCustomWeekendHours} onChange={(e) => setRenewCustomWeekendHours(e.target.value)}
                   />
                 </div>
@@ -581,7 +591,11 @@ function ActiveMembersTab({ branchId, tempPackages, permPackages }) {
 
             <div className="form-group">
               <label>Start Date</label>
-              <input type="date" value={renewStartDate} max={todayISO()} onChange={(e) => setRenewStartDate(e.target.value)} />
+              {renewModal.renewal.fixed ? (
+                <p className="mono" style={{ fontSize: '0.9rem' }}>{formatDate(renewStartDate)} <span style={{ color: 'var(--text-muted)', fontSize: '0.75rem' }}>(fixed — the day after the current plan ends)</span></p>
+              ) : (
+                <input type="date" value={renewStartDate} min={renewModal.renewal.minStart} max={renewModal.renewal.maxStart} onChange={(e) => setRenewStartDate(e.target.value)} />
+              )}
             </div>
 
             {renewPayType !== 'pending' && (

@@ -2,8 +2,9 @@ import { useState, useEffect, useCallback } from 'react'
 import { useParams, Link, useSearchParams } from 'react-router-dom'
 import { api } from '../lib/api'
 import { useAuth } from '../context/AuthContext'
-import { formatCurrency, formatDate, paymentModeLabel, getMultiMonthDiscount, pendingCashbackTotal, todayISO, REFERRAL_OPTIONS } from '../lib/utils'
+import { formatCurrency, formatDate, paymentModeLabel, getMultiMonthDiscount, pendingCashbackTotal, todayISO, shiftDate, REFERRAL_OPTIONS, renewalInfo, isNotStartedYet } from '../lib/utils'
 import PaymentModeSelector, { isSplitValid } from '../components/PaymentModeSelector'
+import RenewalKindBanner from '../components/RenewalKindBanner'
 
 const PAYMENT_OPTIONS = [
   { value: 'cash', label: '💵 Cash' },
@@ -463,6 +464,14 @@ export default function StudentProfilePage() {
   const [renewAdvance, setRenewAdvance] = useState('')
   const [renewLoading, setRenewLoading] = useState(false)
   const [renewError, setRenewError] = useState('')
+  // RSP R2 — renewal kind + start date for the open renewal form (see renewalInfo()).
+  const [renewInfo, setRenewInfo] = useState(null)
+  const [renewStartDate, setRenewStartDate] = useState('')
+  // RSP R6 — Cancel Early Renewal dialog.
+  const [cancelRenewalOpen, setCancelRenewalOpen] = useState(false)
+  const [cancelRenewalReason, setCancelRenewalReason] = useState('')
+  const [cancelRenewalError, setCancelRenewalError] = useState('')
+  const [cancelRenewalLoading, setCancelRenewalLoading] = useState(false)
   const [discountType, setDiscountType] = useState('percent')
   const [discountValue, setDiscountValue] = useState('')
   const [discountRemarks, setDiscountRemarks] = useState('')
@@ -833,8 +842,33 @@ export default function StudentProfilePage() {
     }
   }
 
+  // RSP R6 — undo an early renewal before its start date (server restores the previous
+  // membership, refunds the renewal money and puts used cashback back to pending).
+  const handleCancelEarlyRenewal = async () => {
+    if (!activeMem) return
+    if (!cancelRenewalReason.trim()) return setCancelRenewalError('Enter a reason for cancelling')
+    setCancelRenewalLoading(true)
+    setCancelRenewalError('')
+    try {
+      const res = await api('cancel_early_renewal', { membershipId: activeMem.id, reason: cancelRenewalReason.trim() })
+      setCancelRenewalOpen(false)
+      setOpenPanel(null)
+      window.alert(res.refund > 0
+        ? `Early renewal cancelled. Refund ₹${res.refund} to the student. The previous plan is active again until ${formatDate(res.restoredEndDate)}.`
+        : `Early renewal cancelled. The previous plan is active again until ${formatDate(res.restoredEndDate)}.`)
+      refresh()
+    } catch (err) {
+      setCancelRenewalError(err.message)
+    } finally {
+      setCancelRenewalLoading(false)
+    }
+  }
+
   const openRenew = (mem) => {
     const wasCustomPlan = mem.hours_per_day_weekend != null
+    const info = renewalInfo(mem.end_date)
+    setRenewInfo(info)
+    setRenewStartDate(info.startDate)
     setRenewOpen(true)
     setRenewCategory(mem.category)
     setRenewHoursPerDay(wasCustomPlan ? 'custom' : mem.hours_per_day)
@@ -883,6 +917,7 @@ export default function StudentProfilePage() {
         isCustomDays: renewIsCustomDays || undefined,
         customDays: renewIsCustomDays ? Number(renewCustomDays) : undefined,
         customDaysAmount: renewIsCustomDays ? Number(renewCustomDaysAmount) : undefined,
+        startDate: renewStartDate || undefined,
         expectedTotal: renewTotal,
       })
       setRenewOpen(false)
@@ -1025,6 +1060,7 @@ export default function StudentProfilePage() {
   const activeMem = memberships?.find(m => m.is_active)
   const isPaused = activeMem?.is_paused || activeMem?.status === 'paused'
   const isExpired = !!activeMem && activeMem.end_date < todayISO()
+  const notStartedYet = isNotStartedYet(activeMem)
   const daysLeft = activeMem
     ? Math.round((new Date(activeMem.end_date + 'T12:00:00').getTime() - new Date(todayISO() + 'T12:00:00').getTime()) / 86_400_000)
     : 0
@@ -1043,6 +1079,7 @@ export default function StudentProfilePage() {
   // Renewal pricing — plan (category/hours) is editable at renewal time
   const renewIsCustomPlan = renewHoursPerDay === 'custom'
   const renewIsCustomDays = renewMonths === 'custom'
+  const renewPlanLocked = renewInfo?.kind === 'early'
   const renewPackages = renewCategory === 'permanent' ? permPackages : tempPackages
   const renewPkg = renewPackages.find(p => p.hours === renewHoursPerDay) ?? renewPackages[0]
   const renewMonthlyFee = renewIsCustomPlan ? (Number(renewCustomAmount) || 0) : (renewPkg?.fee ?? 0)
@@ -1098,7 +1135,7 @@ export default function StudentProfilePage() {
                   </span>
                 )],
                 activeMem && ['Cabin', activeMem.cabin_no ?? (isPaused && activeMem.category === 'permanent' ? 'Released (on hold)' : 'Floating')],
-                activeMem && ['Started', formatDate(activeMem.start_date)],
+                activeMem && [notStartedYet ? 'Starts (renewed early)' : 'Started', formatDate(activeMem.start_date)],
                 activeMem && ['Expires', formatDate(activeMem.end_date)],
                 activeMem && ['Days Left', (
                   <span key="daysleft" style={{ color: daysLeft < 0 ? '#ff6b6b' : daysLeft <= 5 ? '#ffaa44' : undefined, fontWeight: 700 }}>
@@ -1175,11 +1212,32 @@ export default function StudentProfilePage() {
           <div className="modal-overlay" onClick={() => setOpenPanel(null)}>
           <div className="modal" style={{ maxWidth: 420 }} onClick={(e) => e.stopPropagation()}>
             <h2 style={{ color: 'var(--accent)', marginBottom: '0.75rem' }}>Membership Control</h2>
-            {isExpired && (
-              <>
-                <p style={{ color: '#ff8888', fontWeight: 700, fontSize: '0.85rem', marginBottom: '0.75rem' }}>
-                  ⚠ Membership expired {formatDate(activeMem.end_date)} — renew to continue.
+            {notStartedYet ? (
+              // RSP R7 / R6 — an early renewal waiting for its start date.
+              <div data-testid="early-renewal-box" style={{ background: 'rgba(74,222,128,0.06)', border: '1px solid rgba(74,222,128,0.3)', borderRadius: 8, padding: '0.6rem 0.75rem', marginBottom: '0.75rem' }}>
+                <p style={{ color: '#4ade80', fontWeight: 700, fontSize: '0.85rem' }}>
+                  Renewed early · new period {formatDate(activeMem.start_date)} – {formatDate(activeMem.end_date)}
                 </p>
+                <p style={{ color: 'var(--text-muted)', fontSize: '0.78rem', margin: '0.3rem 0 0.6rem' }}>
+                  The current plan runs till {formatDate(shiftDate(activeMem.start_date, -1))}; nothing to do on the start date. Change Plan and Delete are available once the new period starts — or cancel the early renewal to undo it.
+                </p>
+                <button
+                  type="button" className="btn btn-ghost"
+                  style={{ width: '100%', fontSize: '0.85rem', color: '#ff8888', borderColor: 'rgba(255,60,60,0.4)' }}
+                  onClick={() => { setCancelRenewalReason(''); setCancelRenewalError(''); setCancelRenewalOpen(true) }}
+                >
+                  ✕ Cancel Early Renewal
+                </button>
+              </div>
+            ) : !isPaused && (
+              // RSP R1 — Renew is available any time the membership is active (it used to appear
+              // only after expiry). The form says whether it's an early, grace or late renewal.
+              <>
+                {isExpired && (
+                  <p style={{ color: '#ff8888', fontWeight: 700, fontSize: '0.85rem', marginBottom: '0.75rem' }}>
+                    ⚠ Membership expired {formatDate(activeMem.end_date)} — renew to continue.
+                  </p>
+                )}
                 <button
                   type="button"
                   style={{
@@ -1230,9 +1288,11 @@ export default function StudentProfilePage() {
             {holdError && <p className="error-msg">{holdError}</p>}
             {!isPaused && !isExpired && (
               <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem', marginTop: '0.25rem' }}>
-                <button type="button" className="btn btn-ghost" style={{ width: '100%', fontSize: '0.85rem' }} onClick={() => setPlanChangeOpen(true)}>
-                  ⇄ Change Plan
-                </button>
+                {!notStartedYet && (
+                  <button type="button" className="btn btn-ghost" style={{ width: '100%', fontSize: '0.85rem' }} onClick={() => setPlanChangeOpen(true)}>
+                    ⇄ Change Plan
+                  </button>
+                )}
                 {activeMem.category === 'permanent' && (
                   <button type="button" className="btn btn-ghost" style={{ width: '100%', fontSize: '0.85rem' }} onClick={() => setCabinChangeOpen(true)}>
                     🪑 Change Cabin
@@ -1254,17 +1314,19 @@ export default function StudentProfilePage() {
                 </p>
               </>
             )}
-            <button
-              type="button"
-              style={{
-                width: '100%', padding: '0.6rem', fontWeight: 700, cursor: 'pointer', marginTop: '0.5rem',
-                background: 'rgba(255,60,60,0.08)', border: '1px solid rgba(255,60,60,0.4)',
-                color: '#ff8888', borderRadius: 999,
-              }}
-              onClick={() => openDeleteMembership(activeMem.id)}
-            >
-              🗑️ Delete Membership
-            </button>
+            {!notStartedYet && (
+              <button
+                type="button"
+                style={{
+                  width: '100%', padding: '0.6rem', fontWeight: 700, cursor: 'pointer', marginTop: '0.5rem',
+                  background: 'rgba(255,60,60,0.08)', border: '1px solid rgba(255,60,60,0.4)',
+                  color: '#ff8888', borderRadius: 999,
+                }}
+                onClick={() => openDeleteMembership(activeMem.id)}
+              >
+                🗑️ Delete Membership
+              </button>
+            )}
             <div className="modal-actions">
               <button type="button" className="btn btn-ghost" onClick={() => setOpenPanel(null)}>Close</button>
             </div>
@@ -2037,15 +2099,40 @@ export default function StudentProfilePage() {
         />
       )}
 
+      {cancelRenewalOpen && activeMem && (
+        <div className="modal-overlay" onClick={() => setCancelRenewalOpen(false)}>
+          <div className="modal" style={{ maxWidth: 420 }} onClick={(e) => e.stopPropagation()}>
+            <h2 style={{ color: '#ff8888' }}>Cancel Early Renewal</h2>
+            <p style={{ color: 'var(--text-muted)', fontSize: '0.85rem', margin: '0.5rem 0 1rem' }}>
+              {student.name}'s renewal for {formatDate(activeMem.start_date)} – {formatDate(activeMem.end_date)} will be undone:
+              the previous plan becomes active again (until {formatDate(shiftDate(activeMem.start_date, -1))}), the renewal money is
+              refunded, and any cashback it used goes back to pending.
+            </p>
+            <div className="form-group">
+              <label>Reason (required)</label>
+              <input value={cancelRenewalReason} onChange={(e) => setCancelRenewalReason(e.target.value)} placeholder="e.g. renewed by mistake / student changed mind" />
+            </div>
+            {cancelRenewalError && <p className="error-msg">{cancelRenewalError}</p>}
+            <div className="modal-actions">
+              <button type="button" className="btn btn-ghost" onClick={() => setCancelRenewalOpen(false)}>Keep Renewal</button>
+              <button type="button" className="btn btn-primary" disabled={cancelRenewalLoading} onClick={handleCancelEarlyRenewal}>
+                {cancelRenewalLoading ? 'Cancelling…' : 'Cancel Renewal'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {renewOpen && activeMem && (
         <div className="modal-overlay" onClick={() => setRenewOpen(false)}>
           <div className="modal" style={{ maxWidth: 420 }} onClick={(e) => e.stopPropagation()}>
             <h2>Renew Membership</h2>
-            <p style={{ color: 'var(--text-muted)', marginBottom: '1rem' }}>{student.name}</p>
+            <p style={{ color: 'var(--text-muted)', marginBottom: '0.75rem' }}>{student.name}</p>
+            <RenewalKindBanner renewal={renewInfo} endDate={activeMem.end_date} />
 
             <div className="form-group">
               <label>Plan</label>
-              <select value={renewCategory} onChange={(e) => setRenewCategory(e.target.value)}>
+              <select value={renewCategory} disabled={renewPlanLocked} onChange={(e) => setRenewCategory(e.target.value)}>
                 <option value="temporary">Temporary (floating seat)</option>
                 <option value="permanent">Permanent (fixed cabin)</option>
               </select>
@@ -2053,12 +2140,17 @@ export default function StudentProfilePage() {
 
             <div className="form-group">
               <label>Hours per Day</label>
-              <select value={renewHoursPerDay} onChange={(e) => setRenewHoursPerDay(e.target.value === 'custom' ? 'custom' : Number(e.target.value))}>
+              <select value={renewHoursPerDay} disabled={renewPlanLocked} onChange={(e) => setRenewHoursPerDay(e.target.value === 'custom' ? 'custom' : Number(e.target.value))}>
                 {renewPackages.map(p => (
                   <option key={p.hours} value={p.hours}>{p.hours} hrs/day — {formatCurrency(p.fee)}/mo</option>
                 ))}
                 <option value="custom">Custom Plan</option>
               </select>
+              {renewPlanLocked && (
+                <p style={{ fontSize: '0.75rem', color: 'var(--text-muted)', marginTop: '0.3rem' }}>
+                  Early renewals keep the same plan. Use Change Plan once the new period starts.
+                </p>
+              )}
             </div>
             {renewIsCustomPlan && (
               <div className="form-group">
@@ -2069,11 +2161,11 @@ export default function StudentProfilePage() {
                     value={renewCustomAmount} onChange={(e) => setRenewCustomAmount(e.target.value)}
                   />
                   <input
-                    type="number" min={0} step={0.5} placeholder="Weekday Hours"
+                    type="number" min={0} step={0.5} placeholder="Weekday Hours" disabled={renewPlanLocked}
                     value={renewCustomWeekdayHours} onChange={(e) => setRenewCustomWeekdayHours(e.target.value)}
                   />
                   <input
-                    type="number" min={0} step={0.5} placeholder="Weekend Hours (defaults to weekday if left blank)"
+                    type="number" min={0} step={0.5} placeholder="Weekend Hours (defaults to weekday if left blank)" disabled={renewPlanLocked}
                     value={renewCustomWeekendHours} onChange={(e) => setRenewCustomWeekendHours(e.target.value)}
                   />
                 </div>
@@ -2102,6 +2194,17 @@ export default function StudentProfilePage() {
                     value={renewCustomDaysAmount} onChange={(e) => setRenewCustomDaysAmount(e.target.value)}
                   />
                 </div>
+              </div>
+            )}
+
+            {renewInfo && (
+              <div className="form-group">
+                <label>Start Date</label>
+                {renewInfo.fixed ? (
+                  <p className="mono" style={{ fontSize: '0.9rem' }}>{formatDate(renewStartDate)} <span style={{ color: 'var(--text-muted)', fontSize: '0.75rem' }}>(fixed — the day after the current plan ends)</span></p>
+                ) : (
+                  <input type="date" value={renewStartDate} min={renewInfo.minStart} max={renewInfo.maxStart} onChange={(e) => setRenewStartDate(e.target.value)} />
+                )}
               </div>
             )}
 

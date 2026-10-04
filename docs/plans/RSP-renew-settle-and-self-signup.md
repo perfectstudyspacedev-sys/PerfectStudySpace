@@ -2,7 +2,7 @@
 
 | | |
 |---|---|
-| **Status** | 📋 Planned — **not started**. No code for this plan has been written yet. |
+| **Status** | 🚧 In progress — see the ✅ marks below for what is done. |
 | **Agreed on** | 2026-10-04 |
 | **Execution order** | **Phase 1: RSP** first → **Phase 2: SSP** after RSP is finished and verified |
 | **Branch it was planned on** | `claude/loving-davinci-o5y9jm` |
@@ -77,11 +77,11 @@ Example used throughout: a ₹1,250/month plan that **ends 15 Oct**.
 
 ## Part 1 — Renewal
 
-**R1. Where the button is**
+✅ **R1. Where the button is**
 - Members tab: last 7 days + expired (as now).
 - Student profile → Membership Control: **any time the membership is active** (today: only after expiry).
 
-**R2. Type detected automatically by the server** (the form only displays it)
+✅ **R2. Type detected automatically by the server** (the form only displays it)
 
 | Renewing on | Type | New period starts | Plan change |
 |---|---|---|---|
@@ -91,21 +91,21 @@ Example used throughout: a ₹1,250/month plan that **ends 15 Oct**.
 
 The form shows a banner such as *"Early renewal — starts 16 Oct, same plan"*.
 
-**R3. Early renewal rules** — start fixed; same category and hours (custom plans: same weekday/weekend
+✅ **R3. Early renewal rules** — start fixed; same category and hours (custom plans: same weekday/weekend
 hours); duration (1/2/3/6 months or custom days) and payment (Full / Partial / Pay Later) as now;
 cashback and unbilled overtime applied as now.
 
-**R4. Renewal blocked with a clear message (all types)**
+✅ **R4. Renewal blocked with a clear message (all types)**
 - Unpaid dues on the current membership → "Clear ₹X first" (existing).
 - **On hold → "Resume first"** (new).
 - Already renewed early → no second renewal until the new period starts (new).
 - Double-click / two devices → existing claim guard.
 
-**R5. Between an early renewal and its start date ("the gap")**
+✅ **R5. Between an early renewal and its start date ("the gap")**
 - Check-in, food, overtime, holds work normally (a hold extends the new end date).
 - **Delete, Change Plan and Quit are blocked** → "Cancel the early renewal first".
 
-**R6. Cancel Early Renewal** (only until the start date; reason required, logged like deletions)
+✅ **R6. Cancel Early Renewal** (only until the start date; reason required, logged like deletions)
 - Re-activates the previous membership with its end date (+ any hold days taken in the gap).
 - Refunds the renewal money in full (sum of the new membership's `membership`-category transactions)
   as a `membership_refund` payout. Overtime that was settled at renewal stays settled.
@@ -114,7 +114,7 @@ cashback and unbilled overtime applied as now.
 - Blocked if currently on hold ("Resume first") or if the student was transferred to another branch
   after renewing early.
 
-**R7. Labels** — Members list: **"Renewed early · starts 16 Oct"** and the Renew button hidden.
+✅ **R7. Labels** — Members list: **"Renewed early · starts 16 Oct"** and the Renew button hidden.
 Profile: shows the new period + **Cancel Early Renewal** button.
 
 ## Part 2 — Overstay charge (Quit, and Delete after expiry)
@@ -165,7 +165,7 @@ Shows a total per line and a list (date, student, type, amount, who, reason).
 - **W2b.** Overtime omit (profile Overtime History): reason **required**; un-omit is also recorded.
 - Stored in the new append-only `waivers` table (never edited or deleted).
 
-## DB-RSP — Migration `050` (additions only)
+## DB-RSP — Migration `050` (additions only) ✅ written (`050_renewals_and_waivers.sql`)
 
 - `memberships.renewed_from_membership_id uuid null references memberships(id) on delete set null`
 - `memberships.plan_amount numeric(10,2) null` — price after multi-month discount, before cashback/overtime
