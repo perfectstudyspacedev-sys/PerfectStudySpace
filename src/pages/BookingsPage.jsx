@@ -154,7 +154,10 @@ function EditStartTimeModal({ booking, onClose, onDone }) {
 
 // ── Checkout overtime modal ────────────────────────────────────────────────
 function CheckoutModal({ booking, onConfirm, onCancel, loading }) {
-  const [payMode, setPayMode] = useState(booking.payment_mode || 'cash')
+  // Only Cash/UPI can be picked below. A walk-in who paid split has payment_mode 'other' on
+  // the booking, which used to be the silent default here — neither button lit up, and the
+  // overtime/food collected at checkout went into the ledger as "other" instead of cash/UPI.
+  const [payMode, setPayMode] = useState(booking.payment_mode === 'upi' ? 'upi' : 'cash')
   const [settleFoodNow, setSettleFoodNow] = useState(false)
   const [overtimePayNow, setOvertimePayNow] = useState(false)
   // Defaults to right now (same overtime this would've shown before this feature existed).
