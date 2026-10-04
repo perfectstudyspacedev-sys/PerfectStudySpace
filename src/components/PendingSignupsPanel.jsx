@@ -29,7 +29,7 @@ export default function PendingSignupsPanel({ requests, branchId, activeSignupId
   }
 
   return (
-    <div className="card" style={{ marginBottom: '1rem' }} data-testid="pending-signups">
+    <div className="card" data-testid="pending-signups">
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '0.75rem', flexWrap: 'wrap', marginBottom: '0.5rem' }}>
         <h3 style={{ color: 'var(--accent)', margin: 0 }}>
           Pending sign-ups {requests.length > 0 && <span className="mono">({requests.length})</span>}

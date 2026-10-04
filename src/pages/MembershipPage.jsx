@@ -1228,6 +1228,9 @@ function NewMembershipForm({ branchId, onCreated, tempPackages, permPackages, si
         <strong style={{ color: 'var(--text)' }}>{denyTarget.name}</strong>'s details will be deleted. They can fill in the sign-up link again if needed.
       </ConfirmDialog>
     )}
+    <div style={{ display: 'grid', gridTemplateColumns: isOwner ? 'minmax(320px, 560px) 1fr' : '1fr', gap: '1rem', alignItems: 'start' }}>
+    {/* Pending sign-ups sit in the same column as the form, so the two line up. */}
+    <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem', maxWidth: 560, minWidth: 0 }}>
     {signups && (
       <PendingSignupsPanel
         requests={signups.requests} branchId={branchId} activeSignupId={activeSignup?.id}
@@ -1235,8 +1238,7 @@ function NewMembershipForm({ branchId, onCreated, tempPackages, permPackages, si
         onApprove={approveSignup} onDeny={denySignup}
       />
     )}
-    <div style={{ display: 'grid', gridTemplateColumns: isOwner ? 'minmax(320px, 560px) 1fr' : '1fr', gap: '1rem', alignItems: 'start' }}>
-    <div className="card" style={{ maxWidth: 560 }} ref={formTopRef}>
+    <div className="card" ref={formTopRef}>
       {activeSignup && (
         <div data-testid="signup-prefill-banner" style={{ background: 'rgba(244,114,182,0.08)', border: '1px solid rgba(244,114,182,0.4)', borderRadius: 6, padding: '0.55rem 0.7rem', marginBottom: '1rem', fontSize: '0.82rem' }}>
           <strong style={{ color: '#f472b6' }}>From self sign-up #{activeSignup.ref}</strong> — check the details with the student, then choose the plan and payment and press Create Membership.
@@ -1515,6 +1517,7 @@ function NewMembershipForm({ branchId, onCreated, tempPackages, permPackages, si
           {loading ? 'Creating…' : 'Create Membership'}
         </button>
       </form>
+    </div>
     </div>
 
     {isOwner && (
