@@ -240,48 +240,56 @@ the student fills their own details; staff approve and finish the registration.
 
 ## Part 1 — Student page
 
-- **S1.** Separate page reachable only by link, one per branch, using a **secret code** in the link
+- ✅ **S1.** Separate page reachable only by link, one per branch, using a **secret code** in the link
   (not the branch name). Not linked from anywhere in the app. Route outside the login (e.g. `/join/:code`).
-- **S2.** Fields: name, phone, emergency contact, course, how they heard (same checks as the app:
+- ✅ **S2.** Fields: name, phone, emergency contact, course, how they heard (same checks as the app:
   10-digit phone, emergency contact ≠ own phone, source from the existing list).
-- **S3.** On success shows the Ref code. The page can only **submit** — it can never read or change data.
+- ✅ **S3.** On success shows the Ref code. The page can only **submit** — it can never read or change data.
 
 ## Part 2 — Alerts
 
-- **N1.** Popup to the branch's staff and the owner via the existing message-alert system
+- ✅ **N1.** Popup to the branch's staff and the owner via the existing message-alert system
   (`useMessageAlerts`, tagged message like the existing `[new_enquiry]`).
-- **N2.** "Pending" badge on the Membership tab + Pending sign-ups list in New Registration.
+- ✅ **N2.** "Pending" badge on the Membership tab + Pending sign-ups list in New Registration.
 
 ## Part 3 — Staff actions
 
-- **A1.** Approve → New Registration pre-filled; staff finish and register.
-- **A2.** Deny → deleted immediately.
-- **A3.** Pending sign-ups older than end of day (IST) → deleted automatically (lazy purge on list/submit).
-- **A4.** Staff see their branch; owner sees all branches.
+- ✅ **A1.** Approve → New Registration pre-filled; staff finish and register.
+- ✅ **A2.** Deny → deleted immediately.
+- ✅ **A3.** Pending sign-ups older than end of day (IST) → deleted automatically (lazy purge on list/submit).
+- ✅ **A4.** Staff see their branch; owner sees all branches.
 
 ## Part 4 — Simultaneous use
 
-- **C1.** Each sign-up is a separate entry with its own Ref code; popups stack.
-- **C2.** Lock while someone handles it ("Being handled by Priya"); released on close or after 15 minutes.
-- **C3.** Server allows only one Register/Deny to succeed ("Already handled by someone else").
-- **C4.** One pending sign-up per phone per branch; a resubmission updates it (unless staff are handling
+- ✅ **C1.** Each sign-up is a separate entry with its own Ref code; popups stack.
+- ✅ **C2.** Lock while someone handles it ("Being handled by Priya"); released on close or after 15 minutes.
+- ✅ **C3.** Server allows only one Register/Deny to succeed ("Already handled by someone else").
+- ✅ **C4.** One pending sign-up per phone per branch; a resubmission updates it (unless staff are handling
   it → "The desk is processing your details"). Phone with an active membership → flagged "use Renew",
   Approve disabled; the student only sees "Please speak to the desk".
 
 ## Part 5 — Safety
 
-- **X1.** Submit-only public access; limit on pending sign-ups per branch; field length limits; hidden
+- ✅ **X1.** Submit-only public access; limit on pending sign-ups per branch; field length limits; hidden
   anti-bot field.
-- **X2.** Nothing enters `students` / `memberships` until staff press Register; denied and expired
+- ✅ **X2.** Nothing enters `students` / `memberships` until staff press Register; denied and expired
   sign-ups are fully deleted.
-- **X3.** Branch Settings: **"Copy link"** and **"Make new link"** (in case a link leaks). No QR code.
+- ✅ **X3.** Branch Settings: **"Copy link"** and **"Make new link"** (in case a link leaks). No QR code.
 
-## DB-SSP — Migration `051` (additions only)
+## DB-SSP — Migration `051` (additions only) ✅ written (`051_self_signup.sql`)
 
 - `branches.signup_code text unique null` — the secret code in each branch's link.
 - New table `signup_requests` (`id`, `branch_id`, `ref_code`, `name`, `phone`, `emergency_contact`,
   `course`, `referral_source`, `claimed_by_staff_id`, `claimed_at`, `created_at`), at most one pending row
   per (`branch_id`, `phone`). RLS enabled, no policies.
+
+## SSP — Build notes (as implemented)
+
+- C4: the student's reply is the same whether or not the phone is already a member ("Please show this
+  to the desk — Ref #…"), so the public page can't be used to check who is a member; staff see the flag.
+- X3: staff can also **copy** the branch link from New Registration (only the owner/admin can create it
+  or make a new one).
+- Pending list: owner/admin see every branch's sign-ups; Approve works only in the branch it was sent to.
 
 ## SSP — Where the code lives (for the implementer)
 

@@ -15,6 +15,10 @@ export default function BranchSettingsPage() {
   const [lockerCapacity, setLockerCapacity] = useState('')
   const [savingLockers, setSavingLockers] = useState(false)
   const [msg, setMsg] = useState('')
+  // SSP X3 — the branch's self sign-up link (/join/<code>).
+  const [signupCode, setSignupCode] = useState(null)
+  const [signupLinkMsg, setSignupLinkMsg] = useState('')
+  const [rotating, setRotating] = useState(false)
 
   const load = useCallback(async () => {
     if (!selectedBranch) return
@@ -31,6 +35,17 @@ export default function BranchSettingsPage() {
   }, [branches, selectedBranch])
 
   useEffect(() => { load() }, [load])
+
+  useEffect(() => {
+    if (!selectedBranch) return
+    let cancelled = false
+    setSignupCode(null)
+    setSignupLinkMsg('')
+    api('get_signup_link', { branchId: selectedBranch })
+      .then(({ code }) => { if (!cancelled) setSignupCode(code) })
+      .catch((e) => { if (!cancelled) setSignupLinkMsg(e.message) })
+    return () => { cancelled = true }
+  }, [selectedBranch])
 
   useEffect(() => {
     const map = {}
@@ -73,6 +88,31 @@ export default function BranchSettingsPage() {
       setMsg(e.message)
     } finally {
       setSavingLockers(false)
+    }
+  }
+
+  const signupUrl = signupCode ? `${window.location.origin}/join/${signupCode}` : ''
+
+  const copySignupLink = async () => {
+    try {
+      await navigator.clipboard.writeText(signupUrl)
+      setSignupLinkMsg('Link copied')
+    } catch {
+      setSignupLinkMsg('Copy the link above by hand')
+    }
+  }
+
+  const makeNewSignupLink = async () => {
+    if (!window.confirm('Make a new link? The current link stops working immediately — anyone you sent it to will need the new one.')) return
+    setRotating(true)
+    try {
+      const { code } = await api('rotate_signup_link', { branchId: selectedBranch })
+      setSignupCode(code)
+      setSignupLinkMsg('New link made — the old one no longer works')
+    } catch (e) {
+      setSignupLinkMsg(e.message)
+    } finally {
+      setRotating(false)
     }
   }
 
@@ -133,6 +173,26 @@ export default function BranchSettingsPage() {
             ))}
           </div>
         )}
+      </div>
+
+      <div className="card" style={{ marginBottom: '1.5rem', maxWidth: 560 }} data-testid="signup-link-card">
+        <h3 style={{ color: 'var(--accent)', marginBottom: '0.5rem' }}>Self Sign-up Link</h3>
+        <p style={{ color: 'var(--text-muted)', fontSize: '0.82rem', marginBottom: '0.75rem' }}>
+          Send this to new students — they fill in their own details, and staff approve them under Membership → New Registration.
+          It isn't linked from anywhere else. Make a new link if this one gets shared where it shouldn't.
+        </p>
+        {signupUrl ? (
+          <p className="mono" style={{ fontSize: '0.82rem', wordBreak: 'break-all', marginBottom: '0.75rem' }} data-testid="signup-link-url">{signupUrl}</p>
+        ) : (
+          !signupLinkMsg && <p style={{ color: 'var(--text-muted)', fontSize: '0.82rem', marginBottom: '0.75rem' }}>Loading…</p>
+        )}
+        <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap' }}>
+          <button type="button" className="btn btn-primary" disabled={!signupUrl} onClick={copySignupLink}>Copy link</button>
+          <button type="button" className="btn btn-ghost" disabled={!signupUrl || rotating} onClick={makeNewSignupLink}>
+            {rotating ? 'Making…' : 'Make new link'}
+          </button>
+        </div>
+        {signupLinkMsg && <p style={{ fontSize: '0.8rem', color: 'var(--text-muted)', marginTop: '0.5rem' }}>{signupLinkMsg}</p>}
       </div>
 
       <div className="card" style={{ marginBottom: '1.5rem', maxWidth: 320 }}>

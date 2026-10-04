@@ -15,6 +15,7 @@ import BranchSettingsPage from './pages/BranchSettingsPage'
 import ReportsPage from './pages/ReportsPage'
 import BookingsPage from './pages/BookingsPage'
 import TasksPage from './pages/TasksPage'
+import JoinPage from './pages/JoinPage'
 
 function ProtectedRoute({ children }) {
   const { staff, loading } = useAuth()
@@ -35,6 +36,8 @@ export default function App() {
       <BrowserRouter>
         <Routes>
           <Route path="/login" element={<LoginPage />} />
+          {/* SSP: public self sign-up page, reached only by a branch's link — no login. */}
+          <Route path="/join/:code" element={<JoinPage />} />
           <Route element={<ProtectedRoute><Shell /></ProtectedRoute>}>
             <Route index element={<DashboardPage />} />
             <Route path="bookings" element={<BookingsPage />} />

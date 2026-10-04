@@ -4,6 +4,7 @@ import { useAuth } from '../../context/AuthContext'
 import { useSessionAlerts } from '../../hooks/useSessionAlerts'
 import { useMessageAlerts } from '../../hooks/useMessageAlerts'
 import { useTaskAlerts } from '../../hooks/useTaskAlerts'
+import { usePendingSignups } from '../../hooks/usePendingSignups'
 import { api, COMBINED_HALL_ID } from '../../lib/api'
 
 function BackgroundSketches() {
@@ -29,6 +30,7 @@ const TOAST_META = {
   cross_branch: { icon: '🔄', title: 'Cross-Branch Visit', color: '#a78bfa', bg: '#150f24', border: '#8b5cf6', shadow: 'rgba(139,92,246,0.35)' },
   task: { icon: '📋', title: 'New Task Assigned', color: '#4ade80', bg: '#0d1a0d', border: '#4ade80', shadow: 'rgba(74,222,128,0.35)' },
   new_enquiry: { icon: '📝', title: 'New Enquiry', color: '#38bdf8', bg: '#0a1a24', border: '#38bdf8', shadow: 'rgba(56,189,248,0.35)' },
+  new_signup: { icon: '🆕', title: 'New Sign-up', color: '#f472b6', bg: '#1f0a17', border: '#f472b6', shadow: 'rgba(244,114,182,0.35)' },
 }
 
 // Only the 4 most recent toasts stack up on screen — a burst of alerts (e.g. several
@@ -112,6 +114,7 @@ function NotificationBell({ toasts, dismiss, dismissAll }) {
   const crossBranchCount = toasts.filter(t => t.level === 'cross_branch').length
   const taskCount = toasts.filter(t => t.level === 'task').length
   const newEnquiryCount = toasts.filter(t => t.level === 'new_enquiry').length
+  const newSignupCount = toasts.filter(t => t.level === 'new_signup').length
 
   useEffect(() => {
     if (!open) return
@@ -131,7 +134,7 @@ function NotificationBell({ toasts, dismiss, dismissAll }) {
         aria-label="Notifications"
       >
         🔔
-        {(warnCount > 0 || endCount > 0 || messageCount > 0 || crossBranchCount > 0 || taskCount > 0 || newEnquiryCount > 0) && (
+        {(warnCount > 0 || endCount > 0 || messageCount > 0 || crossBranchCount > 0 || taskCount > 0 || newEnquiryCount > 0 || newSignupCount > 0) && (
           <span style={{ position: 'absolute', top: -6, right: -10, display: 'flex', gap: 2 }}>
             {warnCount > 0 && (
               <span style={{
@@ -168,6 +171,12 @@ function NotificationBell({ toasts, dismiss, dismissAll }) {
                 background: '#38bdf8', color: '#0a1a24', borderRadius: '50%', width: 16, height: 16,
                 fontSize: '0.62rem', fontWeight: 700, display: 'flex', alignItems: 'center', justifyContent: 'center',
               }}>{newEnquiryCount}</span>
+            )}
+            {newSignupCount > 0 && (
+              <span style={{
+                background: '#f472b6', color: '#1f0a17', borderRadius: '50%', width: 16, height: 16,
+                fontSize: '0.62rem', fontWeight: 700, display: 'flex', alignItems: 'center', justifyContent: 'center',
+              }}>{newSignupCount}</span>
             )}
           </span>
         )}
@@ -230,6 +239,9 @@ export default function Shell() {
   // Task assignment doesn't depend on branch context (list_tasks allBranches:true sidesteps
   // it entirely — see the hook), so this one runs the same in Combined Hall as anywhere else.
   const taskAlerts = useTaskAlerts(staff?.id)
+  // SSP N2: pending self sign-ups — the Membership tab badge here, and the list on the
+  // Membership page (passed down through the Outlet context so there's a single poller).
+  const signups = usePendingSignups(isCombinedHall ? null : branchId, isOwner, !!staff)
   const toasts = [...session.toasts, ...messages.toasts, ...taskAlerts.toasts]
   const dismiss = (id) => { session.dismiss(id); messages.dismiss(id); taskAlerts.dismiss(id) }
   const dismissAll = () => { session.dismissAll(); messages.dismissAll(); taskAlerts.dismissAll() }
@@ -344,7 +356,15 @@ export default function Shell() {
         <div className="nav-links">
           <NavLink to="/" end>Dashboard</NavLink>
           <NavLink to="/bookings">Active Session</NavLink>
-          <NavLink to="/membership">Membership</NavLink>
+          <NavLink to="/membership">
+            Membership
+            {signups.requests.length > 0 && (
+              <span
+                data-testid="signup-nav-badge" title={`${signups.requests.length} self sign-up${signups.requests.length === 1 ? '' : 's'} waiting`}
+                style={{ marginLeft: '0.35rem', background: '#f472b6', color: '#1f0a17', borderRadius: 999, padding: '0 0.4rem', fontSize: '0.7rem', fontWeight: 700 }}
+              >{signups.requests.length}</span>
+            )}
+          </NavLink>
           <NavLink to="/students">Students</NavLink>
           <NavLink to="/enquiries">Enquiries</NavLink>
           <NavLink to="/food-menu">Food Menu</NavLink>
@@ -370,7 +390,7 @@ export default function Shell() {
         </div>
       </nav>
       <main className="main-content">
-        <Outlet />
+        <Outlet context={{ signups }} />
       </main>
 
       <SessionToasts toasts={toasts} dismiss={dismiss} dismissAll={dismissAll} />

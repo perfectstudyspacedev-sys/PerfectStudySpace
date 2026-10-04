@@ -1,10 +1,11 @@
-import { useState, useEffect, useCallback } from 'react'
-import { useNavigate, Link } from 'react-router-dom'
+import { useState, useEffect, useCallback, useRef } from 'react'
+import { useNavigate, Link, useOutletContext } from 'react-router-dom'
 import { useAuth } from '../context/AuthContext'
 import { api } from '../lib/api'
 import { formatCurrency, formatDate, getMultiMonthDiscount, pendingCashbackTotal, todayISO, openWhatsApp, DEFAULT_WELCOME_TEMPLATE, REFERRAL_OPTIONS, renewalInfo, isNotStartedYet } from '../lib/utils'
 import PaymentModeSelector, { isSplitValid } from '../components/PaymentModeSelector'
 import RenewalKindBanner from '../components/RenewalKindBanner'
+import PendingSignupsPanel from '../components/PendingSignupsPanel'
 import { DEV_MODE } from '../lib/devMode'
 
 // Fallback packages — used only until live rates are fetched from fee_config (Branch Settings)
@@ -862,9 +863,15 @@ function ActiveMembersTab({ branchId, tempPackages, permPackages }) {
 }
 
 // ── New Membership form ────────────────────────────────────────────────────
-function NewMembershipForm({ branchId, onCreated, tempPackages, permPackages }) {
+function NewMembershipForm({ branchId, onCreated, tempPackages, permPackages, signups }) {
   const navigate = useNavigate()
   const { isOwner } = useAuth()
+  // SSP A1 — the self sign-up currently loaded into this form (this staff member holds its lock).
+  const [activeSignup, setActiveSignup] = useState(null)
+  const [signupBusyId, setSignupBusyId] = useState(null)
+  const [signupError, setSignupError] = useState('')
+  const activeSignupRef = useRef(null)
+  const formTopRef = useRef(null)
   const [name, setName] = useState('')
   const [phone, setPhone] = useState('')
   const [emergencyContact, setEmergencyContact] = useState('')
@@ -963,13 +970,77 @@ function NewMembershipForm({ branchId, onCreated, tempPackages, permPackages }) 
     if (p.length !== 10) return
     try {
       const { student } = await api('lookup_student', { phone: p })
+      // Details a student just typed on the sign-up link are newer than what's on file —
+      // don't overwrite them with a returning student's old name/course.
+      const fromSignup = activeSignupRef.current?.phone === p
       if (student?.name) {
-        setName(student.name)
+        if (!fromSignup) setName(student.name)
         setSelectedStudent(student)
       }
-      if (student?.course) setCourse(student.course)
+      if (student?.course && !fromSignup) setCourse(student.course)
     } catch { /* ignore */ }
   }, [])
+
+  const signupsChanged = () => window.dispatchEvent(new Event('pss:signups-changed'))
+
+  const releaseSignup = (s) => {
+    if (s) api('release_signup_request', { id: s.id }).catch(() => {}).finally(signupsChanged)
+  }
+
+  // Leaving the page with a sign-up loaded puts it back for someone else (C2); if the tab is
+  // just closed, the server releases the lock after 15 minutes anyway.
+  useEffect(() => () => releaseSignup(activeSignupRef.current), [])
+
+  const setSignup = (s) => { activeSignupRef.current = s; setActiveSignup(s) }
+
+  const clearForm = () => {
+    setName(''); setPhone(''); setEmergencyContact(''); setCourse(''); setReferralSource('')
+    setSelectedStudent(null); setError('')
+  }
+
+  const approveSignup = async (r) => {
+    setSignupError('')
+    setSignupBusyId(r.id)
+    try {
+      const { request } = await api('claim_signup_request', { id: r.id })
+      if (activeSignupRef.current && activeSignupRef.current.id !== request.id) releaseSignup(activeSignupRef.current)
+      setSignup({ id: request.id, ref: request.ref, phone: request.phone })
+      setSelectedStudent(null)
+      setName(request.name)
+      setPhone(request.phone)
+      setEmergencyContact(request.emergencyContact)
+      setCourse(request.course ?? '')
+      setReferralSource(request.referralSource)
+      setError('')
+      formTopRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' })
+    } catch (e) {
+      setSignupError(e.message)
+    } finally {
+      setSignupBusyId(null)
+      signupsChanged()
+    }
+  }
+
+  const putBackSignup = () => {
+    releaseSignup(activeSignupRef.current)
+    setSignup(null)
+    clearForm()
+  }
+
+  const denySignup = async (r) => {
+    if (!window.confirm(`Deny sign-up #${r.ref} (${r.name})? It will be deleted.`)) return
+    setSignupError('')
+    setSignupBusyId(r.id)
+    try {
+      await api('deny_signup_request', { id: r.id })
+      if (activeSignupRef.current?.id === r.id) { setSignup(null); clearForm() }
+    } catch (e) {
+      setSignupError(e.message)
+    } finally {
+      setSignupBusyId(null)
+      signupsChanged()
+    }
+  }
 
   useEffect(() => {
     if (phone.length === 10) lookupPhone(phone)
@@ -1070,7 +1141,9 @@ function NewMembershipForm({ branchId, onCreated, tempPackages, permPackages }) 
         isCustomDays: isCustomDays || undefined,
         customDays: isCustomDays ? Number(customDays) : undefined,
         customDaysAmount: isCustomDays ? Number(customDaysAmount) : undefined,
+        signupId: activeSignup?.id,
       })
+      if (activeSignup) { setSignup(null); signupsChanged() }
       // The backend skips the locker (and its ₹200) if the number was taken moments before
       // submit — the receipt must not show money that was never charged.
       const receiptTotal = withLocker && result.lockerWarning ? grandTotal - lockerExtra : grandTotal
@@ -1133,8 +1206,22 @@ function NewMembershipForm({ branchId, onCreated, tempPackages, permPackages }) 
   }
 
   return (
+    <>
+    {signups && (
+      <PendingSignupsPanel
+        requests={signups.requests} branchId={branchId} activeSignupId={activeSignup?.id}
+        busyId={signupBusyId} error={signupError || signups.error}
+        onApprove={approveSignup} onDeny={denySignup}
+      />
+    )}
     <div style={{ display: 'grid', gridTemplateColumns: isOwner ? 'minmax(320px, 560px) 1fr' : '1fr', gap: '1rem', alignItems: 'start' }}>
-    <div className="card" style={{ maxWidth: 560 }}>
+    <div className="card" style={{ maxWidth: 560 }} ref={formTopRef}>
+      {activeSignup && (
+        <div data-testid="signup-prefill-banner" style={{ background: 'rgba(244,114,182,0.08)', border: '1px solid rgba(244,114,182,0.4)', borderRadius: 6, padding: '0.55rem 0.7rem', marginBottom: '1rem', fontSize: '0.82rem' }}>
+          <strong style={{ color: '#f472b6' }}>From self sign-up #{activeSignup.ref}</strong> — check the details with the student, then choose the plan and payment and press Create Membership.
+          <button type="button" className="btn btn-ghost" style={{ marginLeft: '0.5rem', fontSize: '0.75rem', padding: '0.2rem 0.6rem' }} onClick={putBackSignup}>Put back</button>
+        </div>
+      )}
       <form onSubmit={handleSubmit}>
         <div className="form-group" style={{ position: 'relative' }}>
           <label>Full Name *</label>
@@ -1431,6 +1518,7 @@ function NewMembershipForm({ branchId, onCreated, tempPackages, permPackages }) 
       </div>
     )}
     </div>
+    </>
   )
 }
 
@@ -1719,6 +1807,9 @@ function CombinedMembershipView() {
 // ── Page ───────────────────────────────────────────────────────────────────
 export default function MembershipPage() {
   const { branchId, isCombinedHall } = useAuth()
+  // SSP: pending self sign-ups, polled once by the Shell and shared through the Outlet.
+  const { signups } = useOutletContext() ?? {}
+  const pendingHere = (signups?.requests ?? []).filter(r => r.branchId === branchId).length
   const [tab, setTab] = useState('active')
   const [tempPackages, setTempPackages] = useState(DEFAULT_TEMP_PACKAGES)
   const [permPackages, setPermPackages] = useState(DEFAULT_PERM_PACKAGES)
@@ -1748,7 +1839,9 @@ export default function MembershipPage() {
       <div className="page-header"><h1>Membership</h1></div>
       <div className="tabs">
         <button type="button" className={tab === 'active' ? 'active' : ''} onClick={() => setTab('active')}>Active Members</button>
-        <button type="button" className={tab === 'new' ? 'active' : ''} onClick={() => setTab('new')}>New Registration</button>
+        <button type="button" className={tab === 'new' ? 'active' : ''} onClick={() => setTab('new')}>
+          New Registration{pendingHere > 0 && <span data-testid="signup-tab-badge" style={{ marginLeft: '0.35rem', background: '#f472b6', color: '#1f0a17', borderRadius: 999, padding: '0 0.4rem', fontSize: '0.7rem', fontWeight: 700 }}>{pendingHere}</span>}
+        </button>
         <button type="button" className={tab === 'locker' ? 'active' : ''} onClick={() => setTab('locker')}>Locker</button>
         <button
           type="button"
@@ -1765,7 +1858,7 @@ export default function MembershipPage() {
       {tab === 'new' && (
         <NewMembershipForm
           branchId={branchId} onCreated={() => setTab('active')}
-          tempPackages={tempPackages} permPackages={permPackages}
+          tempPackages={tempPackages} permPackages={permPackages} signups={signups}
         />
       )}
       {tab === 'locker' && <LockerTab branchId={branchId} />}
