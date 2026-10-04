@@ -237,6 +237,22 @@ function membershipTotalDays(mem: { start_date: string; end_date: string; months
 // check-in gate would then treat as still-expired.
 const MEMBERSHIP_GRACE_DAYS = 10;
 
+// RSP R2 — which kind of renewal this is, decided only from the current plan's last day:
+// "early" up to and including the end date, "grace" within MEMBERSHIP_GRACE_DAYS after it
+// (the student can still check in then), "late" after that. Staff never pick the type.
+// RSP R5: between an early renewal and its start date the membership hasn't begun yet, so the
+// refund / plan / closing maths for it don't apply. Those actions are blocked with a pointer to
+// Cancel Early Renewal (which restores the previous membership) instead of new special cases.
+function notStartedYetMessage(mem: { start_date: string }, what: string): string | null {
+  if (mem.start_date <= todayISO()) return null;
+  return `This membership was renewed early and only starts on ${mem.start_date}. Cancel the early renewal first, then ${what}.`;
+}
+
+function renewalKind(endDate: string, today: string): "early" | "grace" | "late" {
+  if (today <= endDate) return "early";
+  return daysBetween(endDate, today) <= MEMBERSHIP_GRACE_DAYS ? "grace" : "late";
+}
+
 // Fallback only — used if the app_settings row is ever missing (e.g. a fresh DB before the
 // seed insert ran). The row from migration 048 is the actual source of truth once it exists.
 const DEFAULT_WELCOME_TEMPLATE = `Hi {name}, welcome to Perfect Study Space! 🎉
@@ -509,6 +525,83 @@ async function recordTransaction(db: ReturnType<typeof adminClient>, row: Record
   }
 }
 
+// RSP W2 — append-only log of money forgiven (overstay waived, overtime omitted/restored): who,
+// how much and why. These two waivers used to leave no record at all.
+async function recordWaiver(db: ReturnType<typeof adminClient>, row: Record<string, unknown>) {
+  const { error } = await db.from("waivers").insert(row);
+  if (error) {
+    console.error("waivers insert failed:", error.message, JSON.stringify(row));
+    throw new Error(`The waiver could not be logged (${error.message}).`);
+  }
+}
+
+// ─── SSP: self sign-up helpers ───
+const SIGNUP_CLAIM_MINUTES = 15;
+// Spam ceiling: a branch never legitimately has this many students waiting at the desk at once.
+const SIGNUP_PENDING_LIMIT = 50;
+const SIGNUP_REFERRALS = ["google_search", "instagram", "word_of_mouth", "flex", "ai_platform"];
+// 32 symbols, so a random byte maps onto them without bias; no i/l/o/u to misread.
+const CODE_ALPHABET = "0123456789abcdefghjkmnpqrstvwxyz";
+
+function randomCode(length: number, alphabet: string): string {
+  const bytes = crypto.getRandomValues(new Uint8Array(length));
+  return Array.from(bytes, (b) => alphabet[b % alphabet.length]).join("");
+}
+const newSignupLinkCode = () => randomCode(12, CODE_ALPHABET);
+const newSignupRef = () => randomCode(4, "0123456789ABCDEF");
+const isSignupLinkCode = (v: unknown): v is string => typeof v === "string" && /^[0-9a-z]{12}$/.test(v);
+const signupClaimCutoff = () => new Date(Date.now() - SIGNUP_CLAIM_MINUTES * 60_000).toISOString();
+
+// A sign-up not handled by the end of the IST day it was sent on is deleted (SSP decision 2).
+// Run lazily wherever sign-ups are read or written instead of on a schedule.
+async function purgeExpiredSignups(db: ReturnType<typeof adminClient>) {
+  await db.from("signup_requests").delete().lt("created_at", istDayStart(todayISO()));
+}
+
+// Same checks as New Registration, so staff never have to fix what the student typed.
+function validateSignupFields(p: Record<string, unknown>):
+  { error: string } | { name: string; phone: string; emergencyContact: string; course: string | null; referralSource: string } {
+  const name = String(p.name ?? "").trim().replace(/\s+/g, " ");
+  const phone = String(p.phone ?? "").trim();
+  const emergencyContact = String(p.emergencyContact ?? "").trim();
+  const course = String(p.course ?? "").trim().replace(/\s+/g, " ");
+  const referralSource = String(p.referralSource ?? "");
+  if (!name) return { error: "Please enter your full name" };
+  if (name.length > 80) return { error: "Name is too long (80 characters max)" };
+  if (name.split(" ").length < 2) return { error: "Please enter your full name (first and last name)" };
+  if (!/^\d{10}$/.test(phone)) return { error: "Phone must be a 10 digit number" };
+  if (!/^\d{10}$/.test(emergencyContact)) return { error: "Emergency contact must be a 10 digit phone number" };
+  if (phone === emergencyContact) return { error: "Emergency contact must be a different number from your own" };
+  if (course.length > 80) return { error: "Course is too long (80 characters max)" };
+  if (!SIGNUP_REFERRALS.includes(referralSource)) return { error: "Please tell us how you heard about us" };
+  return { name, phone, emergencyContact, course: course || null, referralSource };
+}
+
+// Takes the "being handled" lock on a pending sign-up for this staff member. Each step is a
+// single conditional UPDATE, so when two people press Approve together exactly one wins: free
+// → mine, already mine → refreshed, someone else's but older than 15 minutes → taken over.
+async function claimSignup(db: ReturnType<typeof adminClient>, id: string, staffId: string) {
+  const now = new Date().toISOString();
+  const attempts = [
+    (q: any) => q.is("claimed_by_staff_id", null),
+    (q: any) => q.eq("claimed_by_staff_id", staffId),
+    (q: any) => q.lt("claimed_at", signupClaimCutoff()),
+  ];
+  for (const narrow of attempts) {
+    const { data } = await narrow(db.from("signup_requests").update({ claimed_by_staff_id: staffId, claimed_at: now }).eq("id", id)).select("*");
+    if (data?.length) return data[0];
+  }
+  return null;
+}
+
+// Why a claim/deny failed, in words for the staff member.
+async function signupBusyMessage(db: ReturnType<typeof adminClient>, id: string): Promise<string> {
+  const { data } = await db.from("signup_requests").select("id, staff:claimed_by_staff_id(display_name, username)").eq("id", id).maybeSingle();
+  if (!data) return "This sign-up was already handled by someone else (or has expired).";
+  const who = (data.staff as unknown as { display_name?: string; username?: string } | null);
+  return `This sign-up is being handled by ${who?.display_name || who?.username || "another staff member"}.`;
+}
+
 async function recordPayout(db: ReturnType<typeof adminClient>, row: Record<string, unknown>) {
   const { error } = await db.from("payouts").insert(row);
   if (error) {
@@ -573,6 +666,51 @@ async function recordSettlementIncome(
   for (const row of settlementIncomeRows(s, paymentMode, label)) {
     await recordTransaction(db, { ...base, ...row });
   }
+}
+
+// RSP O1–O3 — overstay after a plan ends, for Quit and for Delete-after-expiry. Counted from the
+// day after end_date up to the student's LAST MEMBER CHECK-IN after it (walk-in visits were paid
+// for separately and don't count); ₹0 if they never came back. Check-in is refused once the
+// MEMBERSHIP_GRACE_DAYS grace is over, so this naturally stops at 10 days — capped here as well.
+// It used to charge every day since expiry, even weeks after the student could no longer get in.
+// Rate is the plan's normal daily rate, monthly fee ÷ 30.
+async function computeOverstay(db: ReturnType<typeof adminClient>, mem: { student_id: string; end_date: string; monthly_fee: number }) {
+  const dailyRate = Number(mem.monthly_fee) / 30;
+  const none = { overstayDays: 0, overstayCharge: 0, lastVisitDate: null as string | null, overstayDailyRate: Math.round(dailyRate * 100) / 100 };
+  if (mem.end_date >= todayISO()) return none;
+  const { data, error } = await db.from("bookings").select("start_time")
+    .eq("student_id", mem.student_id).neq("booking_type", "walkin").neq("status", "cancelled")
+    .gte("start_time", istDayStart(addDays(mem.end_date, 1)))
+    .order("start_time", { ascending: false }).limit(1);
+  if (error) throw new Error(error.message);
+  const lastVisitDate = data?.[0] ? toISTDateStr(data[0].start_time) : null;
+  if (!lastVisitDate) return none;
+  const overstayDays = Math.min(Math.max(daysBetween(mem.end_date, lastVisitDate), 0), MEMBERSHIP_GRACE_DAYS);
+  return { ...none, overstayDays, overstayCharge: Math.round(dailyRate * overstayDays), lastVisitDate };
+}
+
+// RSP D1–D3 — refund for the unused days of a deleted membership, at the rate the student actually
+// paid for the plan: plan price AFTER the multi-month discount ÷ plan days (the owner's choice;
+// it used to use the undiscounted price, refunding more per day than the student had paid).
+// plan_amount/plan_days are stored since migration 050; older rows fall back to the best estimate.
+// Unused days count from today, or from the start date if the period hasn't begun yet. Holds push
+// end_date out without adding paid days, so days-to-end are exactly the unused paid days.
+function unusedDaysRefund(
+  mem: { start_date: string; end_date: string; months_paid: number; monthly_fee: number; discount_percent?: number | null; plan_amount?: number | null; plan_days?: number | null; total_paid: number; fee_due?: number | null },
+  today: string, waive: boolean,
+) {
+  const planAmount = mem.plan_amount != null
+    ? Number(mem.plan_amount)
+    : Number(mem.monthly_fee) * Number(mem.months_paid) * (1 - Number(mem.discount_percent ?? 0) / 100);
+  const planDays = mem.plan_days != null && Number(mem.plan_days) > 0 ? Number(mem.plan_days) : membershipTotalDays(mem);
+  const refDate = mem.start_date > today ? addDays(mem.start_date, -1) : today;
+  const remainingDays = Math.max(0, Math.round(
+    (new Date(mem.end_date + "T00:00:00Z").getTime() - new Date(refDate + "T00:00:00Z").getTime()) / 86_400_000,
+  ));
+  const refundDailyRate = planAmount / planDays;
+  const raw = waive ? 0 : refundDailyRate * remainingDays;
+  const proratedRefund = Math.round(Math.max(0, Math.min(raw, Number(mem.total_paid) + Number(mem.fee_due ?? 0))));
+  return { proratedRefund, remainingDays, totalDays: planDays, planAmount: Math.round(planAmount * 100) / 100, refundDailyRate: Math.round(refundDailyRate * 100) / 100 };
 }
 
 // Food bills a student ran up without paying (no Food Pass, or more than the pass held).
@@ -789,6 +927,77 @@ Deno.serve(async (req) => {
       });
 
       return json({ ok: true });
+    }
+
+    // ─── SSP: public self sign-up page (/join/<code>) ───
+    // Unauthenticated, so these two can only *submit*: nothing here reads back any stored
+    // student data, and the answer is the same whether or not the phone is already a member
+    // (that is shown to staff instead), so the page can't be used to look people up.
+    if (action === "public_signup_info" || action === "public_signup_submit") {
+      const code = payload.code;
+      const { data: signupBranch } = isSignupLinkCode(code)
+        ? await db.from("branches").select("id, name").eq("signup_code", code).eq("is_active", true).maybeSingle()
+        : { data: null };
+      if (!signupBranch) return err("This sign-up link is no longer valid. Please ask the desk for the current link.", 404);
+      if (action === "public_signup_info") return json({ branchName: signupBranch.name });
+
+      // Hidden "website" field: people never see it, form-filling bots do. Pretend it worked.
+      if (String(payload.website ?? "").trim()) return json({ ok: true, ref: newSignupRef() });
+      const v = validateSignupFields(payload);
+      if ("error" in v) return err(v.error);
+
+      await purgeExpiredSignups(db);
+      const fields = {
+        name: v.name, phone: v.phone, emergency_contact: v.emergencyContact,
+        course: v.course, referral_source: v.referralSource,
+      };
+      const busy = "The desk is already processing your details — please speak to them.";
+      const updateExisting = async (): Promise<Response | null> => {
+        const { data: existing } = await db.from("signup_requests").select("id, ref_code, claimed_by_staff_id, claimed_at")
+          .eq("branch_id", signupBranch.id).eq("phone", v.phone).maybeSingle();
+        if (!existing) return null;
+        // A resubmission corrects the waiting entry (same Ref) — unless staff are on it.
+        const cutoff = signupClaimCutoff();
+        if (existing.claimed_by_staff_id && existing.claimed_at && Date.parse(existing.claimed_at) >= Date.parse(cutoff)) return err(busy, 409);
+        const { data: updated } = await db.from("signup_requests")
+          .update({ ...fields, claimed_by_staff_id: null, claimed_at: null })
+          .eq("id", existing.id)
+          .or(`claimed_by_staff_id.is.null,claimed_at.lt.${cutoff}`)
+          .select("id");
+        if (!updated?.length) return err(busy, 409);
+        return json({ ok: true, ref: existing.ref_code, updated: true });
+      };
+      const resubmitted = await updateExisting();
+      if (resubmitted) return resubmitted;
+
+      const { count: pendingCount } = await db.from("signup_requests")
+        .select("*", { count: "exact", head: true }).eq("branch_id", signupBranch.id);
+      if ((pendingCount ?? 0) >= SIGNUP_PENDING_LIMIT) {
+        return err("We can't take more sign-ups right now — please speak to the desk.", 429);
+      }
+
+      for (let attempt = 0; attempt < 5; attempt++) {
+        const ref = newSignupRef();
+        const { error: insErr } = await db.from("signup_requests").insert({ branch_id: signupBranch.id, ref_code: ref, ...fields });
+        if (!insErr) {
+          // Popup for that branch's staff and the owner, through the same tagged-message path
+          // as website enquiries. Only the last 4 digits of the phone go into chat.
+          await db.from("messages").insert({
+            branch_id: signupBranch.id, sender_staff_id: null, recipient_type: "staff",
+            content: `[new_signup] ${v.name} (…${v.phone.slice(-4)}) · Ref #${ref}`,
+          });
+          return json({ ok: true, ref });
+        }
+        if (insErr.code !== "23505") {
+          console.error("signup_requests insert failed:", insErr.message);
+          return err("Your details could not be saved — please try again or speak to the desk.", 500);
+        }
+        // Unique clash: the same phone sent twice at the same moment (update that one), or the
+        // random Ref collided with another waiting sign-up (try a new Ref).
+        const raced = await updateExisting();
+        if (raced) return raced;
+      }
+      return err("Your details could not be saved — please try again or speak to the desk.", 500);
     }
 
     const staff = await authStaff(req);
@@ -1238,19 +1447,140 @@ Deno.serve(async (req) => {
     }
 
     // ─── MEMBERSHIP ───
+    // ─── SSP: staff side of self sign-up ───
+    if (action === "list_signup_requests") {
+      const { branchId, allBranches } = payload;
+      let q = db.from("signup_requests")
+        .select("id, branch_id, ref_code, name, phone, emergency_contact, course, referral_source, claimed_by_staff_id, claimed_at, created_at, branches(name), staff:claimed_by_staff_id(display_name, username)")
+        .order("created_at").order("id");
+      if (allBranches && isOwnerOrAdmin(staff)) {
+        // every branch (owner/admin oversee all of them)
+      } else {
+        const bid = branchId ?? staff.branch_id;
+        if (!bid || !requireBranch(staff, bid)) return err("Branch access denied", 403);
+        q = q.eq("branch_id", bid);
+      }
+      await purgeExpiredSignups(db);
+      const { data, error } = await q;
+      if (error) return err(error.message, 500);
+      type SignupRow = { id: string; branch_id: string; ref_code: string; name: string; phone: string; emergency_contact: string; course: string | null; referral_source: string; claimed_by_staff_id: string | null; claimed_at: string | null; created_at: string; branches: { name: string } | null; staff: { display_name: string | null; username: string } | null };
+      const list = (data ?? []) as unknown as SignupRow[];
+
+      // A phone that already holds an active membership must be renewed, not registered
+      // again (create_membership refuses it) — flag it so Approve is disabled up front.
+      const phones = [...new Set(list.map((r) => r.phone))];
+      const members = new Map<string, { studentId: string; name: string; endDate: string; branch: string | null }>();
+      if (phones.length) {
+        const { data: studs } = await db.from("students").select("id, name, phone").in("phone", phones);
+        const ids = (studs ?? []).map((s: { id: string }) => s.id);
+        if (ids.length) {
+          const { data: live } = await db.from("memberships").select("student_id, end_date, branches(name)").in("student_id", ids).eq("is_active", true);
+          for (const m of (live ?? []) as unknown as { student_id: string; end_date: string; branches: { name: string } | null }[]) {
+            const s = (studs ?? []).find((x: { id: string }) => x.id === m.student_id) as { id: string; name: string; phone: string } | undefined;
+            if (s) members.set(s.phone, { studentId: s.id, name: s.name, endDate: m.end_date, branch: m.branches?.name ?? null });
+          }
+        }
+      }
+      const cutoffMs = Date.parse(signupClaimCutoff());
+      return json({
+        requests: list.map((r) => {
+          const claimActive = !!r.claimed_by_staff_id && !!r.claimed_at && Date.parse(r.claimed_at) >= cutoffMs;
+          return {
+            id: r.id, branchId: r.branch_id, branchName: r.branches?.name ?? null, ref: r.ref_code,
+            name: r.name, phone: r.phone, emergencyContact: r.emergency_contact, course: r.course,
+            referralSource: r.referral_source, createdAt: r.created_at,
+            handledBy: claimActive ? (r.staff?.display_name || r.staff?.username || "another staff member") : null,
+            handledByMe: claimActive && r.claimed_by_staff_id === staff.id,
+            activeMember: members.get(r.phone) ?? null,
+          };
+        }),
+      });
+    }
+
+    if (action === "claim_signup_request" || action === "release_signup_request" || action === "deny_signup_request") {
+      const { id } = payload;
+      const { data: reqRow } = await db.from("signup_requests").select("id, branch_id").eq("id", id).maybeSingle();
+      if (!reqRow) return err("This sign-up was already handled by someone else (or has expired).", 409);
+      if (!requireBranch(staff, reqRow.branch_id)) return err("Branch access denied", 403);
+
+      if (action === "release_signup_request") {
+        await db.from("signup_requests").update({ claimed_by_staff_id: null, claimed_at: null })
+          .eq("id", id).eq("claimed_by_staff_id", staff.id);
+        return json({ ok: true });
+      }
+      if (action === "claim_signup_request") {
+        const claimed = await claimSignup(db, id, staff.id);
+        if (!claimed) return err(await signupBusyMessage(db, id), 409);
+        return json({
+          request: {
+            id: claimed.id, branchId: claimed.branch_id, ref: claimed.ref_code, name: claimed.name, phone: claimed.phone,
+            emergencyContact: claimed.emergency_contact, course: claimed.course, referralSource: claimed.referral_source,
+          },
+        });
+      }
+      // Deny: deleted at once — but only if nobody else is mid-registration with it.
+      for (const narrow of [
+        (q: any) => q.is("claimed_by_staff_id", null),
+        (q: any) => q.eq("claimed_by_staff_id", staff.id),
+        (q: any) => q.lt("claimed_at", signupClaimCutoff()),
+      ]) {
+        const { data: gone } = await narrow(db.from("signup_requests").delete().eq("id", id)).select("id");
+        if (gone?.length) return json({ ok: true });
+      }
+      return err(await signupBusyMessage(db, id), 409);
+    }
+
+    // The branch's public sign-up link. Any staff member of the branch can copy it (they hand
+    // it to students at the desk); only the owner/admin can create it or make a new one, which
+    // instantly stops the old link working (X3).
+    if (action === "get_signup_link" || action === "rotate_signup_link") {
+      const { branchId } = payload;
+      if (!branchId || !requireBranch(staff, branchId)) return err("Branch access denied", 403);
+      const { data: br } = await db.from("branches").select("id, signup_code").eq("id", branchId).maybeSingle();
+      if (!br) return err("Branch not found", 404);
+      if (action === "get_signup_link" && (br.signup_code || !isOwnerOrAdmin(staff))) {
+        return json({ code: br.signup_code ?? null });
+      }
+      if (!isOwnerOrAdmin(staff)) return err("Owner only", 403);
+      for (let attempt = 0; attempt < 3; attempt++) {
+        const code = newSignupLinkCode();
+        let upd = db.from("branches").update({ signup_code: code }).eq("id", branchId);
+        // First-time creation only fills an empty slot, so two owners opening the page
+        // together can't each mint a different link.
+        if (action === "get_signup_link") upd = upd.is("signup_code", null);
+        const { data: saved, error: upErr } = await upd.select("signup_code");
+        if (upErr && upErr.code === "23505") continue;
+        if (upErr) return err(upErr.message, 500);
+        if (saved?.length) return json({ code: saved[0].signup_code });
+        const { data: now } = await db.from("branches").select("signup_code").eq("id", branchId).single();
+        return json({ code: now?.signup_code ?? null });
+      }
+      return err("Could not create a link — try again", 500);
+    }
+
     if (action === "create_membership") {
       const {
         branchId, name, phone, category, hoursPerDay, timings, monthsPaid,
         paymentMode, cashAmount, upiAmount, course, lockerNo, withLocker,
         advanceAmount, emergencyContact, referralSource, startDate: customStartDate,
         isCustomPlan, customAmount, weekendHours,
-        isCustomDays, customDays, customDaysAmount, deskId: selectedDeskId,
+        isCustomDays, customDays, customDaysAmount, deskId: selectedDeskId, signupId,
       } = payload;
       if (!requireBranch(staff, branchId)) return err("Branch access denied", 403);
       if (!emergencyContact) return err("Emergency contact is required");
       if (phone === emergencyContact) return err("Emergency contact cannot be the same as the primary phone number");
       const validReferrals = ["google_search", "instagram", "word_of_mouth", "flex", "ai_platform"];
       if (!validReferrals.includes(referralSource)) return err("Please select how the student heard about us");
+
+      // SSP: registering from a self sign-up. This staff member must hold its lock (Approve
+      // took it), so only one Register or Deny can ever succeed for one sign-up (C3). Checked
+      // before anything is written; the sign-up is deleted only once the membership exists.
+      if (signupId) {
+        const { data: su } = await db.from("signup_requests").select("id, branch_id").eq("id", signupId).maybeSingle();
+        if (!su) return err("This sign-up was already handled by someone else (or has expired). Clear the form and check before registering.", 409);
+        if (su.branch_id !== branchId) return err("This sign-up was sent to another branch — switch to that branch to register it.");
+        if (!(await claimSignup(db, signupId, staff.id))) return err(await signupBusyMessage(db, signupId), 409);
+      }
 
       // Duplicate-registration guard. A phone that already holds an ACTIVE membership —
       // at ANY branch, of any category — cannot be registered again: stacking a second
@@ -1427,6 +1757,10 @@ Deno.serve(async (req) => {
         total_paid: membershipPaidNow,
         fee_due: Math.max(Math.round((totalPaid - membershipPaidNow) * 100) / 100, 0),
         payment_mode: storedPaymentMode(paymentMode), created_by_staff_id: staff.id,
+        // RSP: the plan's own price (after the multi-month discount) and length, for an exact
+        // per-day rate if the membership is deleted early.
+        plan_amount: Math.round(totalPaid * 100) / 100,
+        plan_days: isCustomDaysPlan ? customDaysCount : daysBetween(startDate, endDate) + 1,
       }).select("id").single();
       if (mErr) return err(mErr.message);
 
@@ -1467,6 +1801,7 @@ Deno.serve(async (req) => {
       }
 
       await refreshStudentStatus(db, studentId);
+      if (signupId) await db.from("signup_requests").delete().eq("id", signupId);
       return json({ membership: mem, totalPaid, cabinNo, lockerWarning });
     }
 
@@ -3065,12 +3400,22 @@ Deno.serve(async (req) => {
     // still-unbilled rows: once a row's already been collected/settled, toggling this after
     // the fact wouldn't undo the money that already changed hands.
     if (action === "set_overtime_excluded") {
-      const { overtimeSessionId, excluded } = payload;
+      const { overtimeSessionId, excluded, reason } = payload;
       const { data: row } = await db.from("overtime_sessions").select("*").eq("id", overtimeSessionId).single();
       if (!row) return err("Overtime session not found");
       if (!requireBranch(staff, row.branch_id)) return err("Branch access denied", 403);
       if (row.billed_at) return err("This overtime was already billed/settled and can't be excluded");
-      await db.from("overtime_sessions").update({ excluded: !!excluded }).eq("id", overtimeSessionId);
+      if (!!row.excluded === !!excluded) return json({ ok: true });
+      // RSP W2b — omitting (or restoring) overtime changes what the student owes, so it needs a
+      // reason and is logged with the amount and who did it.
+      if (!reason || !String(reason).trim()) return err("Enter a reason");
+      const { error: exclErr } = await db.from("overtime_sessions").update({ excluded: !!excluded }).eq("id", overtimeSessionId);
+      if (exclErr) return err(exclErr.message, 500);
+      await recordWaiver(db, {
+        branch_id: row.branch_id, student_id: row.student_id, membership_id: row.membership_id ?? null,
+        waiver_type: excluded ? "overtime_omit" : "overtime_restore", amount: Number(row.billed_amount ?? 0),
+        reason: String(reason).trim(), related_id: row.id, created_by_staff_id: staff.id,
+      });
       return json({ ok: true });
     }
 
@@ -3407,6 +3752,72 @@ Deno.serve(async (req) => {
         .sort((a, b) => b.count - a.count);
 
       return json({ rows, total, notRecorded: notRecorded ?? 0 });
+    }
+
+    // RSP W1 — "Discounts & Waivers" for the Revenue page: every rupee knocked off or forgiven in
+    // the selected range and branch scope, with who applied it. None of this is money in or out
+    // (that is in get_revenue / list_transactions) — it is revenue the business chose not to take.
+    if (action === "get_discounts_waivers") {
+      const { branchId, period, dateFrom, dateTo, allBranches } = payload;
+      if ((dateFrom != null && !isISODate(dateFrom)) || (dateTo != null && !isISODate(dateTo))) {
+        return err("Invalid date — expected YYYY-MM-DD");
+      }
+      const range = requestedRange(period, dateFrom, dateTo);
+      if (range.from > range.to) return err("Start date must be on or before the end date");
+      let branchFilter: string[] = [];
+      if (allBranches && isOwnerOrAdmin(staff)) {
+        const { data: bs } = await db.from("branches").select("id");
+        branchFilter = bs?.map(b => b.id) ?? [];
+      } else {
+        const bid = branchId ?? staff.branch_id;
+        if (!bid || !requireBranch(staff, bid)) return err("Branch access denied", 403);
+        branchFilter = [bid];
+      }
+      const fromTs = istDayStart(range.from);
+      const toTs = istDayEnd(range.to);
+
+      type Who = { display_name?: string | null; username?: string | null } | null;
+      type Stu = { name?: string | null; phone?: string | null } | null;
+      const whoName = (w: Who) => w?.display_name || w?.username || null;
+      const r2 = (n: number) => Math.round(n * 100) / 100;
+
+      const [loyalty, cashbacks, foodBills, waivers, multiMonth, branchRows] = await Promise.all([
+        fetchAllRows<{ id: string; discount_amount: number; remarks: string | null; created_at: string; branch_id: string; students: Stu; staff: Who }>(() =>
+          db.from("membership_discounts").select("id, discount_amount, remarks, created_at, branch_id, students(name, phone), staff:applied_by_staff_id(display_name, username)")
+            .in("branch_id", branchFilter).gte("created_at", fromTs).lte("created_at", toTs).order("created_at").order("id")),
+        fetchAllRows<{ id: string; redeemed_amount: number | null; redeemed_at: string; month_label: string | null; branch_id: string; students: Stu; staff: Who }>(() =>
+          db.from("cashbacks").select("id, redeemed_amount, redeemed_at, month_label, branch_id, students(name, phone), staff:granted_by_staff_id(display_name, username)")
+            .in("branch_id", branchFilter).eq("status", "redeemed").gte("redeemed_at", fromTs).lte("redeemed_at", toTs).order("redeemed_at").order("id")),
+        fetchAllRows<{ id: string; discount_amount: number; subtotal: number; created_at: string; branch_id: string; student_name: string | null; student_phone: string | null; staff: Who }>(() =>
+          db.from("food_bills").select("id, discount_amount, subtotal, created_at, branch_id, student_name, student_phone, staff:created_by_staff_id(display_name, username)")
+            .in("branch_id", branchFilter).gt("discount_amount", 0).gte("created_at", fromTs).lte("created_at", toTs).order("created_at").order("id")),
+        fetchAllRows<{ id: string; waiver_type: string; amount: number; reason: string; created_at: string; branch_id: string; students: Stu; staff: Who }>(() =>
+          db.from("waivers").select("id, waiver_type, amount, reason, created_at, branch_id, students(name, phone), staff:created_by_staff_id(display_name, username)")
+            .in("branch_id", branchFilter).gte("created_at", fromTs).lte("created_at", toTs).order("created_at").order("id")),
+        fetchAllRows<{ id: string; monthly_fee: number; months_paid: number; discount_percent: number; created_at: string; branch_id: string; students: Stu; staff: Who }>(() =>
+          db.from("memberships").select("id, monthly_fee, months_paid, discount_percent, created_at, branch_id, students(name, phone), staff:created_by_staff_id(display_name, username)")
+            .in("branch_id", branchFilter).gt("discount_percent", 0).gte("created_at", fromTs).lte("created_at", toTs).order("created_at").order("id")),
+        db.from("branches").select("id, name").in("id", branchFilter).then((r: { data: { id: string; name: string }[] | null }) => r.data ?? []),
+      ]);
+      const branchName = new Map(branchRows.map((b: { id: string; name: string }) => [b.id, b.name]));
+
+      const items: { id: string; type: string; date: string; student: string | null; phone: string | null; amount: number; by: string | null; detail: string | null; branch: string | null }[] = [];
+      for (const d of loyalty) items.push({ id: `loyalty-${d.id}`, type: "loyalty", date: d.created_at, student: d.students?.name ?? null, phone: d.students?.phone ?? null, amount: r2(Number(d.discount_amount)), by: whoName(d.staff), detail: d.remarks, branch: branchName.get(d.branch_id) ?? null });
+      for (const c of cashbacks) items.push({ id: `cashback-${c.id}`, type: "cashback", date: c.redeemed_at, student: c.students?.name ?? null, phone: c.students?.phone ?? null, amount: r2(Number(c.redeemed_amount ?? 0)), by: whoName(c.staff), detail: c.month_label ? `Granted for ${c.month_label}; taken off a renewal` : "Taken off a renewal", branch: branchName.get(c.branch_id) ?? null });
+      for (const f of foodBills) items.push({ id: `food-${f.id}`, type: "food", date: f.created_at, student: f.student_name, phone: f.student_phone, amount: r2(Number(f.discount_amount)), by: whoName(f.staff), detail: `Off a ₹${r2(Number(f.subtotal))} bill`, branch: branchName.get(f.branch_id) ?? null });
+      for (const w of waivers) {
+        const sign = w.waiver_type === "overtime_restore" ? -1 : 1;
+        items.push({ id: `waiver-${w.id}`, type: w.waiver_type === "overstay" ? "overstay" : "overtime", date: w.created_at, student: w.students?.name ?? null, phone: w.students?.phone ?? null, amount: r2(sign * Number(w.amount)), by: whoName(w.staff), detail: w.waiver_type === "overtime_restore" ? `Put back on the bill — ${w.reason}` : w.reason, branch: branchName.get(w.branch_id) ?? null });
+      }
+      for (const m of multiMonth) {
+        const amount = r2(Number(m.monthly_fee) * Number(m.months_paid) * Number(m.discount_percent) / 100);
+        items.push({ id: `multimonth-${m.id}`, type: "multi_month", date: m.created_at, student: m.students?.name ?? null, phone: m.students?.phone ?? null, amount, by: whoName(m.staff), detail: `${m.months_paid} months at ${Number(m.discount_percent)}% off`, branch: branchName.get(m.branch_id) ?? null });
+      }
+      items.sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
+      const totals: Record<string, number> = { loyalty: 0, cashback: 0, food: 0, overstay: 0, overtime: 0, multi_month: 0 };
+      for (const it of items) totals[it.type] = r2((totals[it.type] ?? 0) + it.amount);
+      const total = r2(Object.values(totals).reduce((a, b) => a + b, 0));
+      return json({ totals, total, items, dateFrom: range.from, dateTo: range.to });
     }
 
     if (action === "list_transactions") {
@@ -4346,6 +4757,7 @@ Deno.serve(async (req) => {
       const { data: mem } = await db.from("memberships").select("*").eq("id", membershipId).single();
       if (!mem) return err("Membership not found");
       if (!requireBranch(staff, mem.branch_id)) return err("Branch access denied", 403);
+      { const gap = notStartedYetMessage(mem, "change the plan from the membership that is running now"); if (gap) return err(gap); }
       if (!mem.is_active) return err("Membership is not active");
 
       const newHours = Number(newHoursPerDay);
@@ -4517,6 +4929,14 @@ Deno.serve(async (req) => {
       if (Number(mem.fee_due ?? 0) > 0) {
         return err(`This membership still has ₹${Number(mem.fee_due)} pending — clear it before renewing.`);
       }
+      // RSP R4: an on-hold membership has a moving end date (resuming extends it) and an open
+      // hold row — renewing it used to leave that hold open forever on the old membership.
+      if (mem.is_paused) return err("This membership is on hold — resume it before renewing.");
+      // RSP R4: this membership is itself an early renewal that hasn't started yet.
+      if (mem.start_date > todayISO()) {
+        return err(`This student has already renewed early — the new period starts on ${mem.start_date}. Cancel that early renewal first if it needs to change.`);
+      }
+      const kind = renewalKind(mem.end_date, todayISO());
 
       const wasCustomPlan = mem.hours_per_day_weekend != null;
       const newCategory = category ?? mem.category;
@@ -4539,6 +4959,17 @@ Deno.serve(async (req) => {
         const pkgFee = await getMembershipPackage(db, newHoursPerDay, newCategory);
         if (!pkgFee) return err("Invalid membership package");
         monthlyFee = pkgFee;
+      }
+
+      // RSP R3: an early renewal keeps the same plan. The new membership becomes the active one
+      // straight away, so a different plan would apply to the days the student already paid for
+      // under the old one (a free upgrade, or a downgrade nobody asked for). Change Plan works
+      // normally once the new period has started.
+      if (kind === "early") {
+        const oldWeekend = mem.hours_per_day_weekend != null ? Number(mem.hours_per_day_weekend) : null;
+        if (newCategory !== mem.category || newHoursPerDay !== Number(mem.hours_per_day) || (newWeekendHours ?? null) !== oldWeekend) {
+          return err(`An early renewal keeps the same plan (${mem.category}, ${mem.hours_per_day}h/day). Renew on the same plan now, then use Change Plan from ${addDays(mem.end_date, 1)} when the new period starts.`);
+        }
       }
 
       // Same custom-day-count model as create_membership — bypasses the whole-month billing
@@ -4602,19 +5033,31 @@ Deno.serve(async (req) => {
       const feeDue = Math.max(totalFee - feePaid, 0);
 
       const today = todayISO();
-      // A renewal made before the current period lapses — or within the same grace window
-      // that still lets the student check in (MEMBERSHIP_GRACE_DAYS) — picks up the very
-      // next day after end_date. The current end_date is already the last day the student
-      // is covered through under the inclusive-end convention above, so starting there again
-      // would double-count it. Only once grace has actually run out does the new period
-      // start "fresh" from today, since there's no reasonable continuation left to preserve.
-      const daysSinceExpiry = daysBetween(mem.end_date, today);
-      const defaultStartDate = daysSinceExpiry > MEMBERSHIP_GRACE_DAYS ? today : addDays(mem.end_date, 1);
-      // Staff can override the computed default (e.g. backdating a renewal that was actually
-      // paid a few days ago) but never push it into the future — same rule create_membership
-      // enforces, for the same reason: a future-dated membership shouldn't be "active" yet.
-      const startDate = customStartDate || defaultStartDate;
-      if (startDate > today) return err("Start date cannot be in the future");
+      // RSP R2 — the start date follows from the renewal kind:
+      //  • early (on or before end_date): the day after end_date, fixed. The student keeps every
+      //    remaining day; this is the one case where the new period starts in the future.
+      //  • grace (within MEMBERSHIP_GRACE_DAYS after end_date): also the day after end_date, fixed
+      //    — the owner's rule is that grace days count as used whether or not the student came.
+      //  • late: today by default; staff may backdate (a renewal actually paid a few days ago),
+      //    but never into the old period and never into the future.
+      // The current end_date is the last day covered (inclusive), so starting on it again would
+      // double-count it — and staff picking "today" during the early window used to silently
+      // throw away the student's remaining days.
+      const continuationStart = addDays(mem.end_date, 1);
+      let startDate: string;
+      if (kind === "late") {
+        startDate = customStartDate || today;
+        if (!isISODate(startDate)) return err("Invalid start date");
+        if (startDate > today) return err("Start date cannot be in the future");
+        if (startDate < continuationStart) {
+          return err(`The start date can't be before ${continuationStart} — that would overlap the previous plan.`);
+        }
+      } else {
+        if (customStartDate && customStartDate !== continuationStart) {
+          return err(`This is ${kind === "early" ? "an early" : "a grace-period"} renewal — the new period starts on ${continuationStart}, the day after the current plan ends.`);
+        }
+        startDate = continuationStart;
+      }
       // Checked before anything is written: insertPaymentTransactions throws on a split that
       // doesn't add up, and by then the renewal would already be half done.
       if (paymentMode === "split" && feePaid > 0) {
@@ -4677,6 +5120,11 @@ Deno.serve(async (req) => {
         due_date: dueDate, months_paid: months, discount_percent: discount,
         monthly_fee: monthlyFee, total_paid: feePaid, fee_due: feeDue,
         payment_mode: storedPaymentMode(paymentMode), created_by_staff_id: staff.id,
+        // RSP: which membership this continued (Cancel Early Renewal restores it) and the plan's
+        // own price/length (the exact per-day rate for a Delete refund).
+        renewed_from_membership_id: mem.id,
+        plan_amount: Math.round(totalBeforeCashback * 100) / 100,
+        plan_days: isCustomDaysPlan ? customDaysCount : daysBetween(startDate, endDate) + 1,
       }).select("id").single();
       if (mErr) {
         if (claimedNewDeskId) {
@@ -4714,7 +5162,10 @@ Deno.serve(async (req) => {
       }, paymentMode, overtimePaidNow, otCash, otUpi);
       await insertPaymentTransactions(db, {
         ...ledgerBase, category: "membership",
-        notes: cashbackAmount > 0 ? `Renewal (₹${r2(cashbackAmount)} cashback applied)` : "Renewal",
+        notes: [
+          kind === "early" ? `Renewal (early — starts ${startDate})` : kind === "grace" ? `Renewal (grace — from ${startDate})` : "Renewal",
+          cashbackAmount > 0 ? `₹${r2(cashbackAmount)} cashback applied` : null,
+        ].filter(Boolean).join(", "),
       }, paymentMode, renewalPaidNow, renCash, renUpi);
 
       // (The old membership was already switched off above, as the renewal's claim.)
@@ -4736,10 +5187,89 @@ Deno.serve(async (req) => {
 
       await refreshStudentStatus(db, mem.student_id);
       return json({
-        ok: true, membershipId: newMem!.id,
+        ok: true, membershipId: newMem!.id, kind, startDate, endDate,
         cashbackApplied: cashbackAmount > 0 ? cashbackAmount : null,
         overtimeCharged: overtimeDue > 0 ? overtimeDue : null,
       });
+    }
+
+    // RSP R6 — undo an early renewal before its new period starts (a mistake, or the student
+    // changed their mind). Puts the student back exactly where they were: the previous
+    // membership active again with its own end date, the renewal money refunded, cashbacks
+    // that renewal used back to pending, and anything recorded in the meantime moved back.
+    // Overtime that was settled inside the renewal stays settled — it was owed regardless.
+    // Money is never deleted from the books: the refund is its own payout row.
+    if (action === "cancel_early_renewal") {
+      const { membershipId, reason } = payload;
+      if (!reason || !String(reason).trim()) return err("A reason is required to cancel an early renewal");
+      const { data: mem } = await db.from("memberships").select("*").eq("id", membershipId).single();
+      if (!mem) return err("Membership not found");
+      if (!requireBranch(staff, mem.branch_id)) return err("Branch access denied", 403);
+      if (!mem.is_active) return err("This membership is no longer active — refresh to see the current one.");
+      if (!(mem.start_date > todayISO())) {
+        return err("This renewal has already started — it can't be cancelled. Use Delete Membership instead.");
+      }
+      if (!mem.renewed_from_membership_id) return err("This membership isn't an early renewal.");
+      if (mem.is_paused) return err("This membership is on hold — resume it before cancelling the early renewal.");
+
+      const { data: prev } = await db.from("memberships").select("*").eq("id", mem.renewed_from_membership_id).single();
+      if (!prev) return err("The membership this renewed could not be found.");
+      if (prev.is_active) return err("The previous membership is already active — refresh to see the current state.");
+      if (prev.branch_id !== mem.branch_id) {
+        return err("The student was moved to another branch after renewing early, so the previous membership can't be restored here. Use Delete Membership once the new period starts.");
+      }
+
+      // Renewal money actually received for the new membership: its "membership" ledger rows
+      // (the renewal payment plus anything paid later against its dues). Its "overtime" rows
+      // were old overtime settled at renewal and stay settled.
+      const { data: paidRows, error: paidErr } = await db.from("transactions").select("amount")
+        .eq("membership_id", mem.id).eq("category", "membership");
+      if (paidErr) return err(paidErr.message, 500);
+      const refund = Math.round((paidRows ?? []).reduce((sum, t: { amount: number }) => sum + Number(t.amount), 0) * 100) / 100;
+
+      // Claim first (only one cancel can win), then restore — same pattern as renewal itself.
+      const { data: endedRows, error: endErr } = await db.from("memberships").update({ is_active: false, fee_due: 0 })
+        .eq("id", mem.id).eq("is_active", true).select("id");
+      if (endErr) return err(endErr.message);
+      if (!endedRows?.length) return err("This membership is no longer active — refresh to see the current one.");
+
+      // Hold days taken during the gap pushed the NEW end date out; they belong to the old period.
+      const gapHoldDays = Number(mem.hold_days ?? 0);
+      const { error: restoreErr } = await db.from("memberships").update({
+        is_active: true,
+        end_date: gapHoldDays > 0 ? addDays(prev.end_date, gapHoldDays) : prev.end_date,
+        hold_days: Number(prev.hold_days ?? 0) + gapHoldDays,
+      }).eq("id", prev.id);
+      if (restoreErr) {
+        await db.from("memberships").update({ is_active: true }).eq("id", mem.id);
+        return err(`Couldn't restore the previous membership: ${restoreErr.message}`, 500);
+      }
+
+      // Attendance / overtime / holds recorded against the new membership during the gap belong
+      // to the period that was actually running.
+      await db.from("bookings").update({ membership_id: prev.id }).eq("membership_id", mem.id);
+      await db.from("overtime_sessions").update({ membership_id: prev.id }).eq("membership_id", mem.id);
+      await db.from("membership_holds").update({ membership_id: prev.id }).eq("membership_id", mem.id);
+      // Cashbacks this renewal used as a discount go back to pending for the next renewal.
+      await db.from("cashbacks").update({
+        status: "pending", redeemed_membership_id: null, redeemed_amount: null, redeemed_at: null,
+      }).eq("redeemed_membership_id", mem.id).eq("status", "redeemed");
+
+      if (refund > 0) {
+        await recordPayout(db, {
+          student_id: mem.student_id, branch_id: mem.branch_id, payout_type: "membership_refund",
+          amount: refund, notes: `Early renewal cancelled — renewal money refunded. Reason: ${String(reason).trim()}`,
+          created_by_staff_id: staff.id,
+        });
+      }
+      await db.from("membership_edits").insert({
+        membership_id: mem.id, student_id: mem.student_id, branch_id: mem.branch_id,
+        edit_type: "cancel_early_renewal", old_value: `${mem.start_date} → ${mem.end_date}`,
+        new_value: String(reason).trim(), changed_by_staff_id: staff.id,
+      });
+
+      await refreshStudentStatus(db, mem.student_id);
+      return json({ ok: true, refund, restoredMembershipId: prev.id, restoredEndDate: gapHoldDays > 0 ? addDays(prev.end_date, gapHoldDays) : prev.end_date });
     }
 
     // ─── CLOSE MEMBERSHIP ───
@@ -4748,6 +5278,7 @@ Deno.serve(async (req) => {
       const { data: mem } = await db.from("memberships").select("*").eq("id", membershipId).single();
       if (!mem) return err("Membership not found");
       if (!requireBranch(staff, mem.branch_id)) return err("Branch access denied", 403);
+      { const gap = notStartedYetMessage(mem, "close the membership that is running now"); if (gap) return err(gap); }
 
       const { data: locker } = await db.from("lockers").select("*")
         .eq("student_id", mem.student_id).eq("is_active", true).maybeSingle();
@@ -4772,17 +5303,9 @@ Deno.serve(async (req) => {
       const overtimeMinutes = (unbilledOvertime ?? []).reduce((s: number, o: { overtime_minutes: number }) => s + Number(o.overtime_minutes), 0);
       const overtimeDue = (unbilledOvertime ?? []).reduce((s: number, o: { billed_amount: number | null }) => s + Number(o.billed_amount ?? 0), 0);
 
-      // Quitting isn't always same-day — staff sometimes only get around to closing a
-      // membership a few days after it actually expired. Default assumption is the student
-      // kept using the space in the meantime, billed at the same per-day rate as the plan
-      // itself; staff can waive it with waiveOverstayCharge on the actual close if the
-      // student genuinely stopped coming on the expiry date and this is just a late
-      // paperwork close.
-      const today = todayISO();
-      const overstayDays = Math.max(0, daysBetween(mem.end_date, today));
-      const grossFee = Number(mem.monthly_fee) * Number(mem.months_paid);
-      const totalDays = membershipTotalDays(mem);
-      const overstayCharge = overstayDays > 0 ? Math.round((grossFee / totalDays) * overstayDays) : 0;
+      // Overstay (RSP O1–O3): only up to the last member check-in after expiry. This preview
+      // returns the full charge; the dialog strikes it through if staff tick "waive".
+      const { overstayDays, overstayCharge, lastVisitDate, overstayDailyRate } = await computeOverstay(db, mem);
 
       const totalOwed = membershipDue + lockerDue + foodPassOwed + unpaidFoodTotal + overtimeDue + overstayCharge;
       const totalCredit = lockerDepositRefund + foodPassRefund + cashbackAmount;
@@ -4792,7 +5315,8 @@ Deno.serve(async (req) => {
         membershipDue, lockerDue, lockerDepositRefund,
         foodPassBalance, foodPassRefund, foodPassOwed, unpaidFoodTotal,
         cashbackAmount, overtimeMinutes, overtimeDue,
-        overstayDays, overstayCharge,
+        overstayDays, overstayCharge, lastVisitDate, overstayDailyRate,
+        planEndDate: mem.end_date,
         totalOwed, totalCredit, netAmount,
         canClose: true,
         locker: locker ?? null,
@@ -4834,27 +5358,15 @@ Deno.serve(async (req) => {
       const overtimeDue = (unbilledOvertime ?? []).reduce((s: number, o: { billed_amount: number | null }) => s + Number(o.billed_amount ?? 0), 0);
 
       const today = todayISO();
-      const grossFee = Number(mem.monthly_fee) * Number(mem.months_paid);
-      const totalDays = membershipTotalDays(mem);
-      // Signed gap between today and end_date splits into exactly one of the two below —
-      // a membership can't simultaneously have unused days left AND be overstayed.
-      const daysSinceEnd = Math.round(
-        (new Date(today + "T00:00:00Z").getTime() - new Date(mem.end_date + "T00:00:00Z").getTime()) / 86_400_000,
-      );
-      const remainingDays = Math.max(0, -daysSinceEnd);
-      // waiveProratedRefund lets staff omit this credit entirely — e.g. the student is
-      // quitting early by choice and the business's policy is no refund for unused days,
-      // rather than the app forcing one.
-      const rawProratedRefund = waiveProratedRefund ? 0 : (grossFee / totalDays) * remainingDays;
-      const proratedRefund = Math.round(Math.max(0, Math.min(rawProratedRefund, Number(mem.total_paid) + membershipDue)));
-
-      // Same overstay concept as close_membership — a Delete Membership done days after the
-      // student's plan already expired defaults to billing those extra days at the plan's
-      // own per-day rate; waiveOverstayCharge lets staff confirm the student actually left
-      // on the expiry date and this is just a late close.
-      const overstayDays = Math.max(0, daysSinceEnd);
-      const overstayCharge = overstayDays > 0 && !waiveOverstayCharge
-        ? Math.round((grossFee / totalDays) * overstayDays) : 0;
+      // A membership is either still running (unused days to refund) or already over (possible
+      // overstay) — never both. waiveProratedRefund lets staff omit the refund entirely (e.g. a
+      // no-refund policy for leaving early by choice).
+      const { proratedRefund, remainingDays, totalDays, planAmount, refundDailyRate } = unusedDaysRefund(mem as any, today, !!waiveProratedRefund);
+      // Same overstay rule as Quit (RSP O1–O3); the full amount is kept for the waiver log.
+      const overstay = await computeOverstay(db, mem as any);
+      const overstayDays = overstay.overstayDays;
+      const overstayChargeBeforeWaive = overstay.overstayCharge;
+      const overstayCharge = waiveOverstayCharge ? 0 : overstayChargeBeforeWaive;
 
       const totalOwed = membershipDue + lockerDue + foodPassOwed + unpaidFoodTotal + overtimeDue + overstayCharge;
       const totalCredit = lockerDepositRefund + foodPassRefund + cashbackAmount + proratedRefund;
@@ -4864,8 +5376,8 @@ Deno.serve(async (req) => {
         membershipDue, lockerDue, lockerDepositRefund,
         foodPassBalance, foodPassRefund, foodPassOwed, unpaidFoodTotal, unpaidFoodBills,
         cashbackAmount, cashbackContribs, overtimeMinutes, overtimeDue,
-        proratedRefund, remainingDays, totalDays, grossFee,
-        overstayDays, overstayCharge,
+        proratedRefund, remainingDays, totalDays, planAmount, refundDailyRate,
+        overstayDays, overstayCharge, overstayChargeBeforeWaive, lastVisitDate: overstay.lastVisitDate, overstayDailyRate: overstay.overstayDailyRate,
         totalOwed, totalCredit, netAmount,
         locker: locker ?? null, foodPass: foodPass ?? null, unbilledOvertime: unbilledOvertime ?? [],
         planChanges: planChanges ?? [],
@@ -4879,6 +5391,7 @@ Deno.serve(async (req) => {
       const { data: mem } = await db.from("memberships").select("*").eq("id", membershipId).single();
       if (!mem) return err("Membership not found");
       if (!requireBranch(staff, mem.branch_id)) return err("Branch access denied", 403);
+      { const gap = notStartedYetMessage(mem, "delete the membership that is running now"); if (gap) return err(gap); }
       if (!mem.is_active) return err("Membership is not active");
 
       const settlement = await computeDeleteSettlement(mem);
@@ -4900,6 +5413,7 @@ Deno.serve(async (req) => {
       const { data: mem } = await db.from("memberships").select("*").eq("id", membershipId).single();
       if (!mem) return err("Membership not found");
       if (!requireBranch(staff, mem.branch_id)) return err("Branch access denied", 403);
+      { const gap = notStartedYetMessage(mem, "delete the membership that is running now"); if (gap) return err(gap); }
       if (!mem.is_active) return err("Membership is not active");
       if (await hasOpenSession(db, mem.student_id)) {
         return err("This student is currently checked in — check them out before deleting the membership.");
@@ -4909,6 +5423,11 @@ Deno.serve(async (req) => {
 
       if (s.netAmount > 0 && !paymentMode) {
         return err(`₹${s.netAmount.toFixed(2)} still needs to be collected before deleting — choose a payment mode.`);
+      }
+      // RSP W2a — waiving overstay needs a reason (checked before anything is written).
+      const waiveReason = String(payload.waiveReason ?? "").trim();
+      if (waiveOverstayCharge && s.overstayChargeBeforeWaive > 0 && !waiveReason) {
+        return err("Enter a reason for waiving the overstay charge");
       }
 
       // Conditional on is_active so two deletes landing together can't both pay out the
@@ -4976,7 +5495,7 @@ Deno.serve(async (req) => {
       if (s.proratedRefund > 0) {
         await recordPayout(db, {
           student_id: mem.student_id, branch_id: mem.branch_id, payout_type: "membership_refund",
-          amount: s.proratedRefund, notes: `Prorated refund for ${s.remainingDays} unused of ${s.totalDays} day(s) — membership deleted`,
+          amount: s.proratedRefund, notes: `Refund for ${s.remainingDays} unused day(s) × ₹${s.refundDailyRate} (plan ₹${s.planAmount} ÷ ${s.totalDays} days) — membership deleted`,
           created_by_staff_id: staff.id,
         });
       }
@@ -4996,6 +5515,12 @@ Deno.serve(async (req) => {
       await recordSettlementIncome(db, {
         student_id: mem.student_id, branch_id: mem.branch_id, membership_id: membershipId, created_by_staff_id: staff.id,
       }, s, paymentMode, "membership deletion");
+      if (waiveOverstayCharge && s.overstayChargeBeforeWaive > 0) {
+        await recordWaiver(db, {
+          branch_id: mem.branch_id, student_id: mem.student_id, membership_id: membershipId, waiver_type: "overstay",
+          amount: s.overstayChargeBeforeWaive, reason: waiveReason, created_by_staff_id: staff.id,
+        });
+      }
 
       await refreshStudentStatus(db, mem.student_id);
       return json({
@@ -5012,6 +5537,7 @@ Deno.serve(async (req) => {
       const { data: mem } = await db.from("memberships").select("*").eq("id", membershipId).single();
       if (!mem) return err("Membership not found");
       if (!requireBranch(staff, mem.branch_id)) return err("Branch access denied", 403);
+      { const gap = notStartedYetMessage(mem, "close the membership that is running now"); if (gap) return err(gap); }
       // Most of this settlement self-heals on a re-run (the deposit is marked returned, the
       // pass is zeroed, fee_due is cleared), but the overstay charge does not — it's derived
       // from end_date vs today, which nothing here resets, so a second Quit would re-bill the
@@ -5047,15 +5573,12 @@ Deno.serve(async (req) => {
       const overtimeMinutes = (unbilledOvertime ?? []).reduce((s: number, o: { overtime_minutes: number }) => s + Number(o.overtime_minutes), 0);
       const overtimeDue = (unbilledOvertime ?? []).reduce((s: number, o: { billed_amount: number | null }) => s + Number(o.billed_amount ?? 0), 0);
 
-      // See get_membership_closure_summary — waiveOverstayCharge lets staff confirm the
-      // student actually left on the expiry date and this is only a late paperwork close,
-      // so nothing gets billed for the gap.
-      const today = todayISO();
-      const overstayDays = Math.max(0, daysBetween(mem.end_date, today));
-      const grossFee = Number(mem.monthly_fee) * Number(mem.months_paid);
-      const totalDays = membershipTotalDays(mem);
-      const overstayCharge = overstayDays > 0 && !waiveOverstayCharge
-        ? Math.round((grossFee / totalDays) * overstayDays) : 0;
+      // Overstay (RSP O1–O3): only up to the last member check-in after expiry; staff can still
+      // waive it (the full amount is kept for the waiver log).
+      const overstay = await computeOverstay(db, mem);
+      const overstayDays = overstay.overstayDays;
+      const overstayChargeBeforeWaive = overstay.overstayCharge;
+      const overstayCharge = waiveOverstayCharge ? 0 : overstayChargeBeforeWaive;
 
       const totalOwed = membershipDue + lockerDue + foodPassOwed + unpaidFoodTotal + overtimeDue + overstayCharge;
       const totalCredit = lockerDepositRefund + foodPassRefund + cashbackAmount;
@@ -5063,6 +5586,11 @@ Deno.serve(async (req) => {
 
       if (netAmount > 0 && !paymentMode) {
         return err(`₹${netAmount.toFixed(2)} still needs to be collected before closing — choose a payment mode.`);
+      }
+      // RSP W2a — waiving overstay needs a reason (checked before anything is written).
+      const waiveReason = String(payload.waiveReason ?? "").trim();
+      if (waiveOverstayCharge && overstayChargeBeforeWaive > 0 && !waiveReason) {
+        return err("Enter a reason for waiving the overstay charge");
       }
 
       // Conditional on is_active so two closes landing together can't both pay out the
@@ -5141,6 +5669,12 @@ Deno.serve(async (req) => {
       await recordSettlementIncome(db, {
         student_id: mem.student_id, branch_id: mem.branch_id, membership_id: membershipId, created_by_staff_id: staff.id,
       }, { netAmount, membershipDue, overstayCharge, overstayDays, lockerDue, foodPassOwed, unpaidFoodTotal, overtimeDue }, paymentMode, "membership closure");
+      if (waiveOverstayCharge && overstayChargeBeforeWaive > 0) {
+        await recordWaiver(db, {
+          branch_id: mem.branch_id, student_id: mem.student_id, membership_id: membershipId, waiver_type: "overstay",
+          amount: overstayChargeBeforeWaive, reason: waiveReason, created_by_staff_id: staff.id,
+        });
+      }
 
       await refreshStudentStatus(db, mem.student_id);
       return json({

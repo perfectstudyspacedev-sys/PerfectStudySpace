@@ -1,9 +1,12 @@
-import { useState, useEffect, useCallback } from 'react'
-import { useNavigate, Link } from 'react-router-dom'
+import { useState, useEffect, useCallback, useRef } from 'react'
+import { useNavigate, Link, useOutletContext } from 'react-router-dom'
 import { useAuth } from '../context/AuthContext'
 import { api } from '../lib/api'
-import { formatCurrency, formatDate, getMultiMonthDiscount, pendingCashbackTotal, todayISO, shiftDate, openWhatsApp, DEFAULT_WELCOME_TEMPLATE, REFERRAL_OPTIONS } from '../lib/utils'
+import { formatCurrency, formatDate, getMultiMonthDiscount, pendingCashbackTotal, todayISO, openWhatsApp, DEFAULT_WELCOME_TEMPLATE, REFERRAL_OPTIONS, renewalInfo, isNotStartedYet } from '../lib/utils'
 import PaymentModeSelector, { isSplitValid } from '../components/PaymentModeSelector'
+import RenewalKindBanner from '../components/RenewalKindBanner'
+import PendingSignupsPanel from '../components/PendingSignupsPanel'
+import ConfirmDialog from '../components/ConfirmDialog'
 import { DEV_MODE } from '../lib/devMode'
 
 // Fallback packages — used only until live rates are fetched from fee_config (Branch Settings)
@@ -15,17 +18,9 @@ const DEFAULT_PERM_PACKAGES = [
   { hours: 12, fee: 2100 }, { hours: 13, fee: 2200 }, { hours: 14, fee: 2300 },
   { hours: 15, fee: 2400 }, { hours: 24, fee: 2500 },
 ]
-// Mirrors MEMBERSHIP_GRACE_DAYS / the startDate calc in renew_membership (supabase/functions/api/index.ts)
-// so the modal's default matches exactly what the server would pick if left unedited.
-const MEMBERSHIP_GRACE_DAYS = 10
 // How many days of history the WhatsApp study report covers. get_student_profile caps the
 // bookings it returns (see limit there) — keep that cap comfortably above days × sessions/day.
 const STUDY_REPORT_DAYS = 21
-function defaultRenewStartDate(endDate) {
-  const today = todayISO()
-  const daysSinceExpiry = Math.round((new Date(today) - new Date(endDate)) / 86_400_000)
-  return daysSinceExpiry > MEMBERSHIP_GRACE_DAYS ? today : shiftDate(endDate, 1)
-}
 
 // ── Active Members tab ─────────────────────────────────────────────────────
 function ActiveMembersTab({ branchId, tempPackages, permPackages }) {
@@ -55,9 +50,11 @@ function ActiveMembersTab({ branchId, tempPackages, permPackages }) {
   const [closePayMode, setClosePayMode] = useState('cash')
   const [withholdLockerDeposit, setWithholdLockerDeposit] = useState(false)
   const [waiveOverstayCharge, setWaiveOverstayCharge] = useState(false)
+  const [waiveReason, setWaiveReason] = useState('')
   const [cashbackNotice, setCashbackNotice] = useState(null)
   const [settlementNotice, setSettlementNotice] = useState(null)
   const [waLoadingId, setWaLoadingId] = useState(null)
+  const [onHoldNotice, setOnHoldNotice] = useState(null)
 
   const load = useCallback(async () => {
     if (!branchId) return
@@ -179,11 +176,16 @@ function ActiveMembersTab({ branchId, tempPackages, permPackages }) {
   }
 
   const openRenewModal = (m) => {
+    // Same rule the server enforces — checked here too so staff aren't sent through the whole
+    // form only to be refused at the end.
+    if (m.is_paused) return setOnHoldNotice(m.student_name)
     const wasCustomPlan = m.hours_per_day_weekend != null
+    const renewal = renewalInfo(m.end_date)
     setRenewModal({
       membershipId: m.membership_id, studentName: m.student_name,
       pendingCashbacks: m.pending_cashbacks ?? (m.pending_cashback ? [m.pending_cashback] : []),
       overtimeDue: Number(m.unbilled_overtime_due) || 0,
+      renewal, endDate: m.end_date,
     })
     setRenewCategory(m.category)
     setRenewHoursPerDay(wasCustomPlan ? 'custom' : m.hours_per_day)
@@ -193,7 +195,7 @@ function ActiveMembersTab({ branchId, tempPackages, permPackages }) {
     setRenewMonths(1)
     setRenewCustomDays('')
     setRenewCustomDaysAmount('')
-    setRenewStartDate(defaultRenewStartDate(m.end_date))
+    setRenewStartDate(renewal.startDate)
     setRenewPayMode({ mode: 'cash', cashAmount: '', upiAmount: '' })
     setRenewPayType('full')
     setRenewAdvance('')
@@ -206,6 +208,7 @@ function ActiveMembersTab({ branchId, tempPackages, permPackages }) {
     setClosePayMode('cash')
     setWithholdLockerDeposit(false)
     setWaiveOverstayCharge(false)
+    setWaiveReason('')
     try {
       const summary = await api('get_membership_closure_summary', { membershipId })
       setCloseSummary(summary)
@@ -230,6 +233,7 @@ function ActiveMembersTab({ branchId, tempPackages, permPackages }) {
         paymentMode: closeEffectiveNetAmount > 0 ? closePayMode : undefined,
         withholdLockerDeposit: withholdLockerDeposit || undefined,
         waiveOverstayCharge: waiveOverstayCharge || undefined,
+        waiveReason: waiveOverstayCharge ? waiveReason.trim() : undefined,
       })
       setCloseModal(null)
       if (res.refundAmount > 0) {
@@ -320,6 +324,7 @@ function ActiveMembersTab({ branchId, tempPackages, permPackages }) {
   // Compute renewal fee for the renewal modal — plan (category/hours) is editable at renewal time
   const renewIsCustomPlan = renewHoursPerDay === 'custom'
   const renewIsCustomDays = renewMonths === 'custom'
+  const renewPlanLocked = renewModal?.renewal?.kind === 'early'
   const renewPackages = renewCategory === 'permanent' ? permPackages : tempPackages
   const renewPkg = renewPackages.find(p => p.hours === renewHoursPerDay) ?? renewPackages[0]
   const renewMonthlyFee = renewIsCustomPlan ? (Number(renewCustomAmount) || 0) : (renewPkg?.fee ?? 0)
@@ -419,6 +424,11 @@ function ActiveMembersTab({ branchId, tempPackages, permPackages }) {
                     {isExpired && (
                       <div style={{ color: '#ff6b6b', fontSize: '0.7rem', fontWeight: 700 }}>EXPIRED</div>
                     )}
+                    {isNotStartedYet(m) && (
+                      <div data-testid="renewed-early" style={{ color: '#4ade80', fontSize: '0.7rem', fontWeight: 700 }}>
+                        Renewed early · starts {formatDate(m.start_date)}
+                      </div>
+                    )}
                   </td>
                   <td className="mono" style={{ fontSize: '0.85rem', fontWeight: 700, color: isExpired ? '#ff6b6b' : expiringSoonRow ? '#ffaa44' : undefined }}>
                     {isExpired ? `${Math.abs(daysLeft)}d ago` : `${daysLeft}d`}
@@ -515,11 +525,12 @@ function ActiveMembersTab({ branchId, tempPackages, permPackages }) {
         <div className="modal-overlay" onClick={() => setRenewModal(null)}>
           <div className="modal" style={{ maxWidth: 420 }} onClick={(e) => e.stopPropagation()}>
             <h2>Renew Membership</h2>
-            <p style={{ color: 'var(--text-muted)', marginBottom: '1rem' }}>{renewModal.studentName}</p>
+            <p style={{ color: 'var(--text-muted)', marginBottom: '0.75rem' }}>{renewModal.studentName}</p>
+            <RenewalKindBanner renewal={renewModal.renewal} endDate={renewModal.endDate} />
 
             <div className="form-group">
               <label>Plan</label>
-              <select value={renewCategory} onChange={(e) => setRenewCategory(e.target.value)}>
+              <select value={renewCategory} disabled={renewPlanLocked} onChange={(e) => setRenewCategory(e.target.value)}>
                 <option value="temporary">Temporary (floating seat)</option>
                 <option value="permanent">Permanent (fixed cabin)</option>
               </select>
@@ -527,12 +538,17 @@ function ActiveMembersTab({ branchId, tempPackages, permPackages }) {
 
             <div className="form-group">
               <label>Hours per Day</label>
-              <select value={renewHoursPerDay} onChange={(e) => setRenewHoursPerDay(e.target.value === 'custom' ? 'custom' : Number(e.target.value))}>
+              <select value={renewHoursPerDay} disabled={renewPlanLocked} onChange={(e) => setRenewHoursPerDay(e.target.value === 'custom' ? 'custom' : Number(e.target.value))}>
                 {renewPackages.map(p => (
                   <option key={p.hours} value={p.hours}>{p.hours} hrs/day — {formatCurrency(p.fee)}/mo</option>
                 ))}
                 <option value="custom">Custom Plan</option>
               </select>
+              {renewPlanLocked && (
+                <p style={{ fontSize: '0.75rem', color: 'var(--text-muted)', marginTop: '0.3rem' }}>
+                  Early renewals keep the same plan. Use Change Plan once the new period starts.
+                </p>
+              )}
             </div>
             {renewIsCustomPlan && (
               <div className="form-group">
@@ -543,11 +559,11 @@ function ActiveMembersTab({ branchId, tempPackages, permPackages }) {
                     value={renewCustomAmount} onChange={(e) => setRenewCustomAmount(e.target.value)}
                   />
                   <input
-                    type="number" min={0} step={0.5} placeholder="Weekday Hours"
+                    type="number" min={0} step={0.5} placeholder="Weekday Hours" disabled={renewPlanLocked}
                     value={renewCustomWeekdayHours} onChange={(e) => setRenewCustomWeekdayHours(e.target.value)}
                   />
                   <input
-                    type="number" min={0} step={0.5} placeholder="Weekend Hours (defaults to weekday if left blank)"
+                    type="number" min={0} step={0.5} placeholder="Weekend Hours (defaults to weekday if left blank)" disabled={renewPlanLocked}
                     value={renewCustomWeekendHours} onChange={(e) => setRenewCustomWeekendHours(e.target.value)}
                   />
                 </div>
@@ -581,7 +597,11 @@ function ActiveMembersTab({ branchId, tempPackages, permPackages }) {
 
             <div className="form-group">
               <label>Start Date</label>
-              <input type="date" value={renewStartDate} max={todayISO()} onChange={(e) => setRenewStartDate(e.target.value)} />
+              {renewModal.renewal.fixed ? (
+                <p className="mono" style={{ fontSize: '0.9rem' }}>{formatDate(renewStartDate)} <span style={{ color: 'var(--text-muted)', fontSize: '0.75rem' }}>(fixed — the day after the current plan ends)</span></p>
+              ) : (
+                <input type="date" value={renewStartDate} min={renewModal.renewal.minStart} max={renewModal.renewal.maxStart} onChange={(e) => setRenewStartDate(e.target.value)} />
+              )}
             </div>
 
             {renewPayType !== 'pending' && (
@@ -678,8 +698,11 @@ function ActiveMembersTab({ branchId, tempPackages, permPackages }) {
                   {closeSummary.overtimeDue > 0 && <p className="mono" style={{ fontSize: '0.85rem' }}>Overtime ({closeSummary.overtimeMinutes}m): {formatCurrency(closeSummary.overtimeDue)}</p>}
                   {closeSummary.overstayDays > 0 && (
                     <p className="mono" style={{ fontSize: '0.85rem', textDecoration: waiveOverstayCharge ? 'line-through' : 'none', color: waiveOverstayCharge ? 'var(--text-muted)' : undefined }}>
-                      Used {closeSummary.overstayDays} extra day{closeSummary.overstayDays === 1 ? '' : 's'} past expiry: {formatCurrency(closeSummary.overstayCharge)}
+                      Overstay: last visit {formatDate(closeSummary.lastVisitDate)} → {closeSummary.overstayDays} day{closeSummary.overstayDays === 1 ? '' : 's'} × {formatCurrency(closeSummary.overstayDailyRate)} = {formatCurrency(closeSummary.overstayCharge)}
                     </p>
+                  )}
+                  {closeSummary.overstayDays === 0 && closeSummary.planEndDate < todayISO() && (
+                    <p style={{ fontSize: '0.78rem', color: 'var(--text-muted)' }}>No member check-ins since the plan ended — no overstay charged.</p>
                   )}
                   <p className="mono" style={{ fontWeight: 700, marginTop: '0.3rem' }}>
                     Total: {formatCurrency(closeSummary.totalOwed - (waiveOverstayCharge ? closeSummary.overstayCharge : 0))}
@@ -693,8 +716,19 @@ function ActiveMembersTab({ branchId, tempPackages, permPackages }) {
                       onChange={(e) => setWaiveOverstayCharge(e.target.checked)}
                       style={{ marginTop: '0.15rem' }}
                     />
-                    <span>Student already vacated on the expiry date — they didn't actually use these {closeSummary.overstayDays} extra day{closeSummary.overstayDays === 1 ? '' : 's'}, this is just a late close. Waive the charge.</span>
+                    <span>Waive the overstay charge of {formatCurrency(closeSummary.overstayCharge)} ({closeSummary.overstayDays} day{closeSummary.overstayDays === 1 ? '' : 's'} after the plan ended).</span>
                   </label>
+                )}
+                {closeSummary.overstayDays > 0 && waiveOverstayCharge && (
+                  <div className="form-group">
+                    <label>Reason for waiving (required)</label>
+                    <input
+                      data-testid="close-waive-reason"
+                      value={waiveReason} maxLength={300}
+                      onChange={(e) => setWaiveReason(e.target.value)}
+                      placeholder="e.g. was unwell, owner approved"
+                    />
+                  </div>
                 )}
 
                 <div className="card" style={{ marginBottom: '1rem', background: 'rgba(74,222,128,0.05)' }}>
@@ -758,7 +792,7 @@ function ActiveMembersTab({ branchId, tempPackages, permPackages }) {
               <button type="button" className="btn btn-ghost" onClick={() => setCloseModal(null)}>Cancel</button>
               <button
                 type="button" className="btn btn-primary"
-                disabled={!closeSummary || closeLoading}
+                disabled={!closeSummary || closeLoading || (waiveOverstayCharge && closeSummary.overstayDays > 0 && !waiveReason.trim())}
                 onClick={confirmClose}
               >
                 {closeLoading ? 'Quitting…'
@@ -769,6 +803,12 @@ function ActiveMembersTab({ branchId, tempPackages, permPackages }) {
             </div>
           </div>
         </div>
+      )}
+
+      {onHoldNotice && (
+        <ConfirmDialog title="Membership on hold" testId="on-hold-dialog" onConfirm={() => setOnHoldNotice(null)}>
+          {onHoldNotice}'s membership is on hold — resume it from their profile before renewing.
+        </ConfirmDialog>
       )}
 
       {cashbackNotice && (
@@ -831,9 +871,16 @@ function ActiveMembersTab({ branchId, tempPackages, permPackages }) {
 }
 
 // ── New Membership form ────────────────────────────────────────────────────
-function NewMembershipForm({ branchId, onCreated, tempPackages, permPackages }) {
+function NewMembershipForm({ branchId, onCreated, tempPackages, permPackages, signups }) {
   const navigate = useNavigate()
   const { isOwner } = useAuth()
+  // SSP A1 — the self sign-up currently loaded into this form (this staff member holds its lock).
+  const [activeSignup, setActiveSignup] = useState(null)
+  const [signupBusyId, setSignupBusyId] = useState(null)
+  const [signupError, setSignupError] = useState('')
+  const [denyTarget, setDenyTarget] = useState(null)
+  const activeSignupRef = useRef(null)
+  const formTopRef = useRef(null)
   const [name, setName] = useState('')
   const [phone, setPhone] = useState('')
   const [emergencyContact, setEmergencyContact] = useState('')
@@ -932,13 +979,80 @@ function NewMembershipForm({ branchId, onCreated, tempPackages, permPackages }) 
     if (p.length !== 10) return
     try {
       const { student } = await api('lookup_student', { phone: p })
+      // Details a student just typed on the sign-up link are newer than what's on file —
+      // don't overwrite them with a returning student's old name/course.
+      const fromSignup = activeSignupRef.current?.phone === p
       if (student?.name) {
-        setName(student.name)
+        if (!fromSignup) setName(student.name)
         setSelectedStudent(student)
       }
-      if (student?.course) setCourse(student.course)
+      if (student?.course && !fromSignup) setCourse(student.course)
     } catch { /* ignore */ }
   }, [])
+
+  const signupsChanged = () => window.dispatchEvent(new Event('pss:signups-changed'))
+
+  const releaseSignup = (s) => {
+    if (s) api('release_signup_request', { id: s.id }).catch(() => {}).finally(signupsChanged)
+  }
+
+  // Leaving the page with a sign-up loaded puts it back for someone else (C2); if the tab is
+  // just closed, the server releases the lock after 15 minutes anyway.
+  useEffect(() => () => releaseSignup(activeSignupRef.current), [])
+
+  const setSignup = (s) => { activeSignupRef.current = s; setActiveSignup(s) }
+
+  const clearForm = () => {
+    setName(''); setPhone(''); setEmergencyContact(''); setCourse(''); setReferralSource('')
+    setSelectedStudent(null); setError('')
+  }
+
+  const approveSignup = async (r) => {
+    setSignupError('')
+    setSignupBusyId(r.id)
+    try {
+      const { request } = await api('claim_signup_request', { id: r.id })
+      if (activeSignupRef.current && activeSignupRef.current.id !== request.id) releaseSignup(activeSignupRef.current)
+      setSignup({ id: request.id, ref: request.ref, phone: request.phone })
+      setSelectedStudent(null)
+      setName(request.name)
+      setPhone(request.phone)
+      setEmergencyContact(request.emergencyContact)
+      setCourse(request.course ?? '')
+      setReferralSource(request.referralSource)
+      setError('')
+      formTopRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' })
+    } catch (e) {
+      setSignupError(e.message)
+    } finally {
+      setSignupBusyId(null)
+      signupsChanged()
+    }
+  }
+
+  const putBackSignup = () => {
+    releaseSignup(activeSignupRef.current)
+    setSignup(null)
+    clearForm()
+  }
+
+  const denySignup = (r) => { setSignupError(''); setDenyTarget(r) }
+
+  const confirmDeny = async () => {
+    const r = denyTarget
+    if (!r) return
+    setSignupBusyId(r.id)
+    try {
+      await api('deny_signup_request', { id: r.id })
+      if (activeSignupRef.current?.id === r.id) { setSignup(null); clearForm() }
+    } catch (e) {
+      setSignupError(e.message)
+    } finally {
+      setDenyTarget(null)
+      setSignupBusyId(null)
+      signupsChanged()
+    }
+  }
 
   useEffect(() => {
     if (phone.length === 10) lookupPhone(phone)
@@ -1039,7 +1153,9 @@ function NewMembershipForm({ branchId, onCreated, tempPackages, permPackages }) 
         isCustomDays: isCustomDays || undefined,
         customDays: isCustomDays ? Number(customDays) : undefined,
         customDaysAmount: isCustomDays ? Number(customDaysAmount) : undefined,
+        signupId: activeSignup?.id,
       })
+      if (activeSignup) { setSignup(null); signupsChanged() }
       // The backend skips the locker (and its ₹200) if the number was taken moments before
       // submit — the receipt must not show money that was never charged.
       const receiptTotal = withLocker && result.lockerWarning ? grandTotal - lockerExtra : grandTotal
@@ -1102,8 +1218,33 @@ function NewMembershipForm({ branchId, onCreated, tempPackages, permPackages }) 
   }
 
   return (
+    <>
+    {denyTarget && (
+      <ConfirmDialog
+        title={`Deny sign-up #${denyTarget.ref}?`} testId="deny-signup-dialog" danger
+        confirmLabel="Deny & delete" busy={signupBusyId === denyTarget.id}
+        onConfirm={confirmDeny} onCancel={() => setDenyTarget(null)}
+      >
+        <strong style={{ color: 'var(--text)' }}>{denyTarget.name}</strong>'s details will be deleted. They can fill in the sign-up link again if needed.
+      </ConfirmDialog>
+    )}
     <div style={{ display: 'grid', gridTemplateColumns: isOwner ? 'minmax(320px, 560px) 1fr' : '1fr', gap: '1rem', alignItems: 'start' }}>
-    <div className="card" style={{ maxWidth: 560 }}>
+    {/* Pending sign-ups sit in the same column as the form, so the two line up. */}
+    <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem', maxWidth: 560, minWidth: 0 }}>
+    {signups && (
+      <PendingSignupsPanel
+        requests={signups.requests} branchId={branchId} activeSignupId={activeSignup?.id}
+        busyId={signupBusyId} error={signupError || signups.error}
+        onApprove={approveSignup} onDeny={denySignup}
+      />
+    )}
+    <div className="card" ref={formTopRef}>
+      {activeSignup && (
+        <div data-testid="signup-prefill-banner" style={{ background: 'rgba(244,114,182,0.08)', border: '1px solid rgba(244,114,182,0.4)', borderRadius: 6, padding: '0.55rem 0.7rem', marginBottom: '1rem', fontSize: '0.82rem' }}>
+          <strong style={{ color: '#f472b6' }}>From self sign-up #{activeSignup.ref}</strong> — check the details with the student, then choose the plan and payment and press Create Membership.
+          <button type="button" className="btn btn-ghost" style={{ marginLeft: '0.5rem', fontSize: '0.75rem', padding: '0.2rem 0.6rem' }} onClick={putBackSignup}>Put back</button>
+        </div>
+      )}
       <form onSubmit={handleSubmit}>
         <div className="form-group" style={{ position: 'relative' }}>
           <label>Full Name *</label>
@@ -1377,6 +1518,7 @@ function NewMembershipForm({ branchId, onCreated, tempPackages, permPackages }) 
         </button>
       </form>
     </div>
+    </div>
 
     {isOwner && (
       <div className="card">
@@ -1400,6 +1542,7 @@ function NewMembershipForm({ branchId, onCreated, tempPackages, permPackages }) 
       </div>
     )}
     </div>
+    </>
   )
 }
 
@@ -1688,6 +1831,9 @@ function CombinedMembershipView() {
 // ── Page ───────────────────────────────────────────────────────────────────
 export default function MembershipPage() {
   const { branchId, isCombinedHall } = useAuth()
+  // SSP: pending self sign-ups, polled once by the Shell and shared through the Outlet.
+  const { signups } = useOutletContext() ?? {}
+  const pendingHere = (signups?.requests ?? []).filter(r => r.branchId === branchId).length
   const [tab, setTab] = useState('active')
   const [tempPackages, setTempPackages] = useState(DEFAULT_TEMP_PACKAGES)
   const [permPackages, setPermPackages] = useState(DEFAULT_PERM_PACKAGES)
@@ -1717,7 +1863,9 @@ export default function MembershipPage() {
       <div className="page-header"><h1>Membership</h1></div>
       <div className="tabs">
         <button type="button" className={tab === 'active' ? 'active' : ''} onClick={() => setTab('active')}>Active Members</button>
-        <button type="button" className={tab === 'new' ? 'active' : ''} onClick={() => setTab('new')}>New Registration</button>
+        <button type="button" className={tab === 'new' ? 'active' : ''} onClick={() => setTab('new')}>
+          New Registration{pendingHere > 0 && <span data-testid="signup-tab-badge" style={{ marginLeft: '0.35rem', background: '#f472b6', color: '#1f0a17', borderRadius: 999, padding: '0 0.4rem', fontSize: '0.7rem', fontWeight: 700 }}>{pendingHere}</span>}
+        </button>
         <button type="button" className={tab === 'locker' ? 'active' : ''} onClick={() => setTab('locker')}>Locker</button>
         <button
           type="button"
@@ -1734,7 +1882,7 @@ export default function MembershipPage() {
       {tab === 'new' && (
         <NewMembershipForm
           branchId={branchId} onCreated={() => setTab('active')}
-          tempPackages={tempPackages} permPackages={permPackages}
+          tempPackages={tempPackages} permPackages={permPackages} signups={signups}
         />
       )}
       {tab === 'locker' && <LockerTab branchId={branchId} />}

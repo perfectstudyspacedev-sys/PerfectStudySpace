@@ -88,26 +88,29 @@ export function useMessageAlerts(branchId, currentStaffId, canSeeAllBranches) {
         // add nothing.
         const isCrossBranch = m.content.startsWith('[cross_branch]')
         const isNewEnquiry = m.content.startsWith('[new_enquiry]')
+        // SSP: a student sent their details from the branch's self sign-up link.
+        const isNewSignup = m.content.startsWith('[new_signup]')
         // Owner/admin fetched every branch above — an untagged chat message from a branch
         // other than the one they actually have open is someone else's team chat, not
         // something meant for them right now. Marked seen already (above) so switching to
         // that branch later won't dredge it back up as "new". Exempt: tagged system
         // notices (the whole point of fetching every branch), and the all-staff channel
         // (m.branch_id null) — that one's already global by design, never branch-specific.
-        if (canSeeAllBranches && !isCrossBranch && !isNewEnquiry && m.branch_id != null && m.branch_id !== branchId) continue
+        if (canSeeAllBranches && !isCrossBranch && !isNewEnquiry && !isNewSignup && m.branch_id != null && m.branch_id !== branchId) continue
         const senderName = m.staff?.display_name || m.staff?.username || 'Staff'
-        const tagLength = isCrossBranch ? '[cross_branch]'.length : isNewEnquiry ? '[new_enquiry]'.length : 0
+        const tagLength = isCrossBranch ? '[cross_branch]'.length : isNewEnquiry ? '[new_enquiry]'.length : isNewSignup ? '[new_signup]'.length : 0
         const displayContent = tagLength ? m.content.slice(tagLength).trim() : m.content
-        const level = isCrossBranch ? 'cross_branch' : isNewEnquiry ? 'new_enquiry' : 'message'
+        const level = isCrossBranch ? 'cross_branch' : isNewEnquiry ? 'new_enquiry' : isNewSignup ? 'new_signup' : 'message'
         newToasts.push({
           id: `msg:${m.id}`, level,
           message: tagLength ? displayContent : `${senderName}: ${displayContent}`,
           createdAt: Date.parse(m.sent_at),
         })
         fireNativeNotification(
-          isCrossBranch ? '🔄 Cross-Branch Visit' : isNewEnquiry ? '📝 New Enquiry' : `💬 ${senderName}`,
+          isCrossBranch ? '🔄 Cross-Branch Visit' : isNewEnquiry ? '📝 New Enquiry' : isNewSignup ? '🆕 New Sign-up' : `💬 ${senderName}`,
           displayContent,
         )
+        if (isNewSignup) window.dispatchEvent(new Event('pss:signups-changed'))
       }
       // Persist whenever anything new was marked seen — not just when it produced a toast —
       // otherwise a message from the current staff member (skipped from toasting) would be
