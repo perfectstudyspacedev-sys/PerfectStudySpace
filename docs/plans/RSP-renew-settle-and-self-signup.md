@@ -2,7 +2,7 @@
 
 | | |
 |---|---|
-| **Status** | 🚧 In progress — see the ✅ marks below for what is done. |
+| **Status** | ✅ Built and tested on the branch (RSP + SSP). Not yet deployed — follow the deploy order at the end. |
 | **Agreed on** | 2026-10-04 |
 | **Execution order** | **Phase 1: RSP** first → **Phase 2: SSP** after RSP is finished and verified |
 | **Branch it was planned on** | `claude/loving-davinci-o5y9jm` |
@@ -196,12 +196,12 @@ the only active row; check-in looks only at `end_date`, not `start_date`.
 
 ## RSP — Testing (must pass before hand-over)
 
-- **T1.** Tests on the real server code: all 3 renewal types and every block; Cancel (refund, restore,
+- ✅ **T1.** Tests on the real server code: all 3 renewal types and every block; Cancel (refund, restore,
   cashback back to pending, re-pointed bookings); overstay (no visits / visits / after day 10 / walk-in
   ignored); refund (normal, discounted, custom days, legacy rows); waivers logged.
-- **T2.** Browser checks: type banner and fixed dates on both forms; label; button show/hide; Cancel flow;
+- ✅ **T2.** Browser checks: type banner and fixed dates on both forms; label; button show/hide; Cancel flow;
   W1 section; reason prompts.
-- **T3.** Re-run the existing Revenue (28) and renewal (8) browser checks, `npm run build`, and the edge
+- ✅ **T3.** Re-run the existing Revenue (28) and renewal (8) browser checks, `npm run build`, and the edge
   function type-check (no new errors vs. baseline).
 
 ## RSP — Not changing
@@ -304,9 +304,9 @@ the student fills their own details; staff approve and finish the registration.
 
 ## SSP — Testing (must pass before hand-over)
 
-- Server tests: submit, duplicate phone (update), active member flagged, lock, two staff at once,
+- ✅ Server tests: submit, duplicate phone (update), active member flagged, lock, two staff at once,
   Deny, end-of-day expiry, spam limit, invalid/rotated link.
-- Browser checks: student page at phone width, popup, badge, pre-filled form, "being handled" state.
+- ✅ Browser checks: student page at phone width, popup, badge, pre-filled form, "being handled" state.
 
 ## SSP — Not changing
 
