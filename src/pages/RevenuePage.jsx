@@ -128,8 +128,10 @@ export default function RevenuePage() {
   const referralReq = useRef(0)
   const txReq = useRef(0)
 
-  // Custom with nothing applied yet shows today's figures (as the hint below says).
-  const queryPeriod = period === 'custom' ? (appliedRange ? undefined : 'today') : period
+  // Custom with nothing applied yet shows today's figures (as the hint below says). Once
+  // applied it must say period 'custom': it used to send no period at all, and the server's
+  // `period ?? "today"` then ignored the dates — every custom range came back as today.
+  const queryPeriod = period === 'custom' ? (appliedRange ? 'custom' : 'today') : period
   const queryFrom = period === 'custom' && appliedRange ? appliedRange.from : undefined
   const queryTo = period === 'custom' && appliedRange ? appliedRange.to : undefined
 
