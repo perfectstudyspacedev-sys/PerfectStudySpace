@@ -6,6 +6,7 @@ import { formatCurrency, formatDate, getMultiMonthDiscount, pendingCashbackTotal
 import PaymentModeSelector, { isSplitValid } from '../components/PaymentModeSelector'
 import RenewalKindBanner from '../components/RenewalKindBanner'
 import PendingSignupsPanel from '../components/PendingSignupsPanel'
+import ConfirmDialog from '../components/ConfirmDialog'
 import { DEV_MODE } from '../lib/devMode'
 
 // Fallback packages — used only until live rates are fetched from fee_config (Branch Settings)
@@ -53,6 +54,7 @@ function ActiveMembersTab({ branchId, tempPackages, permPackages }) {
   const [cashbackNotice, setCashbackNotice] = useState(null)
   const [settlementNotice, setSettlementNotice] = useState(null)
   const [waLoadingId, setWaLoadingId] = useState(null)
+  const [onHoldNotice, setOnHoldNotice] = useState(null)
 
   const load = useCallback(async () => {
     if (!branchId) return
@@ -176,7 +178,7 @@ function ActiveMembersTab({ branchId, tempPackages, permPackages }) {
   const openRenewModal = (m) => {
     // Same rule the server enforces — checked here too so staff aren't sent through the whole
     // form only to be refused at the end.
-    if (m.is_paused) return window.alert('This membership is on hold — resume it before renewing.')
+    if (m.is_paused) return setOnHoldNotice(m.student_name)
     const wasCustomPlan = m.hours_per_day_weekend != null
     const renewal = renewalInfo(m.end_date)
     setRenewModal({
@@ -803,6 +805,12 @@ function ActiveMembersTab({ branchId, tempPackages, permPackages }) {
         </div>
       )}
 
+      {onHoldNotice && (
+        <ConfirmDialog title="Membership on hold" testId="on-hold-dialog" onConfirm={() => setOnHoldNotice(null)}>
+          {onHoldNotice}'s membership is on hold — resume it from their profile before renewing.
+        </ConfirmDialog>
+      )}
+
       {cashbackNotice && (
         <div className="modal-overlay" onClick={() => setCashbackNotice(null)}>
           <div className="modal" style={{ maxWidth: 400 }} onClick={(e) => e.stopPropagation()}>
@@ -870,6 +878,7 @@ function NewMembershipForm({ branchId, onCreated, tempPackages, permPackages, si
   const [activeSignup, setActiveSignup] = useState(null)
   const [signupBusyId, setSignupBusyId] = useState(null)
   const [signupError, setSignupError] = useState('')
+  const [denyTarget, setDenyTarget] = useState(null)
   const activeSignupRef = useRef(null)
   const formTopRef = useRef(null)
   const [name, setName] = useState('')
@@ -1027,9 +1036,11 @@ function NewMembershipForm({ branchId, onCreated, tempPackages, permPackages, si
     clearForm()
   }
 
-  const denySignup = async (r) => {
-    if (!window.confirm(`Deny sign-up #${r.ref} (${r.name})? It will be deleted.`)) return
-    setSignupError('')
+  const denySignup = (r) => { setSignupError(''); setDenyTarget(r) }
+
+  const confirmDeny = async () => {
+    const r = denyTarget
+    if (!r) return
     setSignupBusyId(r.id)
     try {
       await api('deny_signup_request', { id: r.id })
@@ -1037,6 +1048,7 @@ function NewMembershipForm({ branchId, onCreated, tempPackages, permPackages, si
     } catch (e) {
       setSignupError(e.message)
     } finally {
+      setDenyTarget(null)
       setSignupBusyId(null)
       signupsChanged()
     }
@@ -1207,6 +1219,15 @@ function NewMembershipForm({ branchId, onCreated, tempPackages, permPackages, si
 
   return (
     <>
+    {denyTarget && (
+      <ConfirmDialog
+        title={`Deny sign-up #${denyTarget.ref}?`} testId="deny-signup-dialog" danger
+        confirmLabel="Deny & delete" busy={signupBusyId === denyTarget.id}
+        onConfirm={confirmDeny} onCancel={() => setDenyTarget(null)}
+      >
+        <strong style={{ color: 'var(--text)' }}>{denyTarget.name}</strong>'s details will be deleted. They can fill in the sign-up link again if needed.
+      </ConfirmDialog>
+    )}
     {signups && (
       <PendingSignupsPanel
         requests={signups.requests} branchId={branchId} activeSignupId={activeSignup?.id}

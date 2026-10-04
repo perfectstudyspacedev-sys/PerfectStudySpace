@@ -5,6 +5,7 @@ import { useAuth } from '../context/AuthContext'
 import { formatCurrency, formatDate, paymentModeLabel, getMultiMonthDiscount, pendingCashbackTotal, todayISO, shiftDate, REFERRAL_OPTIONS, renewalInfo, isNotStartedYet } from '../lib/utils'
 import PaymentModeSelector, { isSplitValid } from '../components/PaymentModeSelector'
 import RenewalKindBanner from '../components/RenewalKindBanner'
+import ConfirmDialog from '../components/ConfirmDialog'
 
 const PAYMENT_OPTIONS = [
   { value: 'cash', label: '💵 Cash' },
@@ -510,6 +511,7 @@ export default function StudentProfilePage() {
   const [deleteMembershipLoading, setDeleteMembershipLoading] = useState(false)
   const [deleteMembershipError, setDeleteMembershipError] = useState('')
   const [deleteMembershipNotice, setDeleteMembershipNotice] = useState(null)
+  const [cancelRenewalNotice, setCancelRenewalNotice] = useState(null)
   const [deleteSummary, setDeleteSummary] = useState(null)
   const [deletePayMode, setDeletePayMode] = useState('cash')
   const [deleteReason, setDeleteReason] = useState('')
@@ -856,9 +858,7 @@ export default function StudentProfilePage() {
       const res = await api('cancel_early_renewal', { membershipId: activeMem.id, reason: cancelRenewalReason.trim() })
       setCancelRenewalOpen(false)
       setOpenPanel(null)
-      window.alert(res.refund > 0
-        ? `Early renewal cancelled. Refund ₹${res.refund} to the student. The previous plan is active again until ${formatDate(res.restoredEndDate)}.`
-        : `Early renewal cancelled. The previous plan is active again until ${formatDate(res.restoredEndDate)}.`)
+      setCancelRenewalNotice(res)
       refresh()
     } catch (err) {
       setCancelRenewalError(err.message)
@@ -2729,6 +2729,17 @@ export default function StudentProfilePage() {
             </div>
           </div>
         </div>
+      )}
+
+      {cancelRenewalNotice && (
+        <ConfirmDialog title="Early renewal cancelled" testId="cancel-renewal-done" confirmLabel="Got it" onConfirm={() => setCancelRenewalNotice(null)}>
+          {cancelRenewalNotice.refund > 0 && (
+            <p className="mono" style={{ color: '#4ade80', fontSize: '1.1rem', fontWeight: 700, marginBottom: '0.5rem' }}>
+              Refund {formatCurrency(cancelRenewalNotice.refund)} to the student
+            </p>
+          )}
+          The previous plan is active again until {formatDate(cancelRenewalNotice.restoredEndDate)}.
+        </ConfirmDialog>
       )}
 
       {redeemCashbackNotice != null && (

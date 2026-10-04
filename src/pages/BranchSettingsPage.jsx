@@ -3,9 +3,10 @@ import { Navigate } from 'react-router-dom'
 import { useAuth } from '../context/AuthContext'
 import { api } from '../lib/api'
 import { formatCurrency } from '../lib/utils'
+import ConfirmDialog from '../components/ConfirmDialog'
 
 export default function BranchSettingsPage() {
-  const { isOwner, branches, selectBranch } = useAuth()
+  const { isOwner, branches, selectBranch, branchId } = useAuth()
   const [selectedBranch, setSelectedBranch] = useState('')
   const [seatMap, setSeatMap] = useState(null)
   const [newDeskLabel, setNewDeskLabel] = useState('')
@@ -19,6 +20,7 @@ export default function BranchSettingsPage() {
   const [signupCode, setSignupCode] = useState(null)
   const [signupLinkMsg, setSignupLinkMsg] = useState('')
   const [rotating, setRotating] = useState(false)
+  const [confirmRotate, setConfirmRotate] = useState(false)
 
   const load = useCallback(async () => {
     if (!selectedBranch) return
@@ -30,9 +32,13 @@ export default function BranchSettingsPage() {
     setFeeConfig(fees.config ?? [])
   }, [selectedBranch])
 
+  // Follow the branch picked in the top bar (the Branch box below sets the same thing). This
+  // page used to pick the first branch once and ignore the top-bar switcher, so switching
+  // branch there left the desks, lockers and sign-up link showing the first branch.
   useEffect(() => {
-    if (branches.length && !selectedBranch) setSelectedBranch(branches[0].id)
-  }, [branches, selectedBranch])
+    if (!branches.length) return
+    setSelectedBranch(branches.some(b => b.id === branchId) ? branchId : branches[0].id)
+  }, [branches, branchId])
 
   useEffect(() => { load() }, [load])
 
@@ -91,6 +97,7 @@ export default function BranchSettingsPage() {
     }
   }
 
+  const selectedBranchName = branches.find(b => b.id === selectedBranch)?.name ?? ''
   const signupUrl = signupCode ? `${window.location.origin}/join/${signupCode}` : ''
 
   const copySignupLink = async () => {
@@ -103,7 +110,6 @@ export default function BranchSettingsPage() {
   }
 
   const makeNewSignupLink = async () => {
-    if (!window.confirm('Make a new link? The current link stops working immediately — anyone you sent it to will need the new one.')) return
     setRotating(true)
     try {
       const { code } = await api('rotate_signup_link', { branchId: selectedBranch })
@@ -113,6 +119,7 @@ export default function BranchSettingsPage() {
       setSignupLinkMsg(e.message)
     } finally {
       setRotating(false)
+      setConfirmRotate(false)
     }
   }
 
@@ -146,6 +153,15 @@ export default function BranchSettingsPage() {
     <>
       <div className="page-header"><h1>Branch & Desk Settings</h1></div>
 
+      {confirmRotate && (
+        <ConfirmDialog
+          title="Make a new sign-up link?" testId="rotate-link-dialog" danger confirmLabel="Make new link" busy={rotating}
+          onConfirm={makeNewSignupLink} onCancel={() => setConfirmRotate(false)}
+        >
+          The current {selectedBranchName ? `${selectedBranchName} ` : ''}link stops working immediately — anyone you already sent it to will need the new one.
+        </ConfirmDialog>
+      )}
+
       <div className="form-group" style={{ maxWidth: 320 }}>
         <label>Branch</label>
         <select value={selectedBranch} onChange={(e) => { setSelectedBranch(e.target.value); selectBranch(e.target.value) }}>
@@ -175,8 +191,11 @@ export default function BranchSettingsPage() {
         )}
       </div>
 
-      <div className="card" style={{ marginBottom: '1.5rem', maxWidth: 560 }} data-testid="signup-link-card">
-        <h3 style={{ color: 'var(--accent)', marginBottom: '0.5rem' }}>Self Sign-up Link</h3>
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(320px, 1fr))', gap: '1rem', marginBottom: '1.5rem', alignItems: 'stretch' }}>
+      <div className="card" data-testid="signup-link-card">
+        <h3 style={{ color: 'var(--accent)', marginBottom: '0.5rem' }}>
+          Self Sign-up Link{selectedBranchName && <span style={{ color: 'var(--text-muted)', fontWeight: 400 }}> — {selectedBranchName}</span>}
+        </h3>
         <p style={{ color: 'var(--text-muted)', fontSize: '0.82rem', marginBottom: '0.75rem' }}>
           Send this to new students — they fill in their own details, and staff approve them under Membership → New Registration.
           It isn't linked from anywhere else. Make a new link if this one gets shared where it shouldn't.
@@ -188,24 +207,25 @@ export default function BranchSettingsPage() {
         )}
         <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap' }}>
           <button type="button" className="btn btn-primary" disabled={!signupUrl} onClick={copySignupLink}>Copy link</button>
-          <button type="button" className="btn btn-ghost" disabled={!signupUrl || rotating} onClick={makeNewSignupLink}>
+          <button type="button" className="btn btn-ghost" disabled={!signupUrl || rotating} onClick={() => setConfirmRotate(true)}>
             {rotating ? 'Making…' : 'Make new link'}
           </button>
         </div>
         {signupLinkMsg && <p style={{ fontSize: '0.8rem', color: 'var(--text-muted)', marginTop: '0.5rem' }}>{signupLinkMsg}</p>}
       </div>
 
-      <div className="card" style={{ marginBottom: '1.5rem', maxWidth: 320 }}>
-        <h3 style={{ color: 'var(--accent)', marginBottom: '1rem' }}>Locker Capacity</h3>
+      <div className="card" data-testid="locker-capacity-card">
+        <h3 style={{ color: 'var(--accent)', marginBottom: '0.5rem' }}>Locker Capacity</h3>
         <p style={{ color: 'var(--text-muted)', fontSize: '0.82rem', marginBottom: '0.75rem' }}>
           Total number of lockers available to assign at this branch.
         </p>
         <div style={{ display: 'flex', gap: '0.5rem' }}>
-          <input type="number" min="0" value={lockerCapacity} onChange={(e) => setLockerCapacity(e.target.value)} />
+          <input type="number" min="0" value={lockerCapacity} onChange={(e) => setLockerCapacity(e.target.value)} style={{ maxWidth: 200 }} />
           <button type="button" className="btn btn-primary" disabled={savingLockers} onClick={saveLockerCapacity}>
             {savingLockers ? 'Saving…' : 'Save'}
           </button>
         </div>
+      </div>
       </div>
 
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(320px, 1fr))', gap: '1rem' }}>
