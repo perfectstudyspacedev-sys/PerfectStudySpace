@@ -167,7 +167,11 @@ function istInstant(dateStr: string, istClock: string) {
   return new Date(`${dateStr}T${istClock}+05:30`).toISOString().replace(/\.\d{3}Z$/, "Z");
 }
 function istDayStart(dateStr: string) { return istInstant(dateStr, "00:00:00"); }
-function istDayEnd(dateStr: string) { return istInstant(dateStr, "23:59:59"); }
+// Inclusive end of the IST day at Postgres's full microsecond precision. A bare "…:59Z"
+// left out anything stamped inside the day's final second (23:59:59.4 IST, say) from every
+// <= range — dropped from that day's revenue and reports without a trace. No "+" is added,
+// so the value stays safe inside .or() filter strings; JS Date parsing truncates it to .999.
+function istDayEnd(dateStr: string) { return istInstant(dateStr, "23:59:59").replace(/Z$/, ".999999Z"); }
 
 // Pure UTC calendar arithmetic — "dateStr + T12:00:00" (no timezone designator) is parsed
 // as *local* time by the JS Date constructor, and if the runtime's local timezone doesn't
@@ -513,33 +517,65 @@ async function recordPayout(db: ReturnType<typeof adminClient>, row: Record<stri
 // as payouts) and, when the net favoured the student, dropped the dues they settled from
 // revenue altogether. The netted part goes in as payment mode "other", since no cash or UPI
 // moved for it, so the payment-channel split still matches what reached the drawer.
+// Each owed line is recorded under its own category (membership / locker / food / overtime)
+// so the Revenue breakdown shows, say, overtime as overtime; the cash collected is applied
+// to the lines in that order and whatever it doesn't cover was settled by the netting.
+type SettlementOwed = {
+  netAmount: number; membershipDue: number; overstayCharge: number; overstayDays: number;
+  lockerDue: number; foodPassOwed: number; unpaidFoodTotal: number; overtimeDue: number;
+};
+function settlementIncomeRows(s: SettlementOwed, paymentMode: string | undefined, label: string) {
+  const r2 = (n: number) => Math.round(n * 100) / 100;
+  const lines = [
+    { category: "membership", amount: s.membershipDue + s.overstayCharge, what: [
+      s.membershipDue > 0 && `membership due ₹${r2(s.membershipDue)}`,
+      s.overstayCharge > 0 && `₹${r2(s.overstayCharge)} for ${s.overstayDays} day(s) used after expiry`,
+    ] },
+    { category: "locker", amount: s.lockerDue, what: [`locker rent ₹${r2(s.lockerDue)}`] },
+    { category: "food", amount: s.foodPassOwed + s.unpaidFoodTotal, what: [
+      s.unpaidFoodTotal > 0 && `unpaid food bills ₹${r2(s.unpaidFoodTotal)}`,
+      s.foodPassOwed > 0 && `Food Pass deficit ₹${r2(s.foodPassOwed)}`,
+    ] },
+    { category: "overtime", amount: s.overtimeDue, what: [`overtime ₹${r2(s.overtimeDue)}`] },
+  ];
+  let cashLeft = r2(Math.max(s.netAmount, 0));
+  const rows: { category: string; amount: number; payment_mode: string; notes: string }[] = [];
+  for (const line of lines) {
+    const amount = r2(line.amount);
+    if (!(amount > 0)) continue;
+    const what = line.what.filter(Boolean).join(", ");
+    const paid = r2(Math.min(cashLeft, amount));
+    const offset = r2(amount - paid);
+    cashLeft = r2(cashLeft - paid);
+    if (paid > 0) {
+      rows.push({ category: line.category, amount: paid, payment_mode: paymentMode ?? "cash", notes: `Final settlement at ${label} (${what})` });
+    }
+    if (offset > 0) {
+      rows.push({ category: line.category, amount: offset, payment_mode: "other", notes: `Settled against refunds owed to the student at ${label} — no cash changed hands (${what})` });
+    }
+  }
+  return rows;
+}
+
 async function recordSettlementIncome(
   db: ReturnType<typeof adminClient>,
   base: { student_id: string; branch_id: string; membership_id: string; created_by_staff_id: string },
-  s: { totalOwed: number; netAmount: number; membershipDue: number; overstayCharge: number; overstayDays: number; lockerDue: number; foodPassOwed: number; overtimeDue: number },
-  paymentMode: string | undefined, label: string,
+  s: SettlementOwed, paymentMode: string | undefined, label: string,
 ) {
-  const owedParts = [
-    s.membershipDue > 0 && `membership due ₹${s.membershipDue}`,
-    s.overstayCharge > 0 && `₹${s.overstayCharge} for ${s.overstayDays} day(s) used after expiry`,
-    s.lockerDue > 0 && `locker rent ₹${s.lockerDue}`,
-    s.foodPassOwed > 0 && `Food Pass deficit ₹${s.foodPassOwed}`,
-    s.overtimeDue > 0 && `overtime ₹${s.overtimeDue}`,
-  ].filter(Boolean).join(", ");
-  const collectedNow = Math.max(s.netAmount, 0);
-  const settledByOffset = Math.round((s.totalOwed - collectedNow) * 100) / 100;
-  if (collectedNow > 0) {
-    await recordTransaction(db, {
-      ...base, category: "membership", amount: collectedNow, payment_mode: paymentMode ?? "cash",
-      notes: `Final settlement at ${label}${owedParts ? ` (${owedParts})` : ""}`,
-    });
+  for (const row of settlementIncomeRows(s, paymentMode, label)) {
+    await recordTransaction(db, { ...base, ...row });
   }
-  if (settledByOffset > 0) {
-    await recordTransaction(db, {
-      ...base, category: "membership", amount: settledByOffset, payment_mode: "other",
-      notes: `Dues settled against refunds owed to the student at ${label} — no cash changed hands${owedParts ? ` (${owedParts})` : ""}`,
-    });
-  }
+}
+
+// Food bills a student ran up without paying (no Food Pass, or more than the pass held).
+// Checkout lets a member carry these for up to 3 days, so a membership can end with some
+// still open — closing/deleting it now collects them in the final settlement instead of
+// the food simply never being paid for.
+async function unpaidFoodBillsFor(db: ReturnType<typeof adminClient>, studentId: string) {
+  const { data, error } = await db.from("food_bills").select("id, total").eq("student_id", studentId).eq("paid", false);
+  if (error) throw new Error(error.message);
+  const bills = (data ?? []) as { id: string; total: number }[];
+  return { bills, total: Math.round(bills.reduce((sum, b) => sum + Number(b.total), 0) * 100) / 100 };
 }
 
 async function insertPaymentTransactions(
@@ -1855,15 +1891,18 @@ Deno.serve(async (req) => {
         // ever matched — risking a duplicate insert on top of stale rows instead of updating
         // in place. Fetching as a list and taking the first is robust either way.
         if (isWalkinBooking) {
-          const { data: existingTxns } = await db.from("transactions").select("id, amount")
+          // Every step here is checked: a failed lookup used to read as "no overtime row yet"
+          // and insert a second charge, and a failed update/delete left the old amount in
+          // Revenue while the attendance edit reported success.
+          const { data: existingTxns, error: otLookupErr } = await db.from("transactions").select("id, amount")
             .eq("booking_id", bookingId).eq("category", "overtime").order("created_at", { ascending: true });
+          if (otLookupErr) return err(`Attendance saved, but the overtime charge couldn't be checked: ${otLookupErr.message}`, 500);
           const existingTxn = existingTxns?.[0];
           if (existingTxn) {
-            if (overtimeCharge > 0) {
-              await db.from("transactions").update({ amount: overtimeCharge }).eq("id", existingTxn.id);
-            } else {
-              await db.from("transactions").delete().eq("id", existingTxn.id);
-            }
+            const { error: otWriteErr } = overtimeCharge > 0
+              ? await db.from("transactions").update({ amount: overtimeCharge }).eq("id", existingTxn.id)
+              : await db.from("transactions").delete().eq("id", existingTxn.id);
+            if (otWriteErr) return err(`Attendance saved, but the overtime charge couldn't be updated: ${otWriteErr.message}`, 500);
           } else if (overtimeCharge > 0) {
             await recordTransaction(db, {
               student_id: booking.student_id, branch_id: booking.branch_id,
@@ -2395,10 +2434,22 @@ Deno.serve(async (req) => {
       // a walk-in, or a membership lapsing overnight).
       const liveStatus = computeStudentStatus(activeMemForCashback, locker, todayISO());
 
+      // What renew_membership will add/apply, uncapped — the history lists above stop at 50
+      // rows, so a renewal total built from them could miss an older unbilled overtime row
+      // or pending cashback and then disagree with the amount actually charged.
+      const [unbilledOvertime, pendingCashbacks] = await Promise.all([
+        fetchAllRows<{ billed_amount: number | null }>(() => db.from("overtime_sessions").select("billed_amount")
+          .eq("student_id", studentId).is("billed_at", null).eq("excluded", false).order("id")),
+        fetchAllRows<{ cashback_type: string; cashback_value: number }>(() => db.from("cashbacks").select("cashback_type, cashback_value")
+          .eq("student_id", studentId).eq("status", "pending").order("id")),
+      ]);
+      const unbilledOvertimeDue = unbilledOvertime.reduce((sum, o) => sum + Number(o.billed_amount ?? 0), 0);
+
       return json({
         student: { ...student, status: liveStatus }, memberships, bookings, transactions, locker,
         overtimeSessions: overtimeSessions ?? [], holds: holds ?? [], discounts: discounts ?? [],
         cashbacks, planChanges: planChanges ?? [], edits: edits ?? [],
+        unbilledOvertimeDue, pendingCashbacks,
       });
     }
 
@@ -4631,17 +4682,32 @@ Deno.serve(async (req) => {
         await db.from("desks").update({ status: "free", seat_type: "floating", assigned_student_id: null }).eq("id", mem.desk_id);
       }
 
-      // Unbilled member overtime is settled inside this payment rather than as its own
-      // "overtime" row (a partial advance can't be split between the two meaningfully), so
-      // the note carries the breakdown for anyone reading the ledger.
-      const renewalNoteParts = [
-        cashbackAmount > 0 && `₹${Math.round(cashbackAmount * 100) / 100} cashback applied`,
-        overtimeDue > 0 && `includes ₹${overtimeDue} overtime`,
-      ].filter(Boolean).join(", ");
+      // The payment covers unbilled member overtime and the renewal itself. Each part is
+      // recorded under its own category so Revenue's Overtime figure includes member overtime.
+      // Overtime is paid off first: whatever a partial advance leaves unpaid stays on the new
+      // membership's fee_due, and record_payment books that as membership — so the leftover
+      // is always the renewal part, and every rupee ends up under the right heading.
+      const r2 = (n: number) => Math.round(n * 100) / 100;
+      const overtimePaidNow = r2(Math.min(feePaid, overtimeDue));
+      const renewalPaidNow = r2(feePaid - overtimePaidNow);
+      let otCash: number | undefined, otUpi: number | undefined, renCash: number | undefined, renUpi: number | undefined;
+      if (paymentMode === "split") {
+        const cash = r2(Number(cashAmount) || 0);
+        const upi = r2(Number(upiAmount) || 0);
+        otCash = r2(Math.min(overtimePaidNow, cash));
+        otUpi = r2(overtimePaidNow - otCash);
+        renCash = r2(cash - otCash);
+        renUpi = r2(upi - otUpi);
+      }
+      const ledgerBase = { student_id: mem.student_id, branch_id: mem.branch_id, membership_id: newMem!.id, created_by_staff_id: staff.id };
       await insertPaymentTransactions(db, {
-        student_id: mem.student_id, branch_id: mem.branch_id, membership_id: newMem!.id,
-        category: "membership", notes: renewalNoteParts ? `Renewal (${renewalNoteParts})` : "Renewal", created_by_staff_id: staff.id,
-      }, paymentMode, feePaid, cashAmount, upiAmount);
+        ...ledgerBase, category: "overtime",
+        notes: `Overtime (${overtimeMinutes}m, Pay Later) settled at renewal`,
+      }, paymentMode, overtimePaidNow, otCash, otUpi);
+      await insertPaymentTransactions(db, {
+        ...ledgerBase, category: "membership",
+        notes: cashbackAmount > 0 ? `Renewal (₹${r2(cashbackAmount)} cashback applied)` : "Renewal",
+      }, paymentMode, renewalPaidNow, renCash, renUpi);
 
       // (The old membership was already switched off above, as the renewal's claim.)
       await db.from("alerts").update({ status: "resolved" }).eq("student_id", mem.student_id).eq("alert_type", "expiry").eq("status", "pending");
@@ -4683,6 +4749,7 @@ Deno.serve(async (req) => {
         .eq("student_id", mem.student_id).is("billed_at", null).eq("excluded", false);
       const { data: planChanges } = await db.from("membership_plan_changes").select("*")
         .eq("membership_id", membershipId).order("created_at", { ascending: true });
+      const { total: unpaidFoodTotal } = await unpaidFoodBillsFor(db, mem.student_id);
 
       const membershipDue = Number(mem.fee_due ?? 0);
       const lockerDue = Number(locker?.fee_due ?? 0);
@@ -4709,13 +4776,13 @@ Deno.serve(async (req) => {
       const totalDays = membershipTotalDays(mem);
       const overstayCharge = overstayDays > 0 ? Math.round((grossFee / totalDays) * overstayDays) : 0;
 
-      const totalOwed = membershipDue + lockerDue + foodPassOwed + overtimeDue + overstayCharge;
+      const totalOwed = membershipDue + lockerDue + foodPassOwed + unpaidFoodTotal + overtimeDue + overstayCharge;
       const totalCredit = lockerDepositRefund + foodPassRefund + cashbackAmount;
       const netAmount = totalOwed - totalCredit;
 
       return json({
         membershipDue, lockerDue, lockerDepositRefund,
-        foodPassBalance, foodPassRefund, foodPassOwed,
+        foodPassBalance, foodPassRefund, foodPassOwed, unpaidFoodTotal,
         cashbackAmount, overtimeMinutes, overtimeDue,
         overstayDays, overstayCharge,
         totalOwed, totalCredit, netAmount,
@@ -4745,6 +4812,7 @@ Deno.serve(async (req) => {
         .eq("student_id", mem.student_id).is("billed_at", null).eq("excluded", false);
       const { data: planChanges } = await db.from("membership_plan_changes").select("*")
         .eq("membership_id", mem.id).order("created_at", { ascending: true });
+      const { bills: unpaidFoodBills, total: unpaidFoodTotal } = await unpaidFoodBillsFor(db, mem.student_id);
 
       const membershipDue = Number(mem.fee_due ?? 0);
       const lockerDue = Number(locker?.fee_due ?? 0);
@@ -4780,13 +4848,13 @@ Deno.serve(async (req) => {
       const overstayCharge = overstayDays > 0 && !waiveOverstayCharge
         ? Math.round((grossFee / totalDays) * overstayDays) : 0;
 
-      const totalOwed = membershipDue + lockerDue + foodPassOwed + overtimeDue + overstayCharge;
+      const totalOwed = membershipDue + lockerDue + foodPassOwed + unpaidFoodTotal + overtimeDue + overstayCharge;
       const totalCredit = lockerDepositRefund + foodPassRefund + cashbackAmount + proratedRefund;
       const netAmount = totalOwed - totalCredit;
 
       return {
         membershipDue, lockerDue, lockerDepositRefund,
-        foodPassBalance, foodPassRefund, foodPassOwed,
+        foodPassBalance, foodPassRefund, foodPassOwed, unpaidFoodTotal, unpaidFoodBills,
         cashbackAmount, cashbackContribs, overtimeMinutes, overtimeDue,
         proratedRefund, remainingDays, totalDays, grossFee,
         overstayDays, overstayCharge,
@@ -4907,6 +4975,13 @@ Deno.serve(async (req) => {
 
       await db.from("alerts").update({ status: "resolved" }).eq("student_id", mem.student_id).eq("alert_type", "expiry").eq("status", "pending");
 
+      if (s.unpaidFoodBills.length) {
+        // Checked: bills left marked unpaid here could be charged again with a later membership.
+        const { error: foodSettleErr } = await db.from("food_bills").update({ paid: true, payment_mode: "other" })
+          .in("id", s.unpaidFoodBills.map(b => b.id));
+        if (foodSettleErr) throw new Error(`Couldn't mark the unpaid food bills as settled: ${foodSettleErr.message}`);
+      }
+
       // Credits were logged in full as payouts above; this records every owed line as income
       // (cash/UPI for the net collected, "other" for the part netted off) — see
       // recordSettlementIncome for why the net alone double-counted the credits.
@@ -4947,6 +5022,7 @@ Deno.serve(async (req) => {
       if (await hasOpenSession(db, mem.student_id)) {
         return err("This student is currently checked in — check them out before quitting the membership.");
       }
+      const { bills: unpaidFoodBills, total: unpaidFoodTotal } = await unpaidFoodBillsFor(db, mem.student_id);
 
       // Final settlement: what's owed to the business nets against what's owed back to
       // the student (locker deposit, unredeemed Food Pass balance, unredeemed cashback).
@@ -4973,7 +5049,7 @@ Deno.serve(async (req) => {
       const overstayCharge = overstayDays > 0 && !waiveOverstayCharge
         ? Math.round((grossFee / totalDays) * overstayDays) : 0;
 
-      const totalOwed = membershipDue + lockerDue + foodPassOwed + overtimeDue + overstayCharge;
+      const totalOwed = membershipDue + lockerDue + foodPassOwed + unpaidFoodTotal + overtimeDue + overstayCharge;
       const totalCredit = lockerDepositRefund + foodPassRefund + cashbackAmount;
       const netAmount = totalOwed - totalCredit;
 
@@ -5048,9 +5124,15 @@ Deno.serve(async (req) => {
       // Credits were logged in full as payouts above; this records every owed line as income
       // (cash/UPI for the net collected, "other" for the part netted off) — see
       // recordSettlementIncome for why the net alone double-counted the credits.
+      if (unpaidFoodBills.length) {
+        // Checked: bills left marked unpaid here could be charged again with a later membership.
+        const { error: foodSettleErr } = await db.from("food_bills").update({ paid: true, payment_mode: "other" })
+          .in("id", unpaidFoodBills.map(b => b.id));
+        if (foodSettleErr) throw new Error(`Couldn't mark the unpaid food bills as settled: ${foodSettleErr.message}`);
+      }
       await recordSettlementIncome(db, {
         student_id: mem.student_id, branch_id: mem.branch_id, membership_id: membershipId, created_by_staff_id: staff.id,
-      }, { totalOwed, netAmount, membershipDue, overstayCharge, overstayDays, lockerDue, foodPassOwed, overtimeDue }, paymentMode, "membership closure");
+      }, { netAmount, membershipDue, overstayCharge, overstayDays, lockerDue, foodPassOwed, unpaidFoodTotal, overtimeDue }, paymentMode, "membership closure");
 
       await refreshStudentStatus(db, mem.student_id);
       return json({

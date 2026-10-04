@@ -1051,8 +1051,9 @@ export default function StudentProfilePage() {
   const renewBeforeCashback = renewGross * (1 - renewDiscount / 100)
   // Same total renew_membership charges: every pending cashback off, unbilled Pay Later
   // overtime on. A Full payment is recorded at the backend's figure, so this must match it.
-  const renewCashbackAmount = pendingCashbackTotal((cashbacks ?? []).filter(c => c.status === 'pending'), renewBeforeCashback)
-  const renewOvertimeDue = (overtimeSessions ?? []).filter(s => !s.billed_at && !s.excluded).reduce((sum, s) => sum + Number(s.billed_amount ?? 0), 0)
+  // Uncapped server totals (the history lists are limited to 50 rows each).
+  const renewCashbackAmount = pendingCashbackTotal(data.pendingCashbacks ?? (cashbacks ?? []).filter(c => c.status === 'pending'), renewBeforeCashback)
+  const renewOvertimeDue = data.unbilledOvertimeDue ?? (overtimeSessions ?? []).filter(s => !s.billed_at && !s.excluded).reduce((sum, s) => sum + Number(s.billed_amount ?? 0), 0)
   const renewTotal = renewBeforeCashback - renewCashbackAmount + renewOvertimeDue
   const renewAdvanceNum = Number(renewAdvance) || 0
   const renewRemaining = renewPayType === 'partial' ? Math.max(renewTotal - renewAdvanceNum, 0) : 0
@@ -2315,6 +2316,7 @@ export default function StudentProfilePage() {
                   <p className="mono" style={{ fontSize: '0.85rem' }}>Membership: {formatCurrency(deleteSummary.membershipDue)}</p>
                   {deleteSummary.locker && <p className="mono" style={{ fontSize: '0.85rem' }}>Locker rent: {formatCurrency(deleteSummary.lockerDue)}</p>}
                   {deleteSummary.foodPassOwed > 0 && <p className="mono" style={{ fontSize: '0.85rem' }}>Food Pass shortfall: {formatCurrency(deleteSummary.foodPassOwed)}</p>}
+                  {deleteSummary.unpaidFoodTotal > 0 && <p className="mono" style={{ fontSize: '0.85rem' }}>Unpaid food bills: {formatCurrency(deleteSummary.unpaidFoodTotal)}</p>}
                   {deleteSummary.overtimeDue > 0 && <p className="mono" style={{ fontSize: '0.85rem' }}>Overtime ({deleteSummary.overtimeMinutes}m): {formatCurrency(deleteSummary.overtimeDue)}</p>}
                   {deleteSummary.overstayDays > 0 && (
                     <p className="mono" style={{ fontSize: '0.85rem', textDecoration: deleteWaiveOverstay ? 'line-through' : 'none', color: deleteWaiveOverstay ? 'var(--text-muted)' : undefined }}>

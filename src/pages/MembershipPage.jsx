@@ -674,6 +674,7 @@ function ActiveMembersTab({ branchId, tempPackages, permPackages }) {
                   <p className="mono" style={{ fontSize: '0.85rem' }}>Membership: {formatCurrency(closeSummary.membershipDue)}</p>
                   {closeSummary.locker && <p className="mono" style={{ fontSize: '0.85rem' }}>Locker rent: {formatCurrency(closeSummary.lockerDue)}</p>}
                   {closeSummary.foodPassOwed > 0 && <p className="mono" style={{ fontSize: '0.85rem' }}>Food Pass shortfall: {formatCurrency(closeSummary.foodPassOwed)}</p>}
+                  {closeSummary.unpaidFoodTotal > 0 && <p className="mono" style={{ fontSize: '0.85rem' }}>Unpaid food bills: {formatCurrency(closeSummary.unpaidFoodTotal)}</p>}
                   {closeSummary.overtimeDue > 0 && <p className="mono" style={{ fontSize: '0.85rem' }}>Overtime ({closeSummary.overtimeMinutes}m): {formatCurrency(closeSummary.overtimeDue)}</p>}
                   {closeSummary.overstayDays > 0 && (
                     <p className="mono" style={{ fontSize: '0.85rem', textDecoration: waiveOverstayCharge ? 'line-through' : 'none', color: waiveOverstayCharge ? 'var(--text-muted)' : undefined }}>
