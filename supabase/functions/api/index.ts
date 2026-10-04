@@ -327,6 +327,14 @@ function dateRange(period: string, dateFrom?: string, dateTo?: string) {
   return { from: dateFrom ?? today, to: dateTo ?? today };
 }
 
+// Date range for a Revenue/transactions request: explicit dates always win. The Revenue page
+// used to send its applied custom dates with no period, and `dateRange(period ?? "today", …)`
+// then returned today and ignored them — every custom range silently showed today's figures.
+function requestedRange(period: string | undefined, dateFrom?: string, dateTo?: string) {
+  if (dateFrom != null || dateTo != null) return dateRange("custom", dateFrom, dateTo);
+  return dateRange(period ?? "today");
+}
+
 function isISODate(value: unknown): value is string {
   return typeof value === "string" && /^\d{4}-\d{2}-\d{2}$/.test(value) && !Number.isNaN(Date.parse(value));
 }
@@ -3292,7 +3300,7 @@ Deno.serve(async (req) => {
       if ((dateFrom != null && !isISODate(dateFrom)) || (dateTo != null && !isISODate(dateTo))) {
         return err("Invalid date — expected YYYY-MM-DD");
       }
-      const range = dateRange(period ?? "today", dateFrom, dateTo);
+      const range = requestedRange(period, dateFrom, dateTo);
       if (range.from > range.to) return err("Start date must be on or before the end date");
 
       let branchFilter: string[] = [];
@@ -3409,7 +3417,7 @@ Deno.serve(async (req) => {
       if ((dateFrom != null && !isISODate(dateFrom)) || (dateTo != null && !isISODate(dateTo))) {
         return err("Invalid date — expected YYYY-MM-DD");
       }
-      const range = dateRange(period ?? "today", dateFrom, dateTo);
+      const range = requestedRange(period, dateFrom, dateTo);
       if (range.from > range.to) return err("Start date must be on or before the end date");
       // Owner "All branches (consolidated)" applies here exactly as it does in get_revenue;
       // without it the Transactions tab stayed pinned to one branch while the Overview totals
