@@ -525,6 +525,16 @@ async function recordTransaction(db: ReturnType<typeof adminClient>, row: Record
   }
 }
 
+// RSP W2 — append-only log of money forgiven (overstay waived, overtime omitted/restored): who,
+// how much and why. These two waivers used to leave no record at all.
+async function recordWaiver(db: ReturnType<typeof adminClient>, row: Record<string, unknown>) {
+  const { error } = await db.from("waivers").insert(row);
+  if (error) {
+    console.error("waivers insert failed:", error.message, JSON.stringify(row));
+    throw new Error(`The waiver could not be logged (${error.message}).`);
+  }
+}
+
 async function recordPayout(db: ReturnType<typeof adminClient>, row: Record<string, unknown>) {
   const { error } = await db.from("payouts").insert(row);
   if (error) {
@@ -3130,12 +3140,22 @@ Deno.serve(async (req) => {
     // still-unbilled rows: once a row's already been collected/settled, toggling this after
     // the fact wouldn't undo the money that already changed hands.
     if (action === "set_overtime_excluded") {
-      const { overtimeSessionId, excluded } = payload;
+      const { overtimeSessionId, excluded, reason } = payload;
       const { data: row } = await db.from("overtime_sessions").select("*").eq("id", overtimeSessionId).single();
       if (!row) return err("Overtime session not found");
       if (!requireBranch(staff, row.branch_id)) return err("Branch access denied", 403);
       if (row.billed_at) return err("This overtime was already billed/settled and can't be excluded");
-      await db.from("overtime_sessions").update({ excluded: !!excluded }).eq("id", overtimeSessionId);
+      if (!!row.excluded === !!excluded) return json({ ok: true });
+      // RSP W2b — omitting (or restoring) overtime changes what the student owes, so it needs a
+      // reason and is logged with the amount and who did it.
+      if (!reason || !String(reason).trim()) return err("Enter a reason");
+      const { error: exclErr } = await db.from("overtime_sessions").update({ excluded: !!excluded }).eq("id", overtimeSessionId);
+      if (exclErr) return err(exclErr.message, 500);
+      await recordWaiver(db, {
+        branch_id: row.branch_id, student_id: row.student_id, membership_id: row.membership_id ?? null,
+        waiver_type: excluded ? "overtime_omit" : "overtime_restore", amount: Number(row.billed_amount ?? 0),
+        reason: String(reason).trim(), related_id: row.id, created_by_staff_id: staff.id,
+      });
       return json({ ok: true });
     }
 
@@ -3472,6 +3492,72 @@ Deno.serve(async (req) => {
         .sort((a, b) => b.count - a.count);
 
       return json({ rows, total, notRecorded: notRecorded ?? 0 });
+    }
+
+    // RSP W1 — "Discounts & Waivers" for the Revenue page: every rupee knocked off or forgiven in
+    // the selected range and branch scope, with who applied it. None of this is money in or out
+    // (that is in get_revenue / list_transactions) — it is revenue the business chose not to take.
+    if (action === "get_discounts_waivers") {
+      const { branchId, period, dateFrom, dateTo, allBranches } = payload;
+      if ((dateFrom != null && !isISODate(dateFrom)) || (dateTo != null && !isISODate(dateTo))) {
+        return err("Invalid date — expected YYYY-MM-DD");
+      }
+      const range = requestedRange(period, dateFrom, dateTo);
+      if (range.from > range.to) return err("Start date must be on or before the end date");
+      let branchFilter: string[] = [];
+      if (allBranches && isOwnerOrAdmin(staff)) {
+        const { data: bs } = await db.from("branches").select("id");
+        branchFilter = bs?.map(b => b.id) ?? [];
+      } else {
+        const bid = branchId ?? staff.branch_id;
+        if (!bid || !requireBranch(staff, bid)) return err("Branch access denied", 403);
+        branchFilter = [bid];
+      }
+      const fromTs = istDayStart(range.from);
+      const toTs = istDayEnd(range.to);
+
+      type Who = { display_name?: string | null; username?: string | null } | null;
+      type Stu = { name?: string | null; phone?: string | null } | null;
+      const whoName = (w: Who) => w?.display_name || w?.username || null;
+      const r2 = (n: number) => Math.round(n * 100) / 100;
+
+      const [loyalty, cashbacks, foodBills, waivers, multiMonth, branchRows] = await Promise.all([
+        fetchAllRows<{ id: string; discount_amount: number; remarks: string | null; created_at: string; branch_id: string; students: Stu; staff: Who }>(() =>
+          db.from("membership_discounts").select("id, discount_amount, remarks, created_at, branch_id, students(name, phone), staff:applied_by_staff_id(display_name, username)")
+            .in("branch_id", branchFilter).gte("created_at", fromTs).lte("created_at", toTs).order("created_at").order("id")),
+        fetchAllRows<{ id: string; redeemed_amount: number | null; redeemed_at: string; month_label: string | null; branch_id: string; students: Stu; staff: Who }>(() =>
+          db.from("cashbacks").select("id, redeemed_amount, redeemed_at, month_label, branch_id, students(name, phone), staff:granted_by_staff_id(display_name, username)")
+            .in("branch_id", branchFilter).eq("status", "redeemed").gte("redeemed_at", fromTs).lte("redeemed_at", toTs).order("redeemed_at").order("id")),
+        fetchAllRows<{ id: string; discount_amount: number; subtotal: number; created_at: string; branch_id: string; student_name: string | null; student_phone: string | null; staff: Who }>(() =>
+          db.from("food_bills").select("id, discount_amount, subtotal, created_at, branch_id, student_name, student_phone, staff:created_by_staff_id(display_name, username)")
+            .in("branch_id", branchFilter).gt("discount_amount", 0).gte("created_at", fromTs).lte("created_at", toTs).order("created_at").order("id")),
+        fetchAllRows<{ id: string; waiver_type: string; amount: number; reason: string; created_at: string; branch_id: string; students: Stu; staff: Who }>(() =>
+          db.from("waivers").select("id, waiver_type, amount, reason, created_at, branch_id, students(name, phone), staff:created_by_staff_id(display_name, username)")
+            .in("branch_id", branchFilter).gte("created_at", fromTs).lte("created_at", toTs).order("created_at").order("id")),
+        fetchAllRows<{ id: string; monthly_fee: number; months_paid: number; discount_percent: number; created_at: string; branch_id: string; students: Stu; staff: Who }>(() =>
+          db.from("memberships").select("id, monthly_fee, months_paid, discount_percent, created_at, branch_id, students(name, phone), staff:created_by_staff_id(display_name, username)")
+            .in("branch_id", branchFilter).gt("discount_percent", 0).gte("created_at", fromTs).lte("created_at", toTs).order("created_at").order("id")),
+        db.from("branches").select("id, name").in("id", branchFilter).then((r: { data: { id: string; name: string }[] | null }) => r.data ?? []),
+      ]);
+      const branchName = new Map(branchRows.map((b: { id: string; name: string }) => [b.id, b.name]));
+
+      const items: { id: string; type: string; date: string; student: string | null; phone: string | null; amount: number; by: string | null; detail: string | null; branch: string | null }[] = [];
+      for (const d of loyalty) items.push({ id: `loyalty-${d.id}`, type: "loyalty", date: d.created_at, student: d.students?.name ?? null, phone: d.students?.phone ?? null, amount: r2(Number(d.discount_amount)), by: whoName(d.staff), detail: d.remarks, branch: branchName.get(d.branch_id) ?? null });
+      for (const c of cashbacks) items.push({ id: `cashback-${c.id}`, type: "cashback", date: c.redeemed_at, student: c.students?.name ?? null, phone: c.students?.phone ?? null, amount: r2(Number(c.redeemed_amount ?? 0)), by: whoName(c.staff), detail: c.month_label ? `Granted for ${c.month_label}; taken off a renewal` : "Taken off a renewal", branch: branchName.get(c.branch_id) ?? null });
+      for (const f of foodBills) items.push({ id: `food-${f.id}`, type: "food", date: f.created_at, student: f.student_name, phone: f.student_phone, amount: r2(Number(f.discount_amount)), by: whoName(f.staff), detail: `Off a ₹${r2(Number(f.subtotal))} bill`, branch: branchName.get(f.branch_id) ?? null });
+      for (const w of waivers) {
+        const sign = w.waiver_type === "overtime_restore" ? -1 : 1;
+        items.push({ id: `waiver-${w.id}`, type: w.waiver_type === "overstay" ? "overstay" : "overtime", date: w.created_at, student: w.students?.name ?? null, phone: w.students?.phone ?? null, amount: r2(sign * Number(w.amount)), by: whoName(w.staff), detail: w.waiver_type === "overtime_restore" ? `Put back on the bill — ${w.reason}` : w.reason, branch: branchName.get(w.branch_id) ?? null });
+      }
+      for (const m of multiMonth) {
+        const amount = r2(Number(m.monthly_fee) * Number(m.months_paid) * Number(m.discount_percent) / 100);
+        items.push({ id: `multimonth-${m.id}`, type: "multi_month", date: m.created_at, student: m.students?.name ?? null, phone: m.students?.phone ?? null, amount, by: whoName(m.staff), detail: `${m.months_paid} months at ${Number(m.discount_percent)}% off`, branch: branchName.get(m.branch_id) ?? null });
+      }
+      items.sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
+      const totals: Record<string, number> = { loyalty: 0, cashback: 0, food: 0, overstay: 0, overtime: 0, multi_month: 0 };
+      for (const it of items) totals[it.type] = r2((totals[it.type] ?? 0) + it.amount);
+      const total = r2(Object.values(totals).reduce((a, b) => a + b, 0));
+      return json({ totals, total, items, dateFrom: range.from, dateTo: range.to });
     }
 
     if (action === "list_transactions") {
@@ -4970,6 +5056,7 @@ Deno.serve(async (req) => {
         foodPassBalance, foodPassRefund, foodPassOwed, unpaidFoodTotal,
         cashbackAmount, overtimeMinutes, overtimeDue,
         overstayDays, overstayCharge, lastVisitDate, overstayDailyRate,
+        planEndDate: mem.end_date,
         totalOwed, totalCredit, netAmount,
         canClose: true,
         locker: locker ?? null,
@@ -5077,6 +5164,11 @@ Deno.serve(async (req) => {
       if (s.netAmount > 0 && !paymentMode) {
         return err(`₹${s.netAmount.toFixed(2)} still needs to be collected before deleting — choose a payment mode.`);
       }
+      // RSP W2a — waiving overstay needs a reason (checked before anything is written).
+      const waiveReason = String(payload.waiveReason ?? "").trim();
+      if (waiveOverstayCharge && s.overstayChargeBeforeWaive > 0 && !waiveReason) {
+        return err("Enter a reason for waiving the overstay charge");
+      }
 
       // Conditional on is_active so two deletes landing together can't both pay out the
       // refund/deposit/cashback below — the is_active check above is only a separate read.
@@ -5163,6 +5255,12 @@ Deno.serve(async (req) => {
       await recordSettlementIncome(db, {
         student_id: mem.student_id, branch_id: mem.branch_id, membership_id: membershipId, created_by_staff_id: staff.id,
       }, s, paymentMode, "membership deletion");
+      if (waiveOverstayCharge && s.overstayChargeBeforeWaive > 0) {
+        await recordWaiver(db, {
+          branch_id: mem.branch_id, student_id: mem.student_id, membership_id: membershipId, waiver_type: "overstay",
+          amount: s.overstayChargeBeforeWaive, reason: waiveReason, created_by_staff_id: staff.id,
+        });
+      }
 
       await refreshStudentStatus(db, mem.student_id);
       return json({
@@ -5228,6 +5326,11 @@ Deno.serve(async (req) => {
 
       if (netAmount > 0 && !paymentMode) {
         return err(`₹${netAmount.toFixed(2)} still needs to be collected before closing — choose a payment mode.`);
+      }
+      // RSP W2a — waiving overstay needs a reason (checked before anything is written).
+      const waiveReason = String(payload.waiveReason ?? "").trim();
+      if (waiveOverstayCharge && overstayChargeBeforeWaive > 0 && !waiveReason) {
+        return err("Enter a reason for waiving the overstay charge");
       }
 
       // Conditional on is_active so two closes landing together can't both pay out the
@@ -5306,6 +5409,12 @@ Deno.serve(async (req) => {
       await recordSettlementIncome(db, {
         student_id: mem.student_id, branch_id: mem.branch_id, membership_id: membershipId, created_by_staff_id: staff.id,
       }, { netAmount, membershipDue, overstayCharge, overstayDays, lockerDue, foodPassOwed, unpaidFoodTotal, overtimeDue }, paymentMode, "membership closure");
+      if (waiveOverstayCharge && overstayChargeBeforeWaive > 0) {
+        await recordWaiver(db, {
+          branch_id: mem.branch_id, student_id: mem.student_id, membership_id: membershipId, waiver_type: "overstay",
+          amount: overstayChargeBeforeWaive, reason: waiveReason, created_by_staff_id: staff.id,
+        });
+      }
 
       await refreshStudentStatus(db, mem.student_id);
       return json({

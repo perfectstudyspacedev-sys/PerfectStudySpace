@@ -28,6 +28,16 @@ const REFERRAL_LABELS = {
   flex: 'Flex (Banner/Hoarding)', ai_platform: 'Claude/ChatGPT/AI Platforms', unknown: 'Not Recorded',
 }
 const TX_PAGE_SIZE = 200
+// RSP W1 — every way money is taken off what a student owes. Order = display order.
+const WAIVER_TYPES = [
+  { key: 'loyalty', label: 'Loyalty discounts', hint: 'Owner discount on a pending fee' },
+  { key: 'cashback', label: 'Cashback used on renewals', hint: 'Taken off a renewal fee' },
+  { key: 'multi_month', label: 'Multi-month discounts', hint: 'Plan discount for paying several months' },
+  { key: 'food', label: 'Food bill discounts', hint: 'Discount given on a food bill' },
+  { key: 'overstay', label: 'Overstay waived', hint: 'Days after expiry not charged at quit/delete' },
+  { key: 'overtime', label: 'Overtime omitted', hint: 'Overtime taken off the bill (net of any put back)' },
+]
+const WAIVER_LABEL = Object.fromEntries(WAIVER_TYPES.map(w => [w.key, w.label]))
 
 const TOOLTIP_STYLE = {
   contentStyle: { background: '#111', border: '1px solid #333', borderRadius: 6 },
@@ -120,6 +130,10 @@ export default function RevenuePage() {
   const [searchInput, setSearchInput] = useState('')
   const [search, setSearch] = useState('')
   const [categoryFilter, setCategoryFilter] = useState('')
+  const [waivers, setWaivers] = useState(null)
+  const [waiversLoading, setWaiversLoading] = useState(false)
+  const [waiversError, setWaiversError] = useState('')
+  const [waiverFilter, setWaiverFilter] = useState('')
 
   // Each loader stamps its request; a response is only applied if no newer request for the
   // same data has started since. Without this, quickly switching period/branch (or typing
@@ -127,6 +141,7 @@ export default function RevenuePage() {
   const revenueReq = useRef(0)
   const referralReq = useRef(0)
   const txReq = useRef(0)
+  const waiversReq = useRef(0)
 
   // Custom with nothing applied yet shows today's figures (as the hint below says). Once
   // applied it must say period 'custom': it used to send no period at all, and the server's
@@ -201,9 +216,30 @@ export default function RevenuePage() {
     }
   }, [hasScope, branchId, queryPeriod, queryFrom, queryTo, categoryFilter, search, consolidated])
 
+  const loadWaivers = useCallback(async () => {
+    if (!hasScope) return
+    const reqId = ++waiversReq.current
+    setWaiversLoading(true)
+    setWaiversError('')
+    try {
+      const data = await api('get_discounts_waivers', {
+        branchId, period: queryPeriod, dateFrom: queryFrom, dateTo: queryTo, allBranches: consolidated,
+      })
+      if (reqId === waiversReq.current) setWaivers(data)
+    } catch (e) {
+      if (reqId === waiversReq.current) {
+        setWaivers(null)
+        setWaiversError(e.message || 'Could not load discounts & waivers')
+      }
+    } finally {
+      if (reqId === waiversReq.current) setWaiversLoading(false)
+    }
+  }, [hasScope, branchId, queryPeriod, queryFrom, queryTo, consolidated])
+
   useEffect(() => { loadRevenue() }, [loadRevenue])
   useEffect(() => { loadReferralStats() }, [loadReferralStats])
   useEffect(() => { if (tab === 'transactions') loadTransactions() }, [tab, loadTransactions])
+  useEffect(() => { if (tab === 'waivers') loadWaivers() }, [tab, loadWaivers])
 
   const referralPieData = referralStats
     ? referralStats.rows.map(r => ({ name: REFERRAL_LABELS[r.source] ?? r.source, value: r.count }))
@@ -226,6 +262,17 @@ export default function RevenuePage() {
 
   const collected = transactions.filter(t => t.entry_type === 'income').reduce((s, t) => s + Number(t.amount || 0), 0)
   const paidOut = transactions.filter(t => t.entry_type === 'payout').reduce((s, t) => s - Number(t.amount || 0), 0)
+
+  const waiverItems = waivers ? (waiverFilter ? waivers.items.filter(i => i.type === waiverFilter) : waivers.items) : []
+
+  const handleExportWaivers = () => {
+    if (!waivers) return
+    const rangeTag = waivers.dateFrom === waivers.dateTo ? waivers.dateFrom : `${waivers.dateFrom}_to_${waivers.dateTo}`
+    exportToCSV(`discounts_waivers_${rangeTag}.csv`,
+      ['Date', 'Student', 'Phone', 'Type', 'Amount', 'By', 'Reason / detail', 'Branch'],
+      waiverItems.map(i => [csvDateTime(i.date), i.student ?? '', i.phone ?? '', WAIVER_LABEL[i.type] ?? i.type, i.amount, i.by ?? '', i.detail ?? '', i.branch ?? '']),
+    )
+  }
 
   const handleExportTx = () => {
     const rangeTag = revenue ? (revenue.dateFrom === revenue.dateTo ? revenue.dateFrom : `${revenue.dateFrom}_to_${revenue.dateTo}`) : todayISO()
@@ -319,6 +366,7 @@ export default function RevenuePage() {
       <div className="tabs">
         <button type="button" className={tab === 'overview' ? 'active' : ''} onClick={() => setTab('overview')}>Overview</button>
         <button type="button" className={tab === 'transactions' ? 'active' : ''} onClick={() => setTab('transactions')}>All Transactions</button>
+        <button type="button" className={tab === 'waivers' ? 'active' : ''} onClick={() => setTab('waivers')}>Discounts &amp; Waivers</button>
       </div>
 
       {tab === 'overview' && revenueError && (
@@ -629,6 +677,76 @@ export default function RevenuePage() {
               <button type="button" className="btn btn-ghost" onClick={() => setTxVisible(v => v + TX_PAGE_SIZE)}>
                 Show more ({transactions.length - txVisible} remaining)
               </button>
+            </div>
+          )}
+        </div>
+      )}
+
+      {tab === 'waivers' && (
+        <div data-testid="waivers-tab">
+          <p style={{ ...MUTED_NOTE, marginBottom: '0.75rem' }}>
+            Money taken off what students owe — no cash changed hands, so none of this is in the revenue totals.
+          </p>
+          {waiversError && (
+            <p className="error-msg" style={{ marginBottom: '1rem' }}>
+              Couldn't load discounts &amp; waivers: {waiversError}{' '}
+              <button type="button" className="btn btn-ghost" onClick={loadWaivers}>Retry</button>
+            </p>
+          )}
+          {!waivers && !waiversError && <p style={MUTED_NOTE}>Loading…</p>}
+          {waivers && (
+            <div style={{ opacity: waiversLoading ? 0.55 : 1 }} aria-busy={waiversLoading}>
+              <div className="stats-row">
+                <div className="card stat-card">
+                  <div className="value" data-testid="waivers-total">{formatCurrency(waivers.total)}</div>
+                  <div className="label">Total given away</div>
+                </div>
+              </div>
+              <div className="stats-row">
+                {WAIVER_TYPES.map(w => (
+                  <button
+                    key={w.key} type="button" data-waiver-type={w.key}
+                    className="card stat-card" title={`${w.hint} — click to show only these`}
+                    aria-pressed={waiverFilter === w.key}
+                    onClick={() => setWaiverFilter(f => (f === w.key ? '' : w.key))}
+                    style={{ textAlign: 'left', cursor: 'pointer', font: 'inherit', color: 'inherit', border: waiverFilter === w.key ? '1px solid var(--accent)' : undefined }}
+                  >
+                    <div className="value" style={{ fontSize: '1.25rem' }}>{formatCurrency(waivers.totals[w.key] ?? 0)}</div>
+                    <div className="label">{w.label}</div>
+                  </button>
+                ))}
+              </div>
+
+              <div className="card" style={{ overflowX: 'auto' }}>
+                <div className="filters">
+                  <select value={waiverFilter} onChange={(e) => setWaiverFilter(e.target.value)}>
+                    <option value="">All types</option>
+                    {WAIVER_TYPES.map(w => <option key={w.key} value={w.key}>{w.label}</option>)}
+                  </select>
+                  <button type="button" className="btn btn-ghost" onClick={handleExportWaivers} disabled={waiverItems.length === 0}>Export CSV</button>
+                </div>
+                <table className="data-table">
+                  <thead><tr><th>Date</th><th>Student</th><th>Type</th><th>Amount</th><th>By</th><th>Reason / detail</th>{consolidated && <th>Branch</th>}</tr></thead>
+                  <tbody>
+                    {waiverItems.length === 0 && (
+                      <tr><td colSpan={consolidated ? 7 : 6} style={{ textAlign: 'center', color: 'var(--text-muted)' }}>
+                        Nothing given away in this period{waiverFilter ? ' of this type' : ''}.
+                      </td></tr>
+                    )}
+                    {waiverItems.map(i => (
+                      <tr key={i.id} data-waiver-row={i.type}>
+                        <td className="mono">{formatDateTime(i.date)}</td>
+                        <td>{i.student ?? '-'} {i.phone && <span className="mono" style={{ color: 'var(--text-muted)' }}>({i.phone})</span>}</td>
+                        <td>{WAIVER_LABEL[i.type] ?? i.type}</td>
+                        <td className="mono" style={i.amount < 0 ? { color: '#ff8888' } : undefined}>{formatSignedCurrency(i.amount)}</td>
+                        <td>{i.by ?? '-'}</td>
+                        <td style={{ fontSize: '0.8rem' }}>{i.detail ?? '-'}</td>
+                        {consolidated && <td>{i.branch ?? '-'}</td>}
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
             </div>
           )}
         </div>

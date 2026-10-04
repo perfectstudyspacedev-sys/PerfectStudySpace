@@ -48,6 +48,7 @@ function ActiveMembersTab({ branchId, tempPackages, permPackages }) {
   const [closePayMode, setClosePayMode] = useState('cash')
   const [withholdLockerDeposit, setWithholdLockerDeposit] = useState(false)
   const [waiveOverstayCharge, setWaiveOverstayCharge] = useState(false)
+  const [waiveReason, setWaiveReason] = useState('')
   const [cashbackNotice, setCashbackNotice] = useState(null)
   const [settlementNotice, setSettlementNotice] = useState(null)
   const [waLoadingId, setWaLoadingId] = useState(null)
@@ -204,6 +205,7 @@ function ActiveMembersTab({ branchId, tempPackages, permPackages }) {
     setClosePayMode('cash')
     setWithholdLockerDeposit(false)
     setWaiveOverstayCharge(false)
+    setWaiveReason('')
     try {
       const summary = await api('get_membership_closure_summary', { membershipId })
       setCloseSummary(summary)
@@ -228,6 +230,7 @@ function ActiveMembersTab({ branchId, tempPackages, permPackages }) {
         paymentMode: closeEffectiveNetAmount > 0 ? closePayMode : undefined,
         withholdLockerDeposit: withholdLockerDeposit || undefined,
         waiveOverstayCharge: waiveOverstayCharge || undefined,
+        waiveReason: waiveOverstayCharge ? waiveReason.trim() : undefined,
       })
       setCloseModal(null)
       if (res.refundAmount > 0) {
@@ -695,7 +698,7 @@ function ActiveMembersTab({ branchId, tempPackages, permPackages }) {
                       Overstay: last visit {formatDate(closeSummary.lastVisitDate)} → {closeSummary.overstayDays} day{closeSummary.overstayDays === 1 ? '' : 's'} × {formatCurrency(closeSummary.overstayDailyRate)} = {formatCurrency(closeSummary.overstayCharge)}
                     </p>
                   )}
-                  {closeSummary.overstayDays === 0 && true && (
+                  {closeSummary.overstayDays === 0 && closeSummary.planEndDate < todayISO() && (
                     <p style={{ fontSize: '0.78rem', color: 'var(--text-muted)' }}>No member check-ins since the plan ended — no overstay charged.</p>
                   )}
                   <p className="mono" style={{ fontWeight: 700, marginTop: '0.3rem' }}>
@@ -712,6 +715,17 @@ function ActiveMembersTab({ branchId, tempPackages, permPackages }) {
                     />
                     <span>Waive the overstay charge of {formatCurrency(closeSummary.overstayCharge)} ({closeSummary.overstayDays} day{closeSummary.overstayDays === 1 ? '' : 's'} after the plan ended).</span>
                   </label>
+                )}
+                {closeSummary.overstayDays > 0 && waiveOverstayCharge && (
+                  <div className="form-group">
+                    <label>Reason for waiving (required)</label>
+                    <input
+                      data-testid="close-waive-reason"
+                      value={waiveReason} maxLength={300}
+                      onChange={(e) => setWaiveReason(e.target.value)}
+                      placeholder="e.g. was unwell, owner approved"
+                    />
+                  </div>
                 )}
 
                 <div className="card" style={{ marginBottom: '1rem', background: 'rgba(74,222,128,0.05)' }}>
@@ -775,7 +789,7 @@ function ActiveMembersTab({ branchId, tempPackages, permPackages }) {
               <button type="button" className="btn btn-ghost" onClick={() => setCloseModal(null)}>Cancel</button>
               <button
                 type="button" className="btn btn-primary"
-                disabled={!closeSummary || closeLoading}
+                disabled={!closeSummary || closeLoading || (waiveOverstayCharge && closeSummary.overstayDays > 0 && !waiveReason.trim())}
                 onClick={confirmClose}
               >
                 {closeLoading ? 'Quitting…'

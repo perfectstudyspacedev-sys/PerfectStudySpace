@@ -147,7 +147,7 @@ Profile: shows the new period + **Cancel Early Renewal** button.
 
 ## Part 5 — Waivers tracking
 
-**W1. "Discounts & Waivers" section on the Revenue page** (follows the selected dates/branch)
+✅ **W1. "Discounts & Waivers" section on the Revenue page** (follows the selected dates/branch)
 
 | Line | Source |
 |---|---|
@@ -160,7 +160,7 @@ Profile: shows the new period + **Cancel Early Renewal** button.
 
 Shows a total per line and a list (date, student, type, amount, who, reason).
 
-**W2. Who / how much / why**
+✅ **W2. Who / how much / why**
 - **W2a.** Overstay waive (Quit & Delete): reason **required**; amount, staff, time, reason saved.
 - **W2b.** Overtime omit (profile Overtime History): reason **required**; un-omit is also recorded.
 - Stored in the new append-only `waivers` table (never edited or deleted).

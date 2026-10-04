@@ -489,6 +489,8 @@ export default function StudentProfilePage() {
   const [foodPassError, setFoodPassError] = useState('')
   const [attendanceModal, setAttendanceModal] = useState(null) // { booking } to edit, or {} to add
   const [overtimeToggleLoading, setOvertimeToggleLoading] = useState(null)
+  const [overtimeReasonModal, setOvertimeReasonModal] = useState(null)
+  const [overtimeReason, setOvertimeReason] = useState('')
   const [planChangeOpen, setPlanChangeOpen] = useState(false)
   const [cabinChangeOpen, setCabinChangeOpen] = useState(false)
   const [addPaymentOpen, setAddPaymentOpen] = useState(false)
@@ -512,6 +514,7 @@ export default function StudentProfilePage() {
   const [deletePayMode, setDeletePayMode] = useState('cash')
   const [deleteReason, setDeleteReason] = useState('')
   const [deleteWaiveOverstay, setDeleteWaiveOverstay] = useState(false)
+  const [deleteWaiveReason, setDeleteWaiveReason] = useState('')
   const [deleteWithholdLockerDeposit, setDeleteWithholdLockerDeposit] = useState(false)
   const [deleteWaiveProratedRefund, setDeleteWaiveProratedRefund] = useState(false)
 
@@ -949,6 +952,7 @@ export default function StudentProfilePage() {
     setDeletePayMode('cash')
     setDeleteReason('')
     setDeleteWaiveOverstay(false)
+    setDeleteWaiveReason('')
     setDeleteWithholdLockerDeposit(false)
     setDeleteWaiveProratedRefund(false)
     setOpenPanel(null) // don't stack this modal on top of the still-open Membership Control one
@@ -963,6 +967,9 @@ export default function StudentProfilePage() {
 
   const handleDeleteMembership = async (membershipId) => {
     if (!deleteReason.trim()) return setDeleteMembershipError('Enter a reason for deleting this membership')
+    if (deleteWaiveOverstay && deleteSummary?.overstayCharge > 0 && !deleteWaiveReason.trim()) {
+      return setDeleteMembershipError('Enter a reason for waiving the overstay charge')
+    }
     setDeleteMembershipLoading(true)
     setDeleteMembershipError('')
     try {
@@ -971,6 +978,7 @@ export default function StudentProfilePage() {
         paymentMode: deleteEffectiveNetAmount > 0 ? deletePayMode : undefined,
         reason: deleteReason.trim(),
         waiveOverstayCharge: deleteWaiveOverstay || undefined,
+        waiveReason: deleteWaiveOverstay ? deleteWaiveReason.trim() : undefined,
         withholdLockerDeposit: deleteWithholdLockerDeposit || undefined,
         waiveProratedRefund: deleteWaiveProratedRefund || undefined,
       })
@@ -985,13 +993,24 @@ export default function StudentProfilePage() {
     }
   }
 
-  const handleToggleOvertimeExcluded = async (overtimeSessionId, excluded) => {
+  // RSP W2 — omitting (or restoring) overtime changes what the student is billed, so the
+  // server requires a reason and logs it as a waiver; ask for it before calling.
+  const openOvertimeReason = (session, excluded) => {
+    setOvertimeReason('')
+    setOvertimeReasonModal({ id: session.id, excluded, minutes: session.overtime_minutes, amount: session.billed_amount, error: '' })
+  }
+
+  const handleToggleOvertimeExcluded = async () => {
+    if (!overtimeReasonModal) return
+    if (!overtimeReason.trim()) return setOvertimeReasonModal((m) => ({ ...m, error: 'Enter a reason' }))
+    const { id: overtimeSessionId, excluded } = overtimeReasonModal
     setOvertimeToggleLoading(overtimeSessionId)
     try {
-      await api('set_overtime_excluded', { overtimeSessionId, excluded })
+      await api('set_overtime_excluded', { overtimeSessionId, excluded, reason: overtimeReason.trim() })
+      setOvertimeReasonModal(null)
       refresh()
     } catch (err) {
-      window.alert(err.message)
+      setOvertimeReasonModal((m) => (m ? { ...m, error: err.message } : m))
     } finally {
       setOvertimeToggleLoading(null)
     }
@@ -2046,7 +2065,7 @@ export default function StudentProfilePage() {
                         <input
                           type="checkbox" checked={!!s.excluded}
                           disabled={overtimeToggleLoading === s.id}
-                          onChange={(e) => handleToggleOvertimeExcluded(s.id, e.target.checked)}
+                          onChange={(e) => openOvertimeReason(s, e.target.checked)}
                           title="Omit this overtime from billing"
                         />
                       )}
@@ -2444,6 +2463,17 @@ export default function StudentProfilePage() {
                     <span>Waive the overstay charge of {formatCurrency(deleteSummary.overstayCharge)} ({deleteSummary.overstayDays} day{deleteSummary.overstayDays === 1 ? '' : 's'} after the plan ended).</span>
                   </label>
                 )}
+                {deleteSummary.overstayDays > 0 && deleteWaiveOverstay && (
+                  <div className="form-group">
+                    <label>Reason for waiving (required)</label>
+                    <input
+                      data-testid="delete-waive-reason"
+                      value={deleteWaiveReason} maxLength={300}
+                      onChange={(e) => setDeleteWaiveReason(e.target.value)}
+                      placeholder="e.g. was unwell, owner approved"
+                    />
+                  </div>
+                )}
 
                 <div className="card" style={{ marginBottom: '0.75rem', background: 'rgba(74,222,128,0.05)' }}>
                   <h3 style={{ color: '#4ade80', fontSize: '0.9rem', marginBottom: '0.5rem' }}>Owed Back to the Student</h3>
@@ -2664,6 +2694,38 @@ export default function StudentProfilePage() {
             </div>
             <div className="modal-actions">
               <button type="button" className="btn btn-primary" onClick={() => setDeleteMembershipNotice(null)}>Got it</button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {overtimeReasonModal && (
+        <div className="modal-overlay" onClick={() => setOvertimeReasonModal(null)}>
+          <div className="modal" style={{ maxWidth: 400 }} onClick={(e) => e.stopPropagation()} data-testid="overtime-reason-modal">
+            <h2>{overtimeReasonModal.excluded ? 'Omit Overtime' : 'Bill Overtime Again'}</h2>
+            <p style={{ fontSize: '0.85rem', color: 'var(--text-muted)', margin: '0.5rem 0 1rem' }}>
+              {overtimeReasonModal.excluded
+                ? `This ${overtimeReasonModal.minutes}m of overtime${overtimeReasonModal.amount != null ? ` (${formatCurrency(overtimeReasonModal.amount)})` : ''} won't be charged. It will be listed under Discounts & Waivers on the Revenue page.`
+                : `This ${overtimeReasonModal.minutes}m of overtime will be charged again at the next renewal or settlement.`}
+            </p>
+            <div className="form-group">
+              <label>Reason (required)</label>
+              <input
+                autoFocus value={overtimeReason} maxLength={300}
+                onChange={(e) => setOvertimeReason(e.target.value)}
+                placeholder={overtimeReasonModal.excluded ? 'e.g. clock ran late, owner approved' : 'e.g. omitted by mistake'}
+              />
+            </div>
+            {overtimeReasonModal.error && <p className="error-msg">{overtimeReasonModal.error}</p>}
+            <div className="modal-actions">
+              <button type="button" className="btn btn-ghost" onClick={() => setOvertimeReasonModal(null)}>Cancel</button>
+              <button
+                type="button" className="btn btn-primary"
+                disabled={overtimeToggleLoading === overtimeReasonModal.id || !overtimeReason.trim()}
+                onClick={handleToggleOvertimeExcluded}
+              >
+                {overtimeToggleLoading === overtimeReasonModal.id ? 'Saving…' : 'Confirm'}
+              </button>
             </div>
           </div>
         </div>
