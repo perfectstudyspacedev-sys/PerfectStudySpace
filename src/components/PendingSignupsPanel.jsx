@@ -2,6 +2,7 @@ import { useState } from 'react'
 import { Link } from 'react-router-dom'
 import { api } from '../lib/api'
 import { formatDate, formatDateTime } from '../lib/utils'
+import { signupLinkFor } from '../lib/signupLink'
 
 const ROW_BTN = { fontSize: '0.8rem', padding: '0.35rem 0.8rem' }
 const OFF = { opacity: 0.35, cursor: 'not-allowed' }
@@ -16,7 +17,7 @@ export default function PendingSignupsPanel({ requests, branchId, activeSignupId
     try {
       const { code } = await api('get_signup_link', { branchId })
       if (!code) return setLinkMsg("This branch's link hasn't been created yet — the owner can create it on the Branches page.")
-      const url = `${window.location.origin}/join/${code}`
+      const url = signupLinkFor(code)
       try {
         await navigator.clipboard.writeText(url)
         setLinkMsg(`Copied: ${url}`)
