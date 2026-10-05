@@ -1,15 +1,22 @@
-// HSL — the self sign-up link given to students. In production it lives on its own address
-// (VITE_SIGNUP_SITE_URL, e.g. https://join.perfectstudyspace.in) so the staff site's address
-// never appears in a student's link. Without that setting (local testing) it stays on this site.
-const SIGNUP_SITE_URL = (import.meta.env.VITE_SIGNUP_SITE_URL ?? '').trim().replace(/\/+$/, '')
+// HSL — the self sign-up link given to students. On the live site it always uses its own address
+// (join.perfectstudyspace.in) so the staff site's address never appears in a student's link.
+// VITE_SIGNUP_SITE_URL can override it; only local testing (localhost) keeps this site's /join/.
+const DEFAULT_SIGNUP_SITE_URL = 'https://join.perfectstudyspace.in'
+const ENV_SIGNUP_SITE_URL = (import.meta.env.VITE_SIGNUP_SITE_URL ?? '').trim().replace(/\/+$/, '')
 
-export function signupLinkFor(code) {
-  return SIGNUP_SITE_URL ? `${SIGNUP_SITE_URL}/${code}` : `${window.location.origin}/join/${code}`
+function isLocalHost(hostname) {
+  return hostname === 'localhost' || hostname === '127.0.0.1' || hostname === '[::1]' || hostname.endsWith('.local')
 }
 
-// Same address as an absolute base, or '' when the sign-up page is served by this site.
-export function signupSiteUrl() {
-  return SIGNUP_SITE_URL
+// The sign-up site's base address, or '' when the sign-up page is served by this site (local testing).
+export function signupSiteUrl(hostname = window.location.hostname) {
+  if (ENV_SIGNUP_SITE_URL) return ENV_SIGNUP_SITE_URL
+  return isLocalHost(hostname) ? '' : DEFAULT_SIGNUP_SITE_URL
+}
+
+export function signupLinkFor(code) {
+  const base = signupSiteUrl()
+  return base ? `${base}/${code}` : `${window.location.origin}/join/${code}`
 }
 
 // True when this page was opened on the sign-up address (join.<domain>): the app then shows
