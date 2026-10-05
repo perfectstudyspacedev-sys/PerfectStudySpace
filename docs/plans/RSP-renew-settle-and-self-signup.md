@@ -321,3 +321,20 @@ Google Form and welcome message, New Registration rules/checks, walk-in registra
 3. Migration `051` (SSP).
 4. `supabase functions deploy api`.
 5. Frontend (Vercel).
+
+---
+
+# HSL — Hide Staff Link (follow-up to SSP) ✅ built
+
+Students' sign-up links use `https://join.perfectstudyspace.in/<code>`, never the staff site's address.
+
+- ✅ **L1.** Same Cloudflare Pages project (`perfect-study-space`). Opened on a `join.` address, the app
+  shows only the sign-up form; the login page and staff screens are never downloaded there.
+- ✅ **L2.** Short links: `join.perfectstudyspace.in/<code>`. Any other path there → "link no longer valid".
+- ✅ **L3.** Copy link buttons use `VITE_SIGNUP_SITE_URL` (Cloudflare variable on `perfect-study-space`);
+  without it (local testing) they keep `<this site>/join/<code>`.
+- ✅ **L4.** Old `<staff address>/join/<code>` links forward to the sign-up address.
+- ✅ **L5.** `public/_headers`: the security headers from `vercel.json`, which Cloudflare Pages doesn't read.
+
+Setup (owner, Cloudflare): add custom domain `join.perfectstudyspace.in` to `perfect-study-space`, add the
+variable `VITE_SIGNUP_SITE_URL=https://join.perfectstudyspace.in`, redeploy.

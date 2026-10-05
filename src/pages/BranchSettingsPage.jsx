@@ -4,6 +4,7 @@ import { useAuth } from '../context/AuthContext'
 import { api } from '../lib/api'
 import { formatCurrency } from '../lib/utils'
 import ConfirmDialog from '../components/ConfirmDialog'
+import { signupLinkFor } from '../lib/signupLink'
 
 export default function BranchSettingsPage() {
   const { isOwner, branches, selectBranch, branchId } = useAuth()
@@ -98,7 +99,7 @@ export default function BranchSettingsPage() {
   }
 
   const selectedBranchName = branches.find(b => b.id === selectedBranch)?.name ?? ''
-  const signupUrl = signupCode ? `${window.location.origin}/join/${signupCode}` : ''
+  const signupUrl = signupCode ? signupLinkFor(signupCode) : ''
 
   const copySignupLink = async () => {
     try {

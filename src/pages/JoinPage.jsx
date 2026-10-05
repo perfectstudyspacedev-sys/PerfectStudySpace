@@ -16,6 +16,10 @@ export default function JoinPage() {
 
   useEffect(() => {
     let cancelled = false
+    if (!code) {
+      setLinkError('This sign-up link is no longer valid. Please ask the desk for the current link.')
+      return () => { cancelled = true }
+    }
     api('public_signup_info', { code })
       .then((d) => { if (!cancelled) setBranchName(d.branchName) })
       .catch((e) => { if (!cancelled) setLinkError(e.message || 'This sign-up link is no longer valid.') })
