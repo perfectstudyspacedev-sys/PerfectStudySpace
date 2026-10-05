@@ -536,6 +536,8 @@ async function recordWaiver(db: ReturnType<typeof adminClient>, row: Record<stri
 }
 
 // ─── SSP: self sign-up helpers ───
+// Longest period the study-report WhatsApp message may cover (a line per day must fit in a wa.me link).
+const STUDY_REPORT_MAX_DAYS = 60;
 const SIGNUP_CLAIM_MINUTES = 15;
 // Spam ceiling: a branch never legitimately has this many students waiting at the desk at once.
 const SIGNUP_PENDING_LIMIT = 50;
@@ -1447,6 +1449,34 @@ Deno.serve(async (req) => {
     }
 
     // ─── MEMBERSHIP ───
+    // Study-report WhatsApp message (Active Members 💬): every session in the chosen dates. A
+    // dedicated action because get_student_profile only returns a student's latest 100 bookings,
+    // which would silently drop days from an older or longer range.
+    if (action === "get_student_study_report") {
+      const { studentId, dateFrom, dateTo } = payload;
+      if (!isISODate(dateFrom) || !isISODate(dateTo)) return err("Pick a start date and an end date");
+      if (dateFrom > dateTo) return err("The start date must be on or before the end date");
+      if (dateTo > todayISO()) return err("The end date can't be in the future");
+      if (daysBetween(dateFrom, dateTo) + 1 > STUDY_REPORT_MAX_DAYS) {
+        return err(`Pick a period of at most ${STUDY_REPORT_MAX_DAYS} days`);
+      }
+      const { data: student } = await db.from("students").select("id, name, branch_id").eq("id", studentId).maybeSingle();
+      if (!student) return err("Student not found");
+      if (!requireBranch(staff, student.branch_id)) return err("Branch access denied", 403);
+
+      const fromTs = istDayStart(dateFrom);
+      const toTs = istDayEnd(dateTo);
+      const rows = await fetchAllRows<{ id: string; start_time: string; end_time: string | null; status: string }>(() =>
+        db.from("bookings").select("id, start_time, end_time, status")
+          .eq("student_id", studentId).neq("status", "cancelled")
+          .gte("start_time", fromTs).lte("start_time", toTs)
+          .order("start_time").order("id"));
+      return json({
+        studentName: student.name, dateFrom, dateTo,
+        bookings: rows.map((b) => ({ start_time: b.start_time, end_time: b.end_time, status: b.status })),
+      });
+    }
+
     // ─── SSP: staff side of self sign-up ───
     if (action === "list_signup_requests") {
       const { branchId, allBranches } = payload;
