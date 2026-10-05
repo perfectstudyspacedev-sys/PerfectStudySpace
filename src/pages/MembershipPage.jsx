@@ -2,11 +2,12 @@ import { useState, useEffect, useCallback, useRef } from 'react'
 import { useNavigate, Link, useOutletContext } from 'react-router-dom'
 import { useAuth } from '../context/AuthContext'
 import { api } from '../lib/api'
-import { formatCurrency, formatDate, getMultiMonthDiscount, pendingCashbackTotal, todayISO, openWhatsApp, DEFAULT_WELCOME_TEMPLATE, REFERRAL_OPTIONS, renewalInfo, isNotStartedYet } from '../lib/utils'
+import { formatCurrency, formatDate, getMultiMonthDiscount, pendingCashbackTotal, todayISO, openWhatsApp, DEFAULT_WELCOME_TEMPLATE, REFERRAL_OPTIONS, renewalInfo, isNotStartedYet, shiftDate } from '../lib/utils'
 import PaymentModeSelector, { isSplitValid } from '../components/PaymentModeSelector'
 import RenewalKindBanner from '../components/RenewalKindBanner'
 import PendingSignupsPanel from '../components/PendingSignupsPanel'
 import ConfirmDialog from '../components/ConfirmDialog'
+import { buildStudyReportMessage, validateStudyReportRange, STUDY_REPORT_MAX_DAYS, STUDY_REPORT_DEFAULT_DAYS } from '../lib/studyReport'
 import { DEV_MODE } from '../lib/devMode'
 
 // Fallback packages — used only until live rates are fetched from fee_config (Branch Settings)
@@ -18,9 +19,6 @@ const DEFAULT_PERM_PACKAGES = [
   { hours: 12, fee: 2100 }, { hours: 13, fee: 2200 }, { hours: 14, fee: 2300 },
   { hours: 15, fee: 2400 }, { hours: 24, fee: 2500 },
 ]
-// How many days of history the WhatsApp study report covers. get_student_profile caps the
-// bookings it returns (see limit there) — keep that cap comfortably above days × sessions/day.
-const STUDY_REPORT_DAYS = 21
 
 // ── Active Members tab ─────────────────────────────────────────────────────
 function ActiveMembersTab({ branchId, tempPackages, permPackages }) {
@@ -54,6 +52,7 @@ function ActiveMembersTab({ branchId, tempPackages, permPackages }) {
   const [cashbackNotice, setCashbackNotice] = useState(null)
   const [settlementNotice, setSettlementNotice] = useState(null)
   const [waLoadingId, setWaLoadingId] = useState(null)
+  const [reportDialog, setReportDialog] = useState(null)
   const [onHoldNotice, setOnHoldNotice] = useState(null)
 
   const load = useCallback(async () => {
@@ -92,56 +91,25 @@ function ActiveMembersTab({ branchId, tempPackages, permPackages }) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [renewCustomDays, renewMonths, renewHoursPerDay, renewCustomAmount, renewCategory])
 
-  // DD/MM/YYYY, matching the study-report template's date format
-  const fmtDMY = (d) => `${String(d.getDate()).padStart(2, '0')}/${String(d.getMonth() + 1).padStart(2, '0')}/${d.getFullYear()}`
-  // HH:MM:SS — hours are NOT capped at 24 since totals can span many days
-  const fmtHMS = (ms) => {
-    const totalSeconds = Math.max(0, Math.floor(ms / 1000))
-    const h = Math.floor(totalSeconds / 3600)
-    const mi = Math.floor((totalSeconds % 3600) / 60)
-    const s = totalSeconds % 60
-    return `${String(h).padStart(2, '0')}:${String(mi).padStart(2, '0')}:${String(s).padStart(2, '0')}`
+  // 💬 opens a popup asking for the period; the report for those dates then opens in WhatsApp.
+  const openReportDialog = (m) => {
+    const today = todayISO()
+    setReportDialog({ m, from: shiftDate(today, -STUDY_REPORT_DEFAULT_DAYS), to: today, error: '' })
   }
 
-  const sendAttendanceWhatsApp = async (m) => {
+  const sendAttendanceWhatsApp = async () => {
+    if (!reportDialog) return
+    const { m, from, to } = reportDialog
+    const problem = validateStudyReportRange(from, to, todayISO())
+    if (problem) return setReportDialog((d) => ({ ...d, error: problem }))
     setWaLoadingId(m.membership_id)
+    setReportDialog((d) => ({ ...d, error: '' }))
     try {
-      const { bookings } = await api('get_student_profile', { studentId: m.student_id })
-      const cutoff = new Date(Date.now() - STUDY_REPORT_DAYS * 86_400_000)
-      const recent = (bookings ?? [])
-        .filter(b => new Date(b.start_time) >= cutoff)
-        .sort((a, b) => new Date(a.start_time) - new Date(b.start_time))
-
-      let message
-      if (!recent.length) {
-        message = `Hi *${m.student_name}*...\n\nNo study attendance was recorded in the last ${STUDY_REPORT_DAYS} days at Perfect Study Space.\n\n-Perfect Study Space`
-      } else {
-        // Sum duration studied per calendar day (a still-active session counts up to now)
-        const now = Date.now()
-        const byDay = new Map()
-        for (const b of recent) {
-          const start = new Date(b.start_time)
-          const end = (b.status === 'completed' && b.end_time) ? new Date(b.end_time) : new Date(now)
-          const durationMs = Math.max(0, end - start)
-          const dayKey = fmtDMY(start)
-          byDay.set(dayKey, (byDay.get(dayKey) || 0) + durationMs)
-        }
-        const days = [...byDay.entries()]
-        const totalMs = days.reduce((sum, [, ms]) => sum + ms, 0)
-        const avgHoursPerDay = (totalMs / 3_600_000) / days.length
-
-        const lines = days.map(([day, ms]) => `${day} - ${fmtHMS(ms)} Hrs`).join('\n')
-
-        message = `Hi *${m.student_name}*...\n\n`
-          + `Here is your study report from *${days[0][0]}* to *${days[days.length - 1][0]}*\n\n`
-          + `${lines}\n\n`
-          + `Total Hours = *${fmtHMS(totalMs)} Hrs*\n\n`
-          + `Average Hours/Day = *${avgHoursPerDay.toFixed(2)} Hrs*\n\n`
-          + `-Perfect Study Space`
-      }
-      openWhatsApp(m.student_phone, message)
-    } catch {
-      window.alert('Could not load attendance details — please try again.')
+      const { bookings } = await api('get_student_study_report', { studentId: m.student_id, dateFrom: from, dateTo: to })
+      openWhatsApp(m.student_phone, buildStudyReportMessage({ name: m.student_name, bookings: bookings ?? [], from, to }))
+      setReportDialog(null)
+    } catch (err) {
+      setReportDialog((d) => (d ? { ...d, error: err.message || 'Could not load attendance details — please try again.' } : d))
     } finally {
       setWaLoadingId(null)
     }
@@ -507,7 +475,7 @@ function ActiveMembersTab({ branchId, tempPackages, permPackages }) {
                           title="Send attendance details via WhatsApp"
                           style={{ padding: '0.3rem 0.6rem', fontSize: '0.8rem', background: 'rgba(74,222,128,0.08)', border: '1px solid rgba(74,222,128,0.4)', color: '#4ade80', borderRadius: 999, cursor: 'pointer', fontWeight: 600 }}
                           disabled={waLoadingId === m.membership_id}
-                          onClick={() => sendAttendanceWhatsApp(m)}
+                          onClick={() => openReportDialog(m)}
                         >{waLoadingId === m.membership_id ? '…' : '💬'}</button>
                       )}
                     </div>
@@ -803,6 +771,35 @@ function ActiveMembersTab({ branchId, tempPackages, permPackages }) {
             </div>
           </div>
         </div>
+      )}
+
+      {reportDialog && (
+        <ConfirmDialog
+          title="Send study report" testId="study-report-dialog" confirmLabel="Open WhatsApp"
+          busy={waLoadingId === reportDialog.m.membership_id}
+          onConfirm={sendAttendanceWhatsApp} onCancel={() => setReportDialog(null)}
+        >
+          <p style={{ marginBottom: '0.75rem' }}>
+            Study report for <strong style={{ color: 'var(--text)' }}>{reportDialog.m.student_name}</strong> — choose the dates it should cover (up to {STUDY_REPORT_MAX_DAYS} days).
+          </p>
+          <div style={{ display: 'flex', gap: '0.75rem', flexWrap: 'wrap' }}>
+            <div className="form-group" style={{ flex: '1 1 140px', marginBottom: '0.5rem' }}>
+              <label htmlFor="report-from">Start date</label>
+              <input
+                id="report-from" type="date" value={reportDialog.from} max={reportDialog.to || todayISO()}
+                onChange={(e) => setReportDialog((d) => ({ ...d, from: e.target.value, error: '' }))}
+              />
+            </div>
+            <div className="form-group" style={{ flex: '1 1 140px', marginBottom: '0.5rem' }}>
+              <label htmlFor="report-to">End date</label>
+              <input
+                id="report-to" type="date" value={reportDialog.to} min={reportDialog.from || undefined} max={todayISO()}
+                onChange={(e) => setReportDialog((d) => ({ ...d, to: e.target.value, error: '' }))}
+              />
+            </div>
+          </div>
+          {reportDialog.error && <p className="error-msg" data-testid="study-report-error">{reportDialog.error}</p>}
+        </ConfirmDialog>
       )}
 
       {onHoldNotice && (
