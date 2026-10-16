@@ -1,0 +1,8 @@
+{
+  "imports": {
+    "https://esm.sh/@supabase/supabase-js@2.49.1": "./fake-supabase.ts",
+    "https://esm.sh/jose@5": "npm:jose@5"
+  },
+  "nodeModulesDir": "none",
+  "lock": false
+}
