@@ -15,9 +15,11 @@ await import(new URL("../../supabase/functions/api/index.ts", import.meta.url).h
 if (!handler) throw new Error("handler not captured");
 
 export { fake };
-export async function tokenFor(staff: any, expires = "1h") {
+export async function tokenFor(staff: any, expires?: unknown) {
+  // Only a string like "7d" counts — tokenFor is often used as a .map() callback (2nd arg = index).
+  const exp = typeof expires === "string" ? expires : "1h";
   return await new SignJWT({ sub: staff.id, role: staff.role, username: staff.username })
-    .setProtectedHeader({ alg: "HS256" }).setExpirationTime(expires).sign(new TextEncoder().encode("test-secret"));
+    .setProtectedHeader({ alg: "HS256" }).setExpirationTime(exp).sign(new TextEncoder().encode("test-secret"));
 }
 export async function call(action: string, payload: any = {}, token?: string) {
   const res = await handler!(new Request("http://fn.local/api", {
@@ -27,6 +29,8 @@ export async function call(action: string, payload: any = {}, token?: string) {
   const body = await res.json();
   return { status: res.status, ...body };
 }
+/** Sends a raw Request straight to the api function (for header-level checks such as CORS). */
+export async function raw(req: Request) { return await handler!(req); }
 export function reset() { for (const k of Object.keys(fake.tables)) delete fake.tables[k]; fake.log.length = 0; }
 export function rows(t: string) { return (fake.tables[t] ??= []); }
 export function insert(t: string, r: any) { const row = { id: crypto.randomUUID(), created_at: new Date().toISOString(), ...r }; rows(t).push(row); return row; }

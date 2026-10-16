@@ -1,20 +1,44 @@
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2.49.1";
 import { SignJWT, jwtVerify } from "https://esm.sh/jose@5";
 
-const corsHeaders = {
-  "Access-Control-Allow-Origin": "*",
-  "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type",
-};
+// CORS (P0.1): only these websites may call the api from a browser. The ALLOWED_ORIGINS secret
+// (comma-separated) replaces the built-in list. The public website is on it because its enquiry
+// form posts to public_create_enquiry. Server-to-server calls (no Origin header) are unaffected.
+const DEFAULT_ALLOWED_ORIGINS = [
+  "https://perfect-study-space.pages.dev",
+  "https://join.perfectstudyspace.in",
+  "https://perfectstudyspace.in",
+  "https://www.perfectstudyspace.in",
+  "http://localhost:5173",
+];
+function allowedOrigins(): string[] {
+  const raw = Deno.env.get("ALLOWED_ORIGINS")?.trim();
+  const list = raw ? raw.split(",") : DEFAULT_ALLOWED_ORIGINS;
+  return list.map((o) => o.trim().replace(/\/+$/, "")).filter(Boolean);
+}
+function corsHeadersFor(origin: string | null): Record<string, string> {
+  const headers: Record<string, string> = {
+    "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type, idempotency-key",
+    "Vary": "Origin",
+  };
+  // Echo the caller's origin only when it is on the list; anyone else gets no allow header.
+  if (origin && allowedOrigins().includes(origin)) headers["Access-Control-Allow-Origin"] = origin;
+  return headers;
+}
+function withCors(req: Request, res: Response): Response {
+  for (const [k, v] of Object.entries(corsHeadersFor(req.headers.get("Origin")))) res.headers.set(k, v);
+  return res;
+}
 
 // Temporary dev-mode switch, code-level only (no UI toggle) — flip and redeploy to turn its
 // gated behaviors on/off. Currently: lets join_permanent_waitlist succeed even when the
 // branch has vacant permanent seats. Matching frontend switch is src/lib/devMode.js.
-const DEV_MODE = true;
+const DEV_MODE = false;
 
 function json(data: unknown, status = 200) {
   return new Response(JSON.stringify(data), {
     status,
-    headers: { ...corsHeaders, "Content-Type": "application/json" },
+    headers: { "Content-Type": "application/json" },
   });
 }
 
@@ -815,8 +839,10 @@ async function createAlert(db: ReturnType<typeof adminClient>, studentId: string
   }
 }
 
-Deno.serve(async (req) => {
-  if (req.method === "OPTIONS") return new Response(null, { headers: corsHeaders });
+Deno.serve(async (req) => withCors(req, await handleRequest(req)));
+
+async function handleRequest(req: Request): Promise<Response> {
+  if (req.method === "OPTIONS") return new Response(null);
 
   try {
     const body = await req.json();
@@ -5824,4 +5850,4 @@ Deno.serve(async (req) => {
   } catch (e) {
     return err(e instanceof Error ? e.message : "Server error", 500);
   }
-});
+}

@@ -53,14 +53,9 @@ npm install
 npm run dev
 ```
 
-### 3. Default Login
+### 3. First login
 
-| Role  | Username | Password  |
-|-------|----------|-----------|
-| Owner | `owner`  | `owner123`  |
-| Staff | `staff1` | `staff123`  |
-
-**Change these passwords before production.**
+Set strong passwords for the seeded accounts at first deploy.
 
 ## Project Structure
 

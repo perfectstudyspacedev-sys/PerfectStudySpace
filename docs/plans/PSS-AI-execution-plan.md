@@ -118,18 +118,20 @@
 
 **Branch:** `pss-ai/p0-foundation` · **Needs:** D0 · **Students see:** no change · **Build in this order:** P0.1 → P0.10
 
-## P0.1 Security quick fixes (closes G37, G38)
+## ✅ P0.1 Security quick fixes (closes G37, G38)
 
 - Set `DEV_MODE = false` in `supabase/functions/api/index.ts` and in `src/lib/devMode.js`. Before flipping, grep every `DEV_MODE` use and list in the PR description what behaviour changes (today it lets `join_permanent_waitlist` succeed even when the branch has vacant permanent seats).
 - `README.md`: remove the default-login table. Replace it with one line: "Set strong passwords for the seeded accounts at first deploy."
 - CORS: replace `*` with an allow-list read from a new secret `ALLOWED_ORIGINS` (comma-separated: the staff site, `https://join.perfectstudyspace.in`, and `http://localhost:5173` for development). Echo the request's `Origin` only when it is on the list. Add `idempotency-key` to `Access-Control-Allow-Headers` (needed by P0.6).
 
 Acceptance:
-- [ ] `grep -rn "DEV_MODE = true"` finds nothing
-- [ ] A request from an origin not on the list receives no CORS allow header; the staff site and the join site still work (browser QA)
-- [ ] README contains no passwords
+- [x] `grep -rn "DEV_MODE = true"` finds nothing
+- [x] A request from an origin not on the list receives no CORS allow header (`tests/server/cors_test.ts`, 15 checks); the staff site and the join site still work (allowed origins verified in the same test; live check after deploy)
+- [x] README contains no passwords
 
-Owner steps: set the `ALLOWED_ORIGINS` secret; change the seeded account passwords.
+Owner steps: set the `ALLOWED_ORIGINS` secret (optional: the code has the same list built in); change the seeded account passwords.
+
+Behaviour changed by `DEV_MODE = false` (listed as P0.1 asks): (1) `join_permanent_waitlist` is refused while the branch has free permanent seats ("Permanent seats are still available — register directly instead of waitlisting"); (2) the Students spreadsheet view is owner/admin only again (`StudentsPage`), and the Membership page's waitlist tab follows the "branch is full" rule. The golden master shows (1) as the only server-side change.
 
 ## P0.2 Move pure helpers to `_shared` (F1, part a)
 
