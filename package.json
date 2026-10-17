@@ -9,7 +9,8 @@
     "preview": "vite preview",
     "test": "vitest run",
     "test:integration": "vitest run --config vitest.integration.config.ts",
-    "test:server": "node scripts/test-server.mjs"
+    "test:server": "node scripts/test-server.mjs",
+    "predeploy": "node scripts/predeploy.mjs"
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.106.1",

@@ -2,7 +2,7 @@
 
 | | |
 |---|---|
-| **Status** | Phase 0 in progress on branch `pss-ai/p0-foundation`. Phases 1–6 not started. |
+| **Status** | Phase 0 built on branch `pss-ai/p0-foundation` (P0.1–P0.10 ✅); its exit gate waits for the owner's deploy. Phases 1–6 not started. |
 | **Agreed on** | 2026-10-13 |
 | **Execution order** | P0 → P1 → P2 → P3 → P4 → P5 → P6. A phase starts only after the owner ticks the previous phase's exit gate. |
 | **Verified against** | `main` at commit `cb7beeb` (RSP + SSP merged, PR #2) |
@@ -304,7 +304,7 @@ Acceptance:
 - [x] A test fails if any registry entry has no tier — `tests/registry/registry.test.ts`; every event row carries the action's tier (P0.5)
 - [x] The T3 set equals the explicit list in Appendix D — same file (for actions people and agents can call; the two system purges are also T3)
 
-## P0.10 Pre-deploy check (F9, closes G39)
+## P0.10 Pre-deploy check (F9, closes G39) ✅
 
 Add `scripts/predeploy.mjs` and the script `"predeploy": "node scripts/predeploy.mjs"`. It fails when:
 
@@ -315,8 +315,10 @@ Add `scripts/predeploy.mjs` and the script `"predeploy": "node scripts/predeploy
 
 On success it prints the deploy order (R10). It runs manually before a deploy. (npm will also run it automatically before any `deploy` script added later.)
 
+- *As built:* it also runs `npm run test:server` and refuses migration files not named `NNN_name.sql`. `--root <dir>` checks another checkout. The source checks are unit-tested in `tests/predeploy/predeploy.test.ts`.
+
 Acceptance:
-- [ ] The script exits non-zero when `DEV_MODE` is flipped back to `true` in a scratch commit
+- [x] The script exits non-zero when `DEV_MODE` is flipped back to `true` in a scratch commit — scratch commit in a throw-away worktree: `✗ predeploy refused: DEV_MODE is true in src/lib/devMode.js`, exit code 1. On this branch it passes: build, 48 Vitest tests, 11 server suites, then prints the deploy order.
 
 ## Phase 0 deploy order
 
@@ -330,10 +332,10 @@ Acceptance:
 
 ## Phase 0 exit gate
 
-- [ ] `npm run test` passes, including every Appendix A unit case
-- [ ] Every action is in the registry with a tier, and every mutating action writes an event with an actor
-- [ ] `npm run predeploy` refuses a deploy with `DEV_MODE` on
-- [ ] Production on Supabase works with no change in behaviour (build plus browser QA notes)
+- [x] `npm run test` passes, including every Appendix A unit case (48 tests: A1–A33, registry and tiers, predeploy)
+- [x] Every action is in the registry with a tier, and every mutating action writes an event with an actor (registry tests; `events_test.ts`; golden master: 95 events for 193 calls)
+- [x] `npm run predeploy` refuses a deploy with `DEV_MODE` on (P0.10)
+- [ ] Production on Supabase works with no change in behaviour (build plus browser QA notes) — waits for the owner's deploy (Phase 0 deploy order above); browser QA so far is against a mocked api
 
 ---
 
