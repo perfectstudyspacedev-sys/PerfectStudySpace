@@ -6,7 +6,9 @@ import { json, err } from "./http.ts";
 type DB = { from: (table: string) => any };
 const IN_PROGRESS = 0;
 // A claim older than this belongs to a request that died without answering; a retry takes it over.
-export const STALE_CLAIM_MS = 5 * 60 * 1000;
+// Longer than the longest an edge function may run (400 s on paid plans), so a slow first try is
+// never run a second time.
+export const STALE_CLAIM_MS = 15 * 60 * 1000;
 export const MAX_KEY_LENGTH = 200;
 
 function stable(v: unknown): unknown {
@@ -15,11 +17,12 @@ function stable(v: unknown): unknown {
   return v;
 }
 
-/** SHA-256 (hex) of the action and its payload, independent of key order. */
-export async function requestHash(action: string, payload: unknown): Promise<string> {
-  const bytes = new TextEncoder().encode(JSON.stringify([action, stable(payload)]));
-  const digest = await crypto.subtle.digest("SHA-256", bytes);
-  return [...new Uint8Array(digest)].map((b) => b.toString(16).padStart(2, "0")).join("");
+/** HMAC-SHA-256 (hex) of the action and its payload, independent of key order. Keyed with a
+ *  server secret, so a stored hash of a payload holding a password cannot be guessed offline. */
+export async function requestHash(action: string, payload: unknown, secret: string): Promise<string> {
+  const key = await crypto.subtle.importKey("raw", new TextEncoder().encode(secret), { name: "HMAC", hash: "SHA-256" }, false, ["sign"]);
+  const mac = await crypto.subtle.sign("HMAC", key, new TextEncoder().encode(JSON.stringify([action, stable(payload)])));
+  return [...new Uint8Array(mac)].map((b) => b.toString(16).padStart(2, "0")).join("");
 }
 
 export type Claim =

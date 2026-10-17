@@ -179,6 +179,9 @@ class Query {
   private exec() {
     fake.log.push(`${this.op} ${this.table}`);
     if (this.op === "select") {
+      // Tests may install globalThis.__FAKE_SELECT_ERROR__(table, cols) to make a read fail (e.g. a missing column).
+      const selErr = g.__FAKE_SELECT_ERROR__?.(this.table, this.cols);
+      if (selErr) return { data: null, error: selErr };
       const rows = this.match();
       if (this.opts?.head) return { data: null, error: null, count: rows.length };
       return this.finish(rows, this.cols, this.opts?.count ? rows.length : undefined);

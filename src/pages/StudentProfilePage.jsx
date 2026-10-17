@@ -776,7 +776,7 @@ export default function StudentProfilePage() {
     await withPaymentKey((idempotencyKey) => api('record_payment', {
       membershipId, amount: Number(payAmount), paymentMode: payMode.mode,
       cashAmount: payMode.cashAmount, upiAmount: payMode.upiAmount,
-    }, { idempotencyKey }))
+    }, { idempotencyKey }), membershipId)
     setPayAmount('')
     setPayMode({ mode: 'cash', cashAmount: '', upiAmount: '' })
     refresh()
@@ -925,7 +925,7 @@ export default function StudentProfilePage() {
         customDaysAmount: renewIsCustomDays ? Number(renewCustomDaysAmount) : undefined,
         startDate: renewStartDate || undefined,
         expectedTotal: renewTotal,
-      }, { idempotencyKey }))
+      }, { idempotencyKey }), membershipId)
       setRenewOpen(false)
       if (res.cashbackApplied || res.overtimeCharged) {
         setCashbackNotice({ amount: res.cashbackApplied, overtimeCharged: res.overtimeCharged })

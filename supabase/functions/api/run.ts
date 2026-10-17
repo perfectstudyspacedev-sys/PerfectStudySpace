@@ -1,7 +1,8 @@
 // Runs one registry action for a caller: idempotency key (P0.6), actor stamping and the event log
 // (P0.5). Used by the api router and the cron function.
 import { err } from "../_shared/http.ts";
-import { actorDb, eventRow, writeEvent } from "../_shared/audit.ts";
+import { actorColumnsAvailable, actorDb, eventRow, writeEvent } from "../_shared/audit.ts";
+import { JWT_SECRET } from "../_shared/auth.ts";
 import { claimKey, finishKey, MAX_KEY_LENGTH, requestHash } from "../_shared/idempotency.ts";
 import type { ActionDef, Ctx } from "./registry.ts";
 
@@ -13,7 +14,7 @@ export async function runOnce(def: ActionDef, ctx: Ctx, payload: any): Promise<R
   const key = ctx.req.headers.get("Idempotency-Key")?.trim();
   if (!key || !def.mutating || def.idempotent) return await runAction(def, ctx, payload);
   if (key.length > MAX_KEY_LENGTH) return err("Invalid Idempotency-Key");
-  const claim = await claimKey(ctx.db, key, def.name, ctx.actor.id, await requestHash(def.name, payload));
+  const claim = await claimKey(ctx.db, key, def.name, ctx.actor.id, await requestHash(def.name, payload, JWT_SECRET));
   if (claim.kind === "answer") return claim.res;
   const res = await runAction(def, ctx, payload);
   if (claim.kind === "run") await finishKey(ctx.db, key, res);
@@ -27,7 +28,8 @@ export async function runOnce(def: ActionDef, ctx: Ctx, payload: any): Promise<R
 export async function runAction(def: ActionDef, ctx: Ctx, payload: any): Promise<Response> {
   let res: Response;
   try {
-    const handlerCtx: Ctx = { ...ctx, db: actorDb(ctx.db, ctx.actor, ctx.runId) };
+    const stamp = await actorColumnsAvailable(ctx.db);
+    const handlerCtx: Ctx = { ...ctx, db: stamp ? actorDb(ctx.db, ctx.actor, ctx.runId) : ctx.db };
     res = (await def.handler(handlerCtx, payload)) ?? err(`Unknown action: ${ctx.action}`);
   } catch (e) {
     res = err(e instanceof Error ? e.message : "Server error", 500);

@@ -37,7 +37,7 @@ describe('predeploy source checks (P0.10)', () => {
       'README.md still shows the default password owner123', 'README.md still shows the default password staff123'])
   })
   test('a gap, a repeat or a badly named migration is refused', () => {
-    expect(sourceProblems(fixture({ migrations: ['001_a.sql', '003_c.sql'] })).join()).toMatch(/not contiguous.*expected 002, found 003_c.sql/)
+    expect(sourceProblems(fixture({ migrations: ['001_a.sql', '003_c.sql', '004_d.sql'] }))).toEqual(['migration numbers are not contiguous from 001: expected 002, found 003_c.sql'])
     expect(sourceProblems(fixture({ migrations: ['001_a.sql', '002_b.sql', '002_c.sql'] })).join()).toMatch(/002 is used twice/)
     expect(sourceProblems(fixture({ migrations: ['002_a.sql'] })).join()).toMatch(/expected 001/)
     expect(sourceProblems(fixture({ migrations: ['001_a.sql', '2_b.sql'] })).join()).toMatch(/not NNN_name.sql: 2_b.sql/)

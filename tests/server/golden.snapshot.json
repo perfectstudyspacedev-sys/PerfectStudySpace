@@ -6693,7 +6693,6 @@
     "occurred_at": "2026-10-16T05:30:00.000Z",
     "ok": true,
     "payload": {
-     "password": "[redacted]",
      "username": "priya"
     },
     "reason": null,
@@ -6711,7 +6710,6 @@
     "occurred_at": "2026-10-16T05:30:00.000Z",
     "ok": false,
     "payload": {
-     "password": "[redacted]",
      "username": "priya"
     },
     "reason": null,
@@ -6728,10 +6726,7 @@
     "id": 3,
     "occurred_at": "2026-10-16T05:30:00.000Z",
     "ok": false,
-    "payload": {
-     "name": "X",
-     "phone": "1"
-    },
+    "payload": {},
     "reason": null,
     "run_id": null,
     "student_id": null,
@@ -6748,11 +6743,7 @@
     "ok": true,
     "payload": {
      "branch": "Hopes",
-     "message": "hi",
-     "name": "Web Lead",
-     "packageInterest": "6h",
-     "phone": "9500000001",
-     "siteKey": "site-key"
+     "packageInterest": "6h"
     },
     "reason": null,
     "run_id": null,
@@ -6769,13 +6760,7 @@
     "occurred_at": "2026-10-16T05:30:00.000Z",
     "ok": true,
     "payload": {
-     "code": "abcdefgh2345",
-     "course": "CA",
-     "emergencyContact": "9600000002",
-     "name": "Self Signer",
-     "phone": "9600000001",
-     "referralSource": "instagram",
-     "website": ""
+     "referralSource": "instagram"
     },
     "reason": null,
     "run_id": null,

@@ -35,9 +35,8 @@ export function sourceProblems(root) {
     else seen.set(n, f)
   }
   const numbers = [...seen.keys()].sort((a, b) => a - b)
-  numbers.forEach((n, i) => {
-    if (n !== i + 1) problems.push(`migration numbers are not contiguous from 001: expected ${String(i + 1).padStart(3, '0')}, found ${seen.get(n)}`)
-  })
+  const gap = numbers.findIndex((n, i) => n !== i + 1)
+  if (gap >= 0) problems.push(`migration numbers are not contiguous from 001: expected ${String(gap + 1).padStart(3, '0')}, found ${seen.get(numbers[gap])}`)
   return [...new Set(problems)].slice(0, 20)
 }
 
@@ -49,6 +48,10 @@ function run(cmd, args, cwd) {
 
 function main() {
   const i = process.argv.indexOf('--root')
+  if (i > 0 && !process.argv[i + 1]) {
+    console.error('usage: node scripts/predeploy.mjs [--root <dir>]')
+    process.exit(2)
+  }
   const root = i > 0 ? resolve(process.argv[i + 1]) : resolve(dirname(fileURLToPath(import.meta.url)), '..')
   const problems = sourceProblems(root)
   if (problems.length) {

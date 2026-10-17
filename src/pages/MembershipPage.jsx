@@ -253,7 +253,7 @@ function ActiveMembersTab({ branchId, tempPackages, permPackages }) {
         customDaysAmount: renewIsCustomDays ? Number(renewCustomDaysAmount) : undefined,
         startDate: renewStartDate || undefined,
         expectedTotal: renewTotal,
-      }, { idempotencyKey }))
+      }, { idempotencyKey }), renewModal.membershipId)
       setRenewModal(null)
       if (res.cashbackApplied || res.overtimeCharged) {
         setCashbackNotice({ amount: res.cashbackApplied, overtimeCharged: res.overtimeCharged })

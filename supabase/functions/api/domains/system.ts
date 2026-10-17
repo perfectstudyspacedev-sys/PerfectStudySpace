@@ -15,15 +15,20 @@ const LIST_LIMIT = 100; // rows listed per finding; the counts are always comple
 
 /** Read-only checks for the nightly integrity report (P0.8). Writes nothing. */
 export async function integrityFindings(db: Ctx["db"]) {
-  // 1. Same computation as fix_membership_dates (members.ts), without the update.
+  // 1. End dates that match neither way a plan is sold: months (as fix_membership_dates computes
+  //    it) or a custom number of days (start + plan_days − 1), each plus hold days. Due dates are
+  //    not compared: paying off a due and plan changes move them on purpose. A manual end-date
+  //    change (change_membership_plan) also shows here, so these are rows to review, not to fix
+  //    blindly — see F-3 in the plan.
   const memberships = await fetchAllRows<any>(() => db.from("memberships")
-    .select("id, branch_id, start_date, months_paid, hold_days, end_date, due_date").order("id"));
+    .select("id, branch_id, start_date, months_paid, plan_days, hold_days, end_date").order("id"));
   const membershipDates = memberships.flatMap((m) => {
-    const correctEndDate = addDays(endDateForMonths(m.start_date, m.months_paid), m.hold_days ?? 0);
-    const correctDueDate = addDays(endDateForMonths(m.start_date, 1), 1);
-    return correctEndDate !== m.end_date || correctDueDate !== m.due_date
-      ? [{ membership_id: m.id, branch_id: m.branch_id, end_date: m.end_date, correct_end_date: correctEndDate, due_date: m.due_date, correct_due_date: correctDueDate }]
-      : [];
+    const holds = Number(m.hold_days ?? 0);
+    const byMonths = addDays(endDateForMonths(m.start_date, m.months_paid), holds);
+    const byDays = m.plan_days ? addDays(m.start_date, Number(m.plan_days) - 1 + holds) : null;
+    return m.end_date === byMonths || m.end_date === byDays
+      ? []
+      : [{ membership_id: m.id, branch_id: m.branch_id, end_date: m.end_date, months_end_date: byMonths, days_end_date: byDays }];
   });
   // 2. Same selection as fix_negative_food_pass_balances (money.ts).
   const passes = await fetchAllRows<any>(() => db.from("food_passes").select("id, student_id, branch_id, balance").lt("balance", 0).order("id"));

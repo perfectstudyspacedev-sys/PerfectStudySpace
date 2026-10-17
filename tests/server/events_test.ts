@@ -4,7 +4,7 @@
 import "./determinism.ts";
 import { call, insert, rows, reset, tokenFor, check, done, IST_TODAY, addDays } from "./harness.ts";
 import { ACTION_META } from "../../supabase/functions/api/registry.ts";
-import { ACTOR_TABLES, redactPayload } from "../../supabase/functions/_shared/audit.ts";
+import { ACTOR_TABLES, isSecretKey, redactPayload, resetActorColumnsCheck, storedPayload } from "../../supabase/functions/_shared/audit.ts";
 const g = globalThis as any;
 const META = new Map(ACTION_META.map((m) => [m.name, m]));
 const TODAY = IST_TODAY();
@@ -100,13 +100,23 @@ check(events().every((e, i) => e.id === i + 1 && typeof e.occurred_at === "strin
   const logins = events().slice(before);
   check(good.status === 200 && bad.status === 401 && logins.length === 2 && logins.every((x) => x.action === "login" && x.actor_type === "public" && x.actor_id === null)
     && logins[0].ok === true && logins[1].ok === false, "E4: login success and failure each logged as public", { good, bad, logins });
-  check(logins.every((x) => x.payload.password === "[redacted]") && !allJson().includes("wrong-secret") && !/"pw"/.test(allJson()),
-    "E4: no password reaches the event payload", logins.map((x) => x.payload));
+  check(logins.every((x) => JSON.stringify(x.payload) === '{"username":"priya"}') && !allJson().includes("wrong-secret") && !/"pw"/.test(allJson()),
+    "E4: a login stores only the username — no password reaches the event payload", logins.map((x) => x.payload));
 
   const s = await call("public_signup_submit", { code: "abcdefgh2345", name: "Self Signer", phone: "9600000001", emergencyContact: "9600000002", course: "CA", referralSource: "instagram", website: "", aadhaar: "123412341234", photo: "data:image/png;base64,AAAA", pin: "4321" });
   const se = events().at(-1)!;
-  check(s.ok && se.action === "public_signup_submit" && se.actor_type === "public" && se.payload.aadhaar === "[redacted]" && se.payload.photo === "[redacted]" && se.payload.pin === "[redacted]"
-    && !allJson().includes("123412341234") && !allJson().includes("4321"), "E4: a sign-up leaves no Aadhaar, photo or PIN in any event", se);
+  check(s.ok && se.action === "public_signup_submit" && se.actor_type === "public" && JSON.stringify(se.payload) === '{"referralSource":"instagram"}'
+    && !allJson().includes("123412341234") && !allJson().includes("4321") && !allJson().includes("9600000001") && !allJson().includes("Self Signer") && !allJson().includes("abcdefgh2345"),
+    "E4: a sign-up stores only how the student heard of us — no name, phone, Aadhaar, photo, PIN or link code", se);
+
+  const enq = await call("public_create_enquiry", { siteKey: "site-key", name: "Web Lead", phone: "9500000001", branch: "Hopes", packageInterest: "6h", message: "hi", reason: "spam?" });
+  const ee = events().at(-1)!;
+  check(enq.status === 200 && JSON.stringify(ee.payload) === '{"branch":"Hopes","packageInterest":"6h"}' && ee.reason === null && !allJson().includes("site-key"),
+    "E4: a website enquiry stores branch and package only (no site key, name or phone)", ee);
+
+  const huge = await call("login", { username: "x".repeat(5000), ["k".repeat(100000)]: 1, list: Array(5000).fill("y".repeat(1000)) });
+  const he = events().at(-1)!;
+  check(huge.status >= 400 && JSON.stringify(he).length < 600 && he.payload.username.length === 100, "E7: a huge anonymous request stores a few hundred bytes, not its body", JSON.stringify(he).length);
 
   const created = await call("create_staff", { username: "newstaff", password: "secret-9", displayName: "New", role: "staff", branchId: b1.id }, tO);
   check(created.status === 200 && !allJson().includes("secret-9"), "E4: a staff password set by the owner is not logged", events().at(-1));
@@ -139,10 +149,36 @@ check(events().every((e, i) => e.id === i + 1 && typeof e.occurred_at === "strin
 
 // ── Redaction rules ──
 {
+  check(["siteKey", "aadhar", "aadharNumber", "pwd", "otp", "authToken", "client_secret", "Password", "staff_pin", "newPin"].every(isSecretKey)
+    && !["pincode", "typing", "shopping", "opinion", "spinner", "keyword", "notes", "skipFoodPass", "foodPassPaymentMode"].some(isSecretKey),
+    "R11: secret keys are matched by whole words (pincode, typing… are kept)");
+  const caps: any = storedPayload("create_enquiry", "staff", { ["k".repeat(65)]: 1, list: Array(60).fill(1), ...Object.fromEntries(Array.from({ length: 70 }, (_, i) => [`f${i}`, i])) });
+  check(caps.list.length === 51 && caps.list[50] === "[+10 more]" && Object.keys(caps).length === 51 && caps["[skipped keys]"] === 22,
+    "E7: at most 50 keys, 50 array items and 64-character keys per object", Object.keys(caps).length);
+  const big: any = storedPayload("create_enquiry", "staff", Object.fromEntries(Array.from({ length: 40 }, (_, i) => [`note${i}`, "z".repeat(1000)])));
+  check(big.truncated === true && big.bytes > 8192 && big.keys.length === 20, "E7: a stored payload over 8 KB keeps only its size and key names", big);
+}
+{
   const r: any = redactPayload({ username: "a", newPassword: "x", staffPin: "1", aadhaarNo: "2", photoUrl: "3", imageData: "4", note: "y".repeat(1025), short: "y".repeat(1024), nested: { list: [{ password: "z" }] }, n: 5 });
   check(r.username === "a" && [r.newPassword, r.staffPin, r.aadhaarNo, r.photoUrl, r.imageData].every((v) => v === "[redacted]")
     && r.note === "[redacted: 1025 chars]" && r.short.length === 1024 && r.nested.list[0].password === "[redacted]" && r.n === 5,
     "R11: secret keys (any case, nested) and strings over 1 KB are redacted", r);
 }
 
+// ── Migration 053 not applied yet: stamping is skipped, the action still works (review finding 3) ──
+{
+  resetActorColumnsCheck();
+  const g2 = globalThis as any;
+  g2.__FAKE_SELECT_ERROR__ = (table: string, cols: string) => (table === "transactions" && cols.includes("actor_type") ? { message: "column transactions.actor_type does not exist", code: "42703" } : null);
+  g2.__FAKE_CHECK__ = (_t: string, row: any) => ("actor_type" in row ? { message: "Could not find the 'actor_type' column", code: "PGRST204" } : null);
+  const origError = console.error; const logged: string[] = []; console.error = (...a: unknown[]) => { logged.push(a.join(" ")); };
+  const before = rows("transactions").length;
+  const r = await call("add_manual_payment", { studentId: asha.id, date: TODAY, reason: "fine", amount: 20, paymentMode: "cash" }, tO);
+  console.error = origError; g2.__FAKE_SELECT_ERROR__ = undefined; g2.__FAKE_CHECK__ = undefined; resetActorColumnsCheck();
+  const tx = rows("transactions").slice(before);
+  check(r.status === 200 && tx.length === 1 && !("actor_type" in tx[0]) && logged.some((l) => l.includes("053")),
+    "A2: without migration 053 the payment is recorded unstamped and the gap is reported, instead of failing half-way", { r, tx, logged });
+}
+
 done();
+

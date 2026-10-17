@@ -92,7 +92,7 @@ await setup();
   const row = insert("idempotency_keys", { key: "key-5", action: "record_payment", actor_id: priya.id, request_hash: null, status: 0, response: {} });
   delete row.id;
   const { requestHash } = await import("../../supabase/functions/_shared/idempotency.ts");
-  row.request_hash = await requestHash("record_payment", pay());
+  row.request_hash = await requestHash("record_payment", pay(), "test-secret");
   const busy = await send("record_payment", pay(), tP, "key-5");
   check(busy.status === 409 && /still being processed/.test(busy.body.error) && payments().length === 0, "I5: a retry while the first try is still running gets 409 and runs nothing", busy);
   row.created_at = new Date(Date.now() - STALE_CLAIM_MS - 1000).toISOString();
