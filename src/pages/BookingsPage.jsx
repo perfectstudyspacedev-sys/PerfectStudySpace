@@ -761,7 +761,7 @@ export default function BookingsPage() {
     try {
       const res = await withCheckoutKey((idempotencyKey) => api('checkout_booking', {
         bookingId, overtimeMinutes, overtimePaymentMode, overtimePayNow, settleFoodNow, foodPassPaymentMode, actualEndTime,
-      }, { idempotencyKey }))
+      }, { idempotencyKey }), bookingId)
       if (res?.needsFoodPassCollection) {
         setCheckoutBooking(null)
         setFoodPassCollectMode('cash')

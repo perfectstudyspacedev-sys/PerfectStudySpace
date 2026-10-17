@@ -20,7 +20,7 @@ function getToken() {
 
 // A fresh Idempotency-Key. Forms whose submit can be retried (payments, checkout, renewals) keep
 // one per submit with useRetryKey(), so a retry after a lost reply is answered from the server's
-// record instead of running twice. Every other call gets its own key, which changes nothing.
+// record instead of running twice. Other calls send no key.
 export function newIdempotencyKey() {
   if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') return crypto.randomUUID()
   const b = crypto.getRandomValues(new Uint8Array(16))
@@ -36,7 +36,7 @@ export async function api(action, payload = {}, { idempotencyKey } = {}) {
     body: { action, ...payload },
     headers: {
       ...(token ? { Authorization: `Bearer ${token}` } : {}),
-      'Idempotency-Key': idempotencyKey || newIdempotencyKey(),
+      ...(idempotencyKey ? { 'Idempotency-Key': idempotencyKey } : {}),
     },
   })
 
