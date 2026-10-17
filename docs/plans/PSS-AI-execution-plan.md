@@ -151,15 +151,15 @@ Acceptance:
 - [x] Login, check-in and checkout with overtime give identical results before and after (golden master, `tests/server`); `supabase functions serve` itself still to be run on a machine with the Supabase CLI
 - [x] The diff of each moved function body is whitespace-only (checked by script: byte-identical apart from `export`; `overstayFromLastVisit` is the one allowed split)
 
-## P0.3 Money regression tests (F5, closes G21) — needs D0
+## ✅ P0.3 Money regression tests (F5, closes G21) — needs D0 (Vitest, approved 2026-10-16)
 
 - Add Vitest as a dev dependency. Add scripts: `"test": "vitest run"` and `"test:integration": "vitest run --config vitest.integration.config.ts"`.
 - Unit tests in `tests/money/*.test.ts` import from `supabase/functions/_shared/`. Write every unit case in **Appendix A** as its own named test.
 - Integration cases (Appendix A, part 2) go in `tests/integration/` and run against a local Supabase (`supabase start`, needs Docker). They skip themselves when no local Supabase is running. They are required before Phase 2, not before the end of Phase 0.
 
 Acceptance:
-- [ ] `npm run test` passes and covers every Appendix A unit case
-- [ ] Test names match the case numbers in Appendix A
+- [x] `npm run test` passes and covers every Appendix A unit case (33/33; no pinned value differed from the code)
+- [x] Test names match the case numbers in Appendix A
 
 ## P0.4 Action registry and domain split (F1, part b)
 
