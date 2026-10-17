@@ -2,6 +2,7 @@ import { useState, useEffect, useCallback, useRef } from 'react'
 import { Link } from 'react-router-dom'
 import { useAuth } from '../context/AuthContext'
 import { api } from '../lib/api'
+import { useRetryKey } from '../hooks/useRetryKey'
 import { formatCurrency, formatDate, todayISO } from '../lib/utils'
 import WalkInModal from '../components/WalkInModal'
 
@@ -682,6 +683,7 @@ function CombinedSessionsView() {
 
 export default function BookingsPage() {
   const { branchId, isCombinedHall } = useAuth()
+  const withCheckoutKey = useRetryKey()
   const [bookings, setBookings] = useState([])
   const [loading, setLoading] = useState(true)
   const [actionLoading, setActionLoading] = useState(null)
@@ -753,9 +755,9 @@ export default function BookingsPage() {
   const confirmCheckout = async (bookingId, { overtimeMinutes, overtimePaymentMode, overtimePayNow, settleFoodNow, foodPassPaymentMode, actualEndTime }) => {
     setActionLoading(bookingId + ':checkout')
     try {
-      const res = await api('checkout_booking', {
+      const res = await withCheckoutKey((idempotencyKey) => api('checkout_booking', {
         bookingId, overtimeMinutes, overtimePaymentMode, overtimePayNow, settleFoodNow, foodPassPaymentMode, actualEndTime,
-      })
+      }, { idempotencyKey }))
       if (res?.needsFoodPassCollection) {
         setCheckoutBooking(null)
         setFoodPassCollectMode('cash')

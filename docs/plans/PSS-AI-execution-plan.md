@@ -14,6 +14,11 @@
 - **Hosting:** both sites run on **Cloudflare Pages** (project `perfect-study-space`: `perfect-study-space.pages.dev` and `join.perfectstudyspace.in`), not Vercel. `vercel.json` is not read there; the security headers live in `public/_headers`. Wherever this plan says "Vercel" (repo facts, R10, Phase 4 config), read "Cloudflare Pages".
 - **CORS (P0.1):** the public website (`perfectstudyspace.in`, `www.perfectstudyspace.in`, Cloudflare project `perfect-study-space-web`) posts its enquiry form to the `api` function (`public_create_enquiry`), so it must be on the allow-list. Default list in code: `https://perfect-study-space.pages.dev`, `https://join.perfectstudyspace.in`, `https://perfectstudyspace.in`, `https://www.perfectstudyspace.in`, `http://localhost:5173`. The `ALLOWED_ORIGINS` secret replaces it when set.
 - **Extra safety net:** `tests/server/` runs the real `api` function against an in-memory stand-in for Supabase (`npm run test:server`, no Docker). `golden_test.ts` calls every action on a fixed clock and compares every response and the whole database with `golden.snapshot.json`, so refactors (P0.2, P0.4) are proven behaviour-neutral.
+- **Deploy order matters more from P0.6:** the frontend now sends an `Idempotency-Key` header on every call. The `api` function built from this branch allows that header (CORS); the one live today does not, so a browser would refuse every call if the frontend went live first. Keep R10: functions before frontend.
+
+## Findings for the owner (not fixed — R1)
+
+- **F-1 Split payment mismatch (found in P0.6 tests).** If `record_payment` is called with a cash + UPI split that does not add up, it lowers the membership's due and raises its total paid first, then refuses the split with a 500 — so the membership is credited and no transaction is written. The staff app cannot send such a split (its forms check it first), so today it needs a hand-made API call. `add_locker`, `remove_locker`, `record_locker_payment`, `add_manual_payment`, `renew_locker` and `create_walkin` also check the split only when writing the transaction and may leave the same partial write (not checked one by one). Suggested fix, for the owner to approve: check the split before any write, as `create_membership` and `renew_membership` already do. This matters before agents (Phase 2) call payment actions.
 
 ## How to use this file in a future chat
 
@@ -242,7 +247,7 @@ Acceptance:
 - [x] A login and a sign-up leave no password, PIN or Aadhaar data in any event payload — events_test E4 (also a staff password set through `create_staff`)
 - [x] Every insert that sets `created_by_staff_id` also sets `actor_type` and `actor_id` — by construction (`actorDb`); events_test A1 checks every row the ten actions inserted, and the golden master records the stamped rows of all 123 actions
 
-## P0.6 Idempotency keys (F4) — migration 054
+## P0.6 Idempotency keys (F4) — migration 054 ✅
 
 `054_idempotency_keys.sql`: `idempotency_keys (key TEXT PRIMARY KEY, action TEXT NOT NULL, actor_id UUID, status INT NOT NULL, response JSONB NOT NULL, created_at TIMESTAMPTZ NOT NULL DEFAULT now())`, with RLS on.
 
@@ -250,9 +255,11 @@ Acceptance:
 - Router: for actions with `mutating: true` and `idempotent: false`, if the key already exists return the stored status and body; otherwise run the handler and store the response (2xx and 4xx; never 5xx).
 - The existing guards stay: the `checkout_booking` status check, the renewal claim guard and `claimSignup`.
 
+- *As built:* the table also has `request_hash` (SHA-256 of the action and payload, key order ignored), so a key reused for a different request, by another staff member or for another action gets 422 and runs nothing. `status = 0` marks a request still running: a retry then gets 409; a claim left for over 5 minutes by a request that died is taken over. A 5xx releases the key, so a retry runs the action again exactly as today (see F-1 for what a 500 can leave behind). A replay writes no second event and carries the header `Idempotent-Replayed: true`. If the table is missing (054 not applied) actions run as before. Over-long keys (over 200 characters) get 400. In the app, `api()` takes `{ idempotencyKey }` and thrown errors carry `err.status`; `useRetryKey()` (`src/hooks/useRetryKey.js`) keeps one key per submit for record payment, checkout and both renewal forms, kept after a network error, a 5xx or a 409, and dropped once the server has answered.
+
 Acceptance:
-- [ ] Two identical `record_payment` calls with the same key create one transaction row
-- [ ] Two calls with different keys behave as they do today
+- [x] Two identical `record_payment` calls with the same key create one transaction row — `tests/server/idempotency_test.ts` I1 (also checkout and renewal, I6; double click, I5)
+- [x] Two calls with different keys behave as they do today — I2 (and calls without a key)
 
 ## P0.7 Scheduler and the `cron` function (F3, closes G20)
 

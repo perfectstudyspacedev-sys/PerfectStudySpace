@@ -2,6 +2,7 @@ import { useState, useEffect, useCallback, useRef } from 'react'
 import { useNavigate, Link, useOutletContext } from 'react-router-dom'
 import { useAuth } from '../context/AuthContext'
 import { api } from '../lib/api'
+import { useRetryKey } from '../hooks/useRetryKey'
 import { formatCurrency, formatDate, getMultiMonthDiscount, pendingCashbackTotal, todayISO, openWhatsApp, DEFAULT_WELCOME_TEMPLATE, REFERRAL_OPTIONS, renewalInfo, isNotStartedYet, shiftDate } from '../lib/utils'
 import PaymentModeSelector, { isSplitValid } from '../components/PaymentModeSelector'
 import RenewalKindBanner from '../components/RenewalKindBanner'
@@ -22,6 +23,7 @@ const DEFAULT_PERM_PACKAGES = [
 
 // ── Active Members tab ─────────────────────────────────────────────────────
 function ActiveMembersTab({ branchId, tempPackages, permPackages }) {
+  const withRenewKey = useRetryKey()
   const navigate = useNavigate()
   const [members, setMembers] = useState([])
   const [loading, setLoading] = useState(true)
@@ -231,7 +233,7 @@ function ActiveMembersTab({ branchId, tempPackages, permPackages }) {
     setActionLoading(renewModal.membershipId + ':renew')
     setRenewError('')
     try {
-      const res = await api('renew_membership', {
+      const res = await withRenewKey((idempotencyKey) => api('renew_membership', {
         membershipId: renewModal.membershipId,
         category: renewCategory,
         hoursPerDay: renewIsCustomPlan ? Number(renewCustomWeekdayHours) : renewHoursPerDay,
@@ -251,7 +253,7 @@ function ActiveMembersTab({ branchId, tempPackages, permPackages }) {
         customDaysAmount: renewIsCustomDays ? Number(renewCustomDaysAmount) : undefined,
         startDate: renewStartDate || undefined,
         expectedTotal: renewTotal,
-      })
+      }, { idempotencyKey }))
       setRenewModal(null)
       if (res.cashbackApplied || res.overtimeCharged) {
         setCashbackNotice({ amount: res.cashbackApplied, overtimeCharged: res.overtimeCharged })

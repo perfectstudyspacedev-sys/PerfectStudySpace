@@ -3,10 +3,12 @@
 // in registry.ts. The order is the same as the old if-chain: public actions run without a login,
 // everything else needs a staff token (and marks the day's attendance) before the action runs.
 // Since P0.5 every mutating action also writes one row to the events log, and inserts into the
-// audited tables are stamped with the caller (see _shared/audit.ts).
+// audited tables are stamped with the caller (see _shared/audit.ts). Since P0.6 a retried
+// mutating action with the same Idempotency-Key header gets the stored answer (_shared/idempotency.ts).
 import { withCors, err } from "../_shared/http.ts";
 import { adminClient, authStaff, markAttendanceIfNeeded } from "../_shared/auth.ts";
 import { actorDb, eventRow, writeEvent } from "../_shared/audit.ts";
+import { claimKey, finishKey, MAX_KEY_LENGTH, requestHash } from "../_shared/idempotency.ts";
 import type { ActionDef, Caller, Ctx } from "./registry.ts";
 import { REGISTRY } from "./actions.ts";
 
@@ -23,7 +25,7 @@ async function handleRequest(req: Request): Promise<Response> {
 
     // ─── PUBLIC ───
     if (def && def.callers.includes("public")) {
-      return await runAction(def, { db, req, action, actor: { type: "public", id: null } }, payload);
+      return await runOnce(def, { db, req, action, actor: { type: "public", id: null } }, payload);
     }
 
     const staff = await authStaff(req);
@@ -31,10 +33,25 @@ async function handleRequest(req: Request): Promise<Response> {
     await markAttendanceIfNeeded(db, staff.id, staff.role, staff.homeBranchId);
 
     if (!def) return err(`Unknown action: ${action}`);
-    return await runAction(def, { db, req, action, staff, actor: { type: staff.role as Caller, id: staff.id } }, payload);
+    return await runOnce(def, { db, req, action, staff, actor: { type: staff.role as Caller, id: staff.id } }, payload);
   } catch (e) {
     return err(e instanceof Error ? e.message : "Server error", 500);
   }
+}
+
+// Actions that are not safe to repeat (mutating, not idempotent) honour an Idempotency-Key: the
+// first request runs and its answer is stored; a retry with the same key and the same request
+// gets that answer back without running again. Without a key nothing changes.
+// deno-lint-ignore no-explicit-any
+async function runOnce(def: ActionDef, ctx: Ctx, payload: any): Promise<Response> {
+  const key = ctx.req.headers.get("Idempotency-Key")?.trim();
+  if (!key || !def.mutating || def.idempotent) return await runAction(def, ctx, payload);
+  if (key.length > MAX_KEY_LENGTH) return err("Invalid Idempotency-Key");
+  const claim = await claimKey(ctx.db, key, def.name, ctx.actor.id, await requestHash(def.name, payload));
+  if (claim.kind === "answer") return claim.res;
+  const res = await runAction(def, ctx, payload);
+  if (claim.kind === "run") await finishKey(ctx.db, key, res);
+  return res;
 }
 
 // Runs one action and logs it: every mutating action (success or failure), and reads only for

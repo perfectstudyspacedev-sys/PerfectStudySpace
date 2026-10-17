@@ -18,15 +18,31 @@ function getToken() {
   return sessionStorage.getItem('pss_token')
 }
 
-export async function api(action, payload = {}) {
+// A fresh Idempotency-Key. Forms whose submit can be retried (payments, checkout, renewals) keep
+// one per submit with useRetryKey(), so a retry after a lost reply is answered from the server's
+// record instead of running twice. Every other call gets its own key, which changes nothing.
+export function newIdempotencyKey() {
+  if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') return crypto.randomUUID()
+  const b = crypto.getRandomValues(new Uint8Array(16))
+  return Array.from(b, (x) => x.toString(16).padStart(2, '0')).join('')
+}
+
+// Thrown errors carry the HTTP status when the server answered (err.status); a network failure
+// has none.
+export async function api(action, payload = {}, { idempotencyKey } = {}) {
   const token = getToken()
 
   const { data, error } = await supabase.functions.invoke('api', {
     body: { action, ...payload },
-    headers: token ? { Authorization: `Bearer ${token}` } : {},
+    headers: {
+      ...(token ? { Authorization: `Bearer ${token}` } : {}),
+      'Idempotency-Key': idempotencyKey || newIdempotencyKey(),
+    },
   })
 
   if (error) {
+    const status = typeof error.context?.status === 'number' ? error.context.status : undefined
+    const fail = (msg) => Object.assign(new Error(msg), { status })
     let message = error.message
     try {
       const ctx = error.context
@@ -41,10 +57,10 @@ export async function api(action, payload = {}) {
 
     const lower = message.toLowerCase()
     if (lower.includes('invalid') && (lower.includes('login') || lower.includes('password') || lower.includes('credentials'))) {
-      throw new Error('Invalid username or password')
+      throw fail('Invalid username or password')
     }
     if (lower.includes('no available desk') || lower.includes('no free desk')) {
-      throw new Error('No available desk')
+      throw fail('No available desk')
     }
     // A 401 mid-session means the account was deactivated, or its day's session was ended
     // (by the owner, or by the staff member themselves via End Session) since this tab
@@ -52,13 +68,13 @@ export async function api(action, payload = {}) {
     // page silently broken. Not raised for the login action itself (wrong credentials).
     if (action !== 'login' && lower === 'unauthorized') {
       window.dispatchEvent(new Event('pss:unauthorized'))
-      throw new Error('Your session has ended — please log in again')
+      throw fail('Your session has ended — please log in again')
     }
     if (lower.includes('non-2xx')) {
-      if (action === 'login') throw new Error('Invalid credentials')
-      throw new Error('Something went wrong')
+      if (action === 'login') throw fail('Invalid credentials')
+      throw fail('Something went wrong')
     }
-    throw new Error(message)
+    throw fail(message)
   }
 
   if (data?.error) throw new Error(data.error)

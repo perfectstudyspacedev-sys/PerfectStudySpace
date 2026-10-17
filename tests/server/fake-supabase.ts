@@ -25,9 +25,12 @@ const DEFAULTS: Record<string, Row> = {
 };
 
 function uuid() { return crypto.randomUUID(); }
+// Tables whose primary key is not a generated id; a second insert with the same key fails like Postgres.
+const PRIMARY_KEY: Record<string, string> = { idempotency_keys: "key" };
 // events has a BIGSERIAL id and occurred_at (migration 052), so it takes no uuid from the seeded counter.
 function baseRow(table: string): Row {
   if (table === "events") return { id: tbl(table).reduce((m, r) => Math.max(m, r.id), 0) + 1, occurred_at: new Date().toISOString() };
+  if (table in PRIMARY_KEY) return { created_at: new Date().toISOString() };
   return { id: uuid(), created_at: new Date().toISOString() };
 }
 function tbl(name: string) { return (fake.tables[name] ??= []); }
@@ -190,6 +193,10 @@ class Query {
           if (hit) { if (!this.upsertOpts.ignoreDuplicates) Object.assign(hit, clone(p)); continue; }
         }
         const row = { ...baseRow(this.table), ...clone(DEFAULTS[this.table] ?? {}), ...clone(p) };
+        const pk = PRIMARY_KEY[this.table];
+        if (pk && tbl(this.table).some((r) => r[pk] === row[pk])) {
+          return { data: null, error: { message: `duplicate key value violates unique constraint "${this.table}_pkey"`, code: "23505" } };
+        }
         const err = g.__FAKE_CHECK__?.(this.table, row);
         if (err) return { data: null, error: typeof err === "string" ? { message: err } : err };
         tbl(this.table).push(row); inserted.push(row);

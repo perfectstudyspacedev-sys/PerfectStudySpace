@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback } from 'react'
 import { useParams, Link, useSearchParams } from 'react-router-dom'
 import { api } from '../lib/api'
+import { useRetryKey } from '../hooks/useRetryKey'
 import { useAuth } from '../context/AuthContext'
 import { formatCurrency, formatDate, paymentModeLabel, getMultiMonthDiscount, pendingCashbackTotal, todayISO, shiftDate, REFERRAL_OPTIONS, renewalInfo, isNotStartedYet } from '../lib/utils'
 import PaymentModeSelector, { isSplitValid } from '../components/PaymentModeSelector'
@@ -421,6 +422,8 @@ function ResumeCabinModal({ branchId, loading, error, onClose, onSubmit }) {
 
 export default function StudentProfilePage() {
   const { id } = useParams()
+  const withPaymentKey = useRetryKey()
+  const withRenewKey = useRetryKey()
   const { isOwner, branches } = useAuth()
   const [data, setData] = useState(null)
   const [loading, setLoading] = useState(true)
@@ -770,10 +773,10 @@ export default function StudentProfilePage() {
 
   const handlePayment = async (membershipId) => {
     if (!payAmount || !isSplitValid(payMode, payAmount)) return
-    await api('record_payment', {
+    await withPaymentKey((idempotencyKey) => api('record_payment', {
       membershipId, amount: Number(payAmount), paymentMode: payMode.mode,
       cashAmount: payMode.cashAmount, upiAmount: payMode.upiAmount,
-    })
+    }, { idempotencyKey }))
     setPayAmount('')
     setPayMode({ mode: 'cash', cashAmount: '', upiAmount: '' })
     refresh()
@@ -902,7 +905,7 @@ export default function StudentProfilePage() {
     setRenewLoading(true)
     setRenewError('')
     try {
-      const res = await api('renew_membership', {
+      const res = await withRenewKey((idempotencyKey) => api('renew_membership', {
         membershipId,
         category: renewCategory,
         hoursPerDay: renewIsCustomPlan ? Number(renewCustomWeekdayHours) : renewHoursPerDay,
@@ -922,7 +925,7 @@ export default function StudentProfilePage() {
         customDaysAmount: renewIsCustomDays ? Number(renewCustomDaysAmount) : undefined,
         startDate: renewStartDate || undefined,
         expectedTotal: renewTotal,
-      })
+      }, { idempotencyKey }))
       setRenewOpen(false)
       if (res.cashbackApplied || res.overtimeCharged) {
         setCashbackNotice({ amount: res.cashbackApplied, overtimeCharged: res.overtimeCharged })
