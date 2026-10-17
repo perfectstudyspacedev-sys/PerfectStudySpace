@@ -5,6 +5,7 @@ import { useSessionAlerts } from '../../hooks/useSessionAlerts'
 import { useMessageAlerts } from '../../hooks/useMessageAlerts'
 import { useTaskAlerts } from '../../hooks/useTaskAlerts'
 import { usePendingSignups } from '../../hooks/usePendingSignups'
+import { useFeatureFlags } from '../../hooks/useFeatureFlags'
 import { api, COMBINED_HALL_ID } from '../../lib/api'
 
 function BackgroundSketches() {
@@ -227,6 +228,7 @@ function NotificationBell({ toasts, dismiss, dismissAll }) {
 
 export default function Shell() {
   const { staff, logout, isOwner, branchId, selectBranch, branches, activeBranch, isCombinedHall } = useAuth()
+  const flags = useFeatureFlags()
   const navigate = useNavigate()
   // Neither hook has a meaningful single branch_id to filter on while Combined Hall is
   // selected — both already no-op on a falsy branchId, so this just borrows that guard
@@ -381,6 +383,7 @@ export default function Shell() {
             </>
           )}
           <NavLink to="/actions">Actions</NavLink>
+          {isOwner && flags.anomaly && <NavLink to="/flags">Flags</NavLink>}
           {isOwner && (
             <>
               <NavLink to="/settings/branches">Branches</NavLink>

@@ -15,7 +15,7 @@ const SYSTEM_JOBS = ['cron_expiry_alerts', 'cron_integrity_report', 'cron_purge_
 const PEOPLE = ['public', 'staff', 'owner', 'admin']
 
 describe('action registry (P0.4)', () => {
-  test('every action is registered — names match tests/registry/actions.snapshot.json (123 from P0.4, plus P0.7–P0.8)', () => {
+  test('every action is registered — names match tests/registry/actions.snapshot.json (123 from P0.4, plus P0.7–P0.8 and Phase 1)', () => {
     expect(ACTION_META.map((a) => a.name).sort()).toEqual(snapshot)
   })
   test('no action is registered twice', () => {

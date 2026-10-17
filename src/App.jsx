@@ -15,6 +15,7 @@ import BranchSettingsPage from './pages/BranchSettingsPage'
 import ReportsPage from './pages/ReportsPage'
 import BookingsPage from './pages/BookingsPage'
 import TasksPage from './pages/TasksPage'
+import FlagsPage from './pages/FlagsPage'
 import JoinPage from './pages/JoinPage'
 import { signupSiteUrl } from './lib/signupLink'
 
@@ -60,6 +61,7 @@ export default function App() {
             <Route path="students/:id" element={<StudentProfilePage />} />
             <Route path="food-menu" element={<FoodMenuPage />} />
             <Route path="revenue" element={<OwnerRoute><RevenuePage /></OwnerRoute>} />
+            <Route path="flags" element={<OwnerRoute><FlagsPage /></OwnerRoute>} />
             <Route path="messages" element={<MessagesPage />} />
             <Route path="reports" element={<ReportsPage />} />
             <Route path="actions" element={<TasksPage />} />

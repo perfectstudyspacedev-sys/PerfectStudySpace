@@ -3,6 +3,8 @@ import { Link } from 'react-router-dom'
 import { useAuth } from '../context/AuthContext'
 import { api } from '../lib/api'
 import { useRetryKey } from '../hooks/useRetryKey'
+import { useFeatureFlags } from '../hooks/useFeatureFlags'
+import FocusPulsePrompt from '../components/FocusPulsePrompt'
 import { formatCurrency, formatDate, todayISO } from '../lib/utils'
 import WalkInModal from '../components/WalkInModal'
 
@@ -684,6 +686,8 @@ function CombinedSessionsView() {
 export default function BookingsPage() {
   const { branchId, isCombinedHall } = useAuth()
   const withCheckoutKey = useRetryKey()
+  const { focusPulse } = useFeatureFlags()
+  const [focusPrompt, setFocusPrompt] = useState(null)
   const [bookings, setBookings] = useState([])
   const [loading, setLoading] = useState(true)
   const [actionLoading, setActionLoading] = useState(null)
@@ -767,6 +771,10 @@ export default function BookingsPage() {
       const done = bookings.find(b => b.id === bookingId)
       if (done?.booking_type === 'walkin' && done.walkinLocker) {
         setLockerReminder({ studentId: done.student_id, name: done.students?.name, locker: done.walkinLocker })
+      }
+      // P1.1: members only, and only once the owner has switched the focus pulse on.
+      if (focusPulse && done && done.booking_type !== 'walkin') {
+        setFocusPrompt({ bookingId, studentName: done.students?.name })
       }
       setCheckoutBooking(null)
       setFoodPassPrompt(null)
@@ -1001,6 +1009,10 @@ export default function BookingsPage() {
           onConfirm={(params) => confirmCheckout(checkoutBooking.id, params)}
           onCancel={() => setCheckoutBooking(null)}
         />
+      )}
+
+      {focusPrompt && (
+        <FocusPulsePrompt bookingId={focusPrompt.bookingId} studentName={focusPrompt.studentName} onClose={() => setFocusPrompt(null)} />
       )}
 
       {lockerReminder && (

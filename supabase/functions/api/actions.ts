@@ -5,6 +5,7 @@ import { handlers as authHandlers } from "./domains/auth.ts";
 import { handlers as branchesHandlers } from "./domains/branches.ts";
 import { handlers as enquiriesHandlers } from "./domains/enquiries.ts";
 import { handlers as foodHandlers } from "./domains/food.ts";
+import { handlers as insightsHandlers } from "./domains/insights.ts";
 import { handlers as membersHandlers } from "./domains/members.ts";
 import { handlers as moneyHandlers } from "./domains/money.ts";
 import { handlers as reportsHandlers } from "./domains/reports.ts";
@@ -14,7 +15,7 @@ import { handlers as staffHandlers } from "./domains/staff.ts";
 import { handlers as systemHandlers } from "./domains/system.ts";
 
 const all: Record<string, Handler> = {};
-for (const set of [authHandlers(), branchesHandlers(), enquiriesHandlers(), foodHandlers(), membersHandlers(), moneyHandlers(), reportsHandlers(), sessionsHandlers(), signupHandlers(), staffHandlers(), systemHandlers()]) {
+for (const set of [authHandlers(), branchesHandlers(), enquiriesHandlers(), foodHandlers(), membersHandlers(), moneyHandlers(), reportsHandlers(), sessionsHandlers(), signupHandlers(), staffHandlers(), systemHandlers(), insightsHandlers()]) {
   for (const [name, handler] of Object.entries(set)) {
     if (all[name]) throw new Error(`Action ${name} is handled twice`);
     all[name] = handler;

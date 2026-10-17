@@ -4,6 +4,8 @@ import { useAuth } from '../context/AuthContext'
 import { api } from '../lib/api'
 import { exportToCSV, formatDate, formatCurrency } from '../lib/utils'
 import { DEV_MODE } from '../lib/devMode'
+import { useFeatureFlags } from '../hooks/useFeatureFlags'
+import ConfirmDialog from '../components/ConfirmDialog'
 
 const COLUMNS = [
   { key: 'sNo', label: 'S.No' },
@@ -164,6 +166,8 @@ export default function StudentsPage() {
   const [courseFilter, setCourseFilter] = useState('')
   const [tab, setTab] = useState(isOwner ? 'list' : 'loyalty')
   const [cashbackTarget, setCashbackTarget] = useState(null)
+  const [cashbackConfirm, setCashbackConfirm] = useState(false)
+  const { discountConfirmOver } = useFeatureFlags()
   const [cashbackType, setCashbackType] = useState('percent')
   const [cashbackValue, setCashbackValue] = useState('')
   const [cashbackNotes, setCashbackNotes] = useState('')
@@ -281,7 +285,14 @@ export default function StudentsPage() {
     setCashbackError('')
   }
 
+  // P1.6 (G14): ask once more before a large flat cashback.
+  const requestGrantCashback = () => {
+    if (cashbackType === 'fixed' && Number(cashbackValue) > discountConfirmOver) setCashbackConfirm(true)
+    else handleGrantCashback()
+  }
+
   const handleGrantCashback = async () => {
+    setCashbackConfirm(false)
     setCashbackLoading(true)
     setCashbackError('')
     try {
@@ -534,12 +545,21 @@ export default function StudentsPage() {
             {cashbackError && <p className="error-msg">{cashbackError}</p>}
             <div className="modal-actions">
               <button type="button" className="btn btn-ghost" onClick={() => setCashbackTarget(null)}>Cancel</button>
-              <button type="button" className="btn btn-primary" disabled={cashbackLoading || !cashbackValue} onClick={handleGrantCashback}>
+              <button type="button" className="btn btn-primary" disabled={cashbackLoading || !cashbackValue} onClick={requestGrantCashback}>
                 {cashbackLoading ? 'Granting…' : 'Grant Cashback'}
               </button>
             </div>
           </div>
         </div>
+      )}
+      {cashbackTarget && cashbackConfirm && (
+        <ConfirmDialog
+          title="Check this cashback" testId="cashback-confirm"
+          confirmLabel={`Grant ${formatCurrency(Number(cashbackValue))}`}
+          onConfirm={handleGrantCashback} onCancel={() => setCashbackConfirm(false)}
+        >
+          {formatCurrency(Number(cashbackValue))} for {cashbackTarget.name} is above the {formatCurrency(discountConfirmOver)} check amount. Grant it?
+        </ConfirmDialog>
       )}
     </>
   )

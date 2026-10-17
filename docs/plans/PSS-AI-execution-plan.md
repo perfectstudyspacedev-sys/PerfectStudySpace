@@ -2,7 +2,7 @@
 
 | | |
 |---|---|
-| **Status** | Phase 0 built on branch `pss-ai/p0-foundation` (P0.1–P0.10 ✅); its exit gate waits for the owner's deploy. Phases 1–6 not started. |
+| **Status** | Phase 0 built on branch `pss-ai/p0-foundation` (P0.1–P0.10 ✅); its exit gate waits for the owner's deploy. Phase 1 being built on `pss-ai/p1-data-brain` (on top of Phase 0; not to be merged before Phase 0 is live); P1.8 waits for D3. Phases 2–6 not started. |
 | **Agreed on** | 2026-10-13 |
 | **Execution order** | P0 → P1 → P2 → P3 → P4 → P5 → P6. A phase starts only after the owner ticks the previous phase's exit gate. |
 | **Verified against** | `main` at commit `cb7beeb` (RSP + SSP merged, PR #2) |
@@ -343,15 +343,17 @@ Acceptance:
 
 **Branch:** `pss-ai/p1-data-brain` · **Needs:** D3 (for P1.8) · **Students see:** an optional focus rating at checkout · **Nothing is written automatically by AI**
 
-## P1.1 Focus pulse (I9) — migration 055
+## P1.1 Focus pulse (I9) — migration 055 ✅
 
 `055_focus_pulse.sql`: `focus_ratings (booking_id UUID PRIMARY KEY REFERENCES bookings(id) ON DELETE CASCADE, student_id UUID NOT NULL REFERENCES students(id) ON DELETE CASCADE, rating SMALLINT NOT NULL CHECK (rating BETWEEN 1 AND 5), source TEXT NOT NULL DEFAULT 'desk' CHECK (source IN ('desk','portal')), created_at TIMESTAMPTZ NOT NULL DEFAULT now())`, with RLS on.
 
 - New action `record_focus_rating`: tier T1; callers staff, owner, admin (student from P2); upsert by `booking_id`.
 - UI: after a member checkout in `BookingsPage`, show an optional row of 1–5 buttons ("How focused was today?") with a Skip button. It never blocks checkout. Walk-ins are not asked. Flag: `pssai_focus_pulse`.
 
+- *As built:* the server also refuses ratings while `pssai_focus_pulse` is off, for walk-ins, for sessions not yet checked out and for other branches. A second answer for the same session replaces the first (upsert). The app learns the switches from a new T0 read, `get_feature_flags` (`src/hooks/useFeatureFlags.js`, read once per page load). The prompt is `src/components/FocusPulsePrompt.jsx`.
+
 Acceptance:
-- [ ] One rating per booking at most; Skip leaves no row; walk-ins never see the prompt
+- [x] One rating per booking at most; Skip leaves no row; walk-ins never see the prompt — `tests/server/insights_test.ts` (P1.1 checks), primary key checked on Postgres (PGlite), browser QA (prompt after a member checkout, rating 4 sent once, Skip sends nothing, no prompt for walk-ins or with the switch off)
 
 ## P1.2 ML workspace (`ml/`)
 
@@ -374,6 +376,8 @@ Acceptance:
 - `owner_briefs (id UUID PRIMARY KEY DEFAULT gen_random_uuid(), brief_date DATE NOT NULL UNIQUE, body TEXT NOT NULL, figures JSONB, created_at TIMESTAMPTZ DEFAULT now())`
 
 New T0 reads (owner and admin): `get_student_scores`, `list_anomaly_flags`, `get_forecast`, `get_owner_brief`. New T1 action (owner and admin): `review_anomaly_flag`.
+
+✅ *As built:* in `api/domains/insights.ts`, tested in `tests/server/insights_test.ts`. `anomaly_flags` also has a unique index on `(kind, ref_table, ref_id)`, so publishing the same week twice cannot duplicate a flag (each flag points at one record). `get_forecast` returns the weeks from the one containing today. `get_owner_brief` returns null until P1.8 writes briefs. All seven tables were created on Postgres (PGlite) with RLS on.
 
 ## P1.4 Focus Fingerprint (I1)
 

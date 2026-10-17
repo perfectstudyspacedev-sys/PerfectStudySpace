@@ -2,6 +2,7 @@ import { useState, useEffect, useCallback } from 'react'
 import { useParams, Link, useSearchParams } from 'react-router-dom'
 import { api } from '../lib/api'
 import { useRetryKey } from '../hooks/useRetryKey'
+import { useFeatureFlags } from '../hooks/useFeatureFlags'
 import { useAuth } from '../context/AuthContext'
 import { formatCurrency, formatDate, paymentModeLabel, getMultiMonthDiscount, pendingCashbackTotal, todayISO, shiftDate, REFERRAL_OPTIONS, renewalInfo, isNotStartedYet } from '../lib/utils'
 import PaymentModeSelector, { isSplitValid } from '../components/PaymentModeSelector'
@@ -423,6 +424,8 @@ function ResumeCabinModal({ branchId, loading, error, onClose, onSubmit }) {
 export default function StudentProfilePage() {
   const { id } = useParams()
   const withPaymentKey = useRetryKey()
+  const { discountConfirmOver } = useFeatureFlags()
+  const [discountConfirm, setDiscountConfirm] = useState(null)
   const withRenewKey = useRetryKey()
   const { isOwner, branches } = useAuth()
   const [data, setData] = useState(null)
@@ -1096,6 +1099,13 @@ export default function StudentProfilePage() {
     : 0
   const previewDiscountAmount = Math.min(rawDiscountAmount, feeDueNum)
   const previewBankedAsCashback = Math.max(rawDiscountAmount - feeDueNum, 0)
+  // P1.6 (G14): ask once more before a large discount, or a flat amount above the fee due.
+  const requestApplyDiscount = (membershipId) => {
+    const overDue = discountType === 'fixed' && discountValueNum > feeDueNum
+    const large = rawDiscountAmount > discountConfirmOver
+    if (overDue || large) setDiscountConfirm({ membershipId, amount: rawDiscountAmount, overDue, large })
+    else handleApplyDiscount(membershipId)
+  }
   const pendingCashback = (cashbacks ?? []).find(c => c.status === 'pending')
 
   // Renewal pricing — plan (category/hours) is editable at renewal time
@@ -1462,7 +1472,7 @@ export default function StudentProfilePage() {
               <button type="button" className="btn btn-ghost" onClick={() => setOpenPanel(null)}>Close</button>
               <button
                 type="button" className="btn btn-primary"
-                onClick={() => handleApplyDiscount(activeMem.id)}
+                onClick={() => requestApplyDiscount(activeMem.id)}
                 disabled={discountLoading || !discountValueNum}
               >
                 {discountLoading ? 'Applying…' : 'Apply Discount'}
@@ -2742,6 +2752,23 @@ export default function StudentProfilePage() {
             </p>
           )}
           The previous plan is active again until {formatDate(cancelRenewalNotice.restoredEndDate)}.
+        </ConfirmDialog>
+      )}
+
+      {discountConfirm && (
+        <ConfirmDialog
+          title="Check this discount" testId="discount-confirm"
+          confirmLabel={`Apply ${formatCurrency(discountConfirm.amount)}`}
+          onConfirm={() => { const id = discountConfirm.membershipId; setDiscountConfirm(null); handleApplyDiscount(id) }}
+          onCancel={() => setDiscountConfirm(null)}
+        >
+          {discountConfirm.overDue && (
+            <p style={{ marginBottom: '0.5rem' }}>
+              {formatCurrency(discountConfirm.amount)} is more than the {formatCurrency(feeDueNum)} fee due — {formatCurrency(Math.max(discountConfirm.amount - feeDueNum, 0))} will be banked as cashback.
+            </p>
+          )}
+          {discountConfirm.large && <p>This is above the {formatCurrency(discountConfirmOver)} check amount. Apply it?</p>}
+          {!discountConfirm.large && <p>Apply it?</p>}
         </ConfirmDialog>
       )}
 

@@ -26,7 +26,7 @@ const DEFAULTS: Record<string, Row> = {
 
 function uuid() { return crypto.randomUUID(); }
 // Tables whose primary key is not a generated id; a second insert with the same key fails like Postgres.
-const PRIMARY_KEY: Record<string, string> = { idempotency_keys: "key" };
+const PRIMARY_KEY: Record<string, string> = { idempotency_keys: "key", focus_ratings: "booking_id", fingerprints: "student_id" };
 // events has a BIGSERIAL id and occurred_at (migration 052), so it takes no uuid from the seeded counter.
 function baseRow(table: string): Row {
   if (table === "events") return { id: tbl(table).reduce((m, r) => Math.max(m, r.id), 0) + 1, occurred_at: new Date().toISOString() };
