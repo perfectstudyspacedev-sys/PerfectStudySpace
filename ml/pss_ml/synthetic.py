@@ -35,9 +35,10 @@ def generate(n_students: int = 160, days: int = 330, seed: int = 7) -> Dataset:
             ("Priya", "staff", branches[0]["id"]),
             ("Ravi", "staff", branches[1]["id"]),
             ("Kiran", "staff", branches[0]["id"]),
+            ("Dev", "admin", None),  # the hidden admin account: never flagged
         ]
     ]
-    desk_staff = staff[1:]
+    desk_staff = staff[1:4]
     t: dict[str, list[dict]] = {k: [] for k in TABLES}
     t["branches"], t["staff"] = branches, staff
 
@@ -245,11 +246,38 @@ def generate(n_students: int = 160, days: int = 330, seed: int = 7) -> Dataset:
     t["waivers"].append(wv)
     planted["waiver"].append(wv["id"])
 
-    # Manual attendance edits (events) and overtime exclusions.
+    # A very large discount by the hidden admin: must never be flagged.
+    t["membership_discounts"].append(
+        {
+            "id": _uid(rng),
+            "membership_id": recent[2]["id"],
+            "student_id": recent[2]["student_id"],
+            "branch_id": recent[2]["branch_id"],
+            "discount_type": "fixed",
+            "discount_value": 5000.0,
+            "discount_amount": 5000.0,
+            "applied_by_staff_id": staff[4]["id"],
+            "created_at": utc(today - pd.Timedelta(days=2), 700),
+        }
+    )
+
+    # Manual attendance edits and overtime exclusions, as the event log records them: the payload is
+    # what the app sends, and branch_id/student_id are filled only from payload.branchId/studentId.
+    def iso(ts: pd.Timestamp) -> str:
+        return ts.isoformat().replace("+00:00", "Z")
+
     ev_id = 0
     for k in range(40):
         ev_id += 1
         b = t["bookings"][int(rng.integers(0, len(t["bookings"])))]
+        hours = float(rng.choice([2, 3, 4, 5, 6]))
+        start, end = b["start_time"], b["start_time"] + pd.Timedelta(hours=hours)
+        if k % 2:
+            payload = {"bookingId": b["id"], "startTime": iso(start), "endTime": iso(end), "scheduledHours": hours}
+            branch, student = None, None
+        else:
+            payload = {"branchId": b["branch_id"], "studentId": b["student_id"], "startTime": iso(start), "endTime": iso(end)}
+            branch, student = b["branch_id"], b["student_id"]
         t["events"].append(
             {
                 "id": ev_id,
@@ -257,13 +285,14 @@ def generate(n_students: int = 160, days: int = 330, seed: int = 7) -> Dataset:
                 "action": "update_attendance" if k % 2 else "add_attendance",
                 "actor_type": "staff",
                 "actor_id": desk_staff[k % 3]["id"],
-                "branch_id": b["branch_id"],
-                "student_id": b["student_id"],
+                "branch_id": branch,
+                "student_id": student,
                 "ok": True,
-                "payload": json.dumps({"bookingId": b["id"], "hours": float(rng.choice([2, 3, 4, 5, 6]))}),
+                "payload": json.dumps(payload),
             }
         )
     ev_id += 1
+    day_before = today - pd.Timedelta(days=1)
     big = {
         "id": ev_id,
         "occurred_at": AS_OF - pd.Timedelta(days=1),
@@ -273,7 +302,14 @@ def generate(n_students: int = 160, days: int = 330, seed: int = 7) -> Dataset:
         "branch_id": branches[0]["id"],
         "student_id": t["students"][0]["id"],
         "ok": True,
-        "payload": json.dumps({"studentId": t["students"][0]["id"], "hours": 16}),
+        "payload": json.dumps(
+            {
+                "branchId": branches[0]["id"],
+                "studentId": t["students"][0]["id"],
+                "startTime": iso(utc(day_before, 6 * 60)),
+                "endTime": iso(utc(day_before, 22 * 60)),
+            }
+        ),
     }
     t["events"].append(big)
     planted["attendance_edit"].append(big["id"])
@@ -300,10 +336,10 @@ def generate(n_students: int = 160, days: int = 330, seed: int = 7) -> Dataset:
                     "action": "set_overtime_excluded",
                     "actor_type": "staff",
                     "actor_id": desk_staff[k % 3]["id"],
-                    "branch_id": b["branch_id"],
-                    "student_id": b["student_id"],
+                    "branch_id": None,
+                    "student_id": None,
                     "ok": True,
-                    "payload": json.dumps({"overtimeId": ot["id"], "excluded": True, "reason": "wifi down"}),
+                    "payload": json.dumps({"overtimeSessionId": ot["id"], "excluded": True, "reason": "wifi down"}),
                 }
             )
     b = t["bookings"][-1]
@@ -327,10 +363,10 @@ def generate(n_students: int = 160, days: int = 330, seed: int = 7) -> Dataset:
             "action": "set_overtime_excluded",
             "actor_type": "staff",
             "actor_id": kiran,
-            "branch_id": b["branch_id"],
-            "student_id": b["student_id"],
+            "branch_id": None,
+            "student_id": None,
             "ok": True,
-            "payload": json.dumps({"overtimeId": ot["id"], "excluded": True, "reason": "friend"}),
+            "payload": json.dumps({"overtimeSessionId": ot["id"], "excluded": True, "reason": "friend"}),
         }
     )
     planted["overtime_exclusion"].append(ot["id"])

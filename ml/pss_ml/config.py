@@ -23,6 +23,7 @@ FEATURE_WINDOW_DAYS = 60  # fingerprint and engagement look back this far
 FORECAST_DAYS = 60  # P1.7: income expected over the next 60 days, in weekly rows
 ANOMALY_TOP_N = 5  # flags per week at most (P1.6)
 ANOMALY_MIN_SCORE = 3.5  # robust z-score below which nothing is flagged
+ANOMALY_RECENT_DAYS = 14  # only records this recent can be flagged (baselines use all history)
 
 IST_OFFSET_HOURS = 5.5
 MODEL_VERSION = "v1"

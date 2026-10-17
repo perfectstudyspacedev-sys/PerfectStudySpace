@@ -13,6 +13,7 @@ const FLAGS = { focusPulse: "pssai_focus_pulse", anomaly: "pssai_anomaly" } as c
 const DISCOUNT_CONFIRM_KEY = "pssai_discount_confirm_over";
 export const DISCOUNT_CONFIRM_DEFAULT = 1000;
 const MAX_LIST = 500;
+const RATE_WITHIN_MS = 48 * 3600e3; // a session can be rated up to two days after it started
 
 async function branchNames(db: Ctx["db"], ids: (string | null)[]) {
   const unique = [...new Set(ids.filter((x): x is string => !!x))];
@@ -21,21 +22,22 @@ async function branchNames(db: Ctx["db"], ids: (string | null)[]) {
   return new Map((data ?? []).map((b: { id: string; name: string }) => [b.id, b.name]));
 }
 
-// Students of one branch (or every branch) as a list of ids, for filtering model outputs.
-async function studentIdsFor(db: Ctx["db"], staff: NonNullable<Ctx["staff"]>, payload: any): Promise<string[] | null | Response> {
+// The branch to rank: one the caller may see, or null for every branch (allBranches).
+function branchFor(staff: NonNullable<Ctx["staff"]>, payload: any): string | null | Response {
   if (payload.allBranches) return null;
   const bid = payload.branchId;
   if (!bid || !requireBranch(staff, bid)) return err("Branch access denied", 403);
-  const { data } = await db.from("students").select("id").eq("branch_id", bid);
-  return (data ?? []).map((s: { id: string }) => s.id);
+  return bid;
 }
 
-async function rankedScores(db: Ctx["db"], model: string, ids: string[] | null, limit: number) {
-  if (ids && !ids.length) return [];
-  let q = db.from("student_scores").select("student_id, model, version, score, reason, computed_at, students(name, phone, branch_id)")
+// One model's scores, highest first, filtered by the student's branch through the join (no long id
+// list in the URL). Names only — phone numbers stay on the student's profile.
+async function rankedScores(db: Ctx["db"], model: string, branchId: string | null, limit: number) {
+  let q = db.from("student_scores").select("student_id, model, version, score, reason, computed_at, students!inner(name, branch_id)")
     .eq("model", model).order("score", { ascending: false }).order("student_id").limit(limit);
-  if (ids) q = q.in("student_id", ids);
-  const { data } = await q;
+  if (branchId) q = q.eq("students.branch_id", branchId);
+  const { data, error } = await q;
+  if (error) throw new Error(error.message);
   return data ?? [];
 }
 
@@ -63,12 +65,13 @@ export function handlers(): Record<string, Handler> {
       const rating = Number(payload.rating);
       if (!Number.isInteger(rating) || rating < 1 || rating > 5) return err("Rating must be a whole number from 1 to 5");
       const { data: booking } = typeof payload.bookingId === "string"
-        ? await db.from("bookings").select("id, student_id, branch_id, booking_type, status").eq("id", payload.bookingId).maybeSingle()
+        ? await db.from("bookings").select("id, student_id, branch_id, booking_type, status, start_time").eq("id", payload.bookingId).maybeSingle()
         : { data: null };
       if (!booking) return err("Session not found", 404);
       if (!requireBranch(staff, booking.branch_id)) return err("Branch access denied", 403);
       if (booking.booking_type === "walkin") return err("Walk-in sessions are not rated");
       if (booking.status !== "completed") return err("A session can be rated only after checkout");
+      if (Date.now() - new Date(booking.start_time).getTime() > RATE_WITHIN_MS) return err("This session is too old to rate");
       const { error } = await db.from("focus_ratings").upsert(
         { booking_id: booking.id, student_id: booking.student_id, rating, source: "desk" },
         { onConflict: "booking_id" },
@@ -89,11 +92,11 @@ export function handlers(): Record<string, Handler> {
         ]);
         return json({ scores: scores ?? [], fingerprint: fingerprint ?? null });
       }
-      const ids = await studentIdsFor(db, staff, payload);
-      if (ids instanceof Response) return ids;
+      const branch = branchFor(staff, payload);
+      if (branch instanceof Response) return branch;
       const model = typeof payload.model === "string" ? payload.model : "churn";
       const limit = Math.min(Math.max(Number(payload.limit) || 100, 1), MAX_LIST);
-      return json({ model, scores: await rankedScores(db, model, ids, limit) });
+      return json({ model, scores: await rankedScores(db, model, branch, limit) });
     },
 
     // P1.7 — engagement ranking (published by the ML job from fingerprints and churn scores).
@@ -102,10 +105,10 @@ export function handlers(): Record<string, Handler> {
       const { db } = ctx;
       const staff = ctx.staff!;
       if (!isOwnerOrAdmin(staff)) return err("Owner only", 403);
-      const ids = await studentIdsFor(db, staff, payload);
-      if (ids instanceof Response) return ids;
+      const branch = branchFor(staff, payload);
+      if (branch instanceof Response) return branch;
       const limit = Math.min(Math.max(Number(payload.limit) || 50, 1), MAX_LIST);
-      const rows = await rankedScores(db, "engagement", ids, limit);
+      const rows = await rankedScores(db, "engagement", branch, limit);
       const sids = rows.map((r: any) => r.student_id);
       const { data: prints } = sids.length
         ? await db.from("fingerprints").select("student_id, cluster").in("student_id", sids)

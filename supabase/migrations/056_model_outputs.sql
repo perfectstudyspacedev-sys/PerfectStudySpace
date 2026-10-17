@@ -37,9 +37,9 @@ CREATE TABLE IF NOT EXISTS fingerprints (
 -- Anomaly flags (I23) for the owner to mark ok or problem.
 CREATE TABLE IF NOT EXISTS anomaly_flags (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-  kind TEXT,
-  ref_table TEXT,
-  ref_id UUID,
+  kind TEXT NOT NULL,
+  ref_table TEXT NOT NULL,
+  ref_id UUID NOT NULL,
   branch_id UUID,
   score NUMERIC,
   explanation TEXT,
@@ -48,7 +48,7 @@ CREATE TABLE IF NOT EXISTS anomaly_flags (
   created_at TIMESTAMPTZ DEFAULT now()
 );
 CREATE INDEX IF NOT EXISTS idx_anomaly_flags_status ON anomaly_flags (status, created_at DESC);
--- Re-publishing the same week must not duplicate a flag.
+-- Re-publishing must not duplicate a flag (all three columns are NOT NULL, so the index always applies).
 CREATE UNIQUE INDEX IF NOT EXISTS idx_anomaly_flags_ref ON anomaly_flags (kind, ref_table, ref_id);
 
 -- Cash-flow forecast (I31): one row per kind and week, with a low/high band.

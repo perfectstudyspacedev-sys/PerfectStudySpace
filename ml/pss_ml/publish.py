@@ -58,24 +58,33 @@ def build(
     }
 
 
-def publish(rows: dict[str, list[dict]], db: Supabase | None, today: str, dry_run: bool = False, out_dir: Path = OUT_DIR) -> dict[str, int]:
+def publish(
+    rows: dict[str, list[dict]], db: Supabase | None, run_at: str, dry_run: bool = False, out_dir: Path = OUT_DIR
+) -> dict[str, int]:
+    """Writes this run's rows (all stamped computed_at = run_at), then removes rows of the same
+    model or kind left by earlier runs — only once the new rows are in, and only for what this run
+    produced. So a member who left loses their old score, and a failed write leaves the last good
+    run in place."""
     counts = {k: len(v) for k, v in rows.items()}
     if dry_run or db is None:
         out_dir.mkdir(parents=True, exist_ok=True)
         for name, data in rows.items():
             (out_dir / f"{name}.json").write_text(json.dumps(data, indent=1, ensure_ascii=False))
         return counts
+    older = f"lt.{run_at}"
     if rows["student_scores"]:
         db.upsert("student_scores", rows["student_scores"], on_conflict="student_id,model")
         db.insert("student_score_history", rows["student_scores"])
+        for model in sorted({r["model"] for r in rows["student_scores"]}):
+            db.delete("student_scores", {"model": f"eq.{model}", "computed_at": older})
     if rows["fingerprints"]:
         db.upsert("fingerprints", rows["fingerprints"], on_conflict="student_id")
+        db.delete("fingerprints", {"computed_at": older})
     if rows["anomaly_flags"]:
         # A flag already published (and maybe already reviewed) is left exactly as it is.
         db.upsert("anomaly_flags", rows["anomaly_flags"], on_conflict="kind,ref_table,ref_id", ignore_duplicates=True)
     if rows["forecasts"]:
-        kinds = sorted({r["kind"] for r in rows["forecasts"]})
-        for kind in kinds:
-            db.delete("forecasts", {"kind": f"eq.{kind}", "period_start": f"gte.{today}"})
         db.insert("forecasts", rows["forecasts"])
+        for kind in sorted({r["kind"] for r in rows["forecasts"]}):
+            db.delete("forecasts", {"kind": f"eq.{kind}", "computed_at": older})
     return counts

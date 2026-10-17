@@ -34,31 +34,38 @@ uv run pss-ml run --publish          # write the results to Supabase
 - `--budget 20` sets the weekly contacts per branch used in the churn comparison (default 20).
 - `--labels labels.json` renames clusters, e.g. `{"C2 · high focus, comes most days": "Steady regulars"}`.
   The owner approves the cluster labels before they are shown anywhere (P1.4 gate).
-- Re-publishing is safe: scores and fingerprints are replaced, flags already published (and
-  reviewed) are left alone, and the forecast for the coming weeks is replaced.
+- Re-publishing is safe: this run's scores, fingerprints and forecast are written first, then the
+  rows of earlier runs are removed (so a member who has left loses their old score, and a failed
+  write leaves the previous run in place). Flags already published — and maybe already reviewed —
+  are left exactly as they are.
 - The Flags page appears once `pssai_anomaly` is `on` in `app_settings`.
 
 ## Try it without any data
 
 ```bash
 uv run pss-ml run --synthetic --budget 8    # a made-up hall with planted signals → ml/out/synthetic/
-uv run pytest -q && uv run ruff check .     # 18 tests on the same synthetic data
+uv run pytest -q && uv run ruff check .     # 25 tests on the same synthetic data
 ```
 
 ## What the models do
 
-- **Churn (P1.5).** Label: no new membership starting within 10 days after the end date. Scored 21
-  days before the end (also at 7, 14 and 28 days, with days-to-end as a feature). A Cox model and
-  gradient boosting are compared on the most recent ~2.5 months (time-based split); the better one
-  is kept. The report compares its hit rate at the weekly budget with today's "remind everyone
-  expiring in the next 7 days". Reasons: `attendance_drop`, `dues`, `short_tenure`, `holds`,
-  `late_payer`, `other`.
+- **Churn (P1.5).** Label: no new membership starting within 10 days after the end date. Trained 7,
+  14, 21 and 28 days before the end (days-to-end is a feature; holds and payments count only up to
+  that day). A Cox model and gradient boosting are compared on the most recent ~2.5 months, with a
+  10-day gap after the training period; the better one is kept. The report compares it with today's
+  "remind everyone expiring in the next 7 days" at the weekly budget, contacting nobody twice. Only
+  members whose plan ends in the next 28 days get a score. Reasons: `attendance_drop`, `dues`,
+  `short_tenure`, `holds`, `late_payer`, `other`.
 - **Fingerprint (P1.4).** Last 60 days of habits (arrival time and spread, minutes, use of booked
   hours, visit days, weekends, food, focus) → scaled → PCA (3) → k-means (3–6 by silhouette).
-- **Anomalies (P1.6).** Each discount, fixed cashback, waiver, manual attendance entry and overtime
-  exclusion against the same staff member's, the branch's and all records' medians (robust
-  z-score). At most 5 flags a week, score 3.5 or more. Explanations are fixed templates.
+- **Anomalies (P1.6).** Each discount, fixed cashback, waiver, manual attendance entry (hours from
+  its start and end time) and overtime exclusion against the same staff member's and the branch's
+  medians — all records of the kind only when both are too short (robust z-score). Only the last 14
+  days can be flagged (baselines use all history); at most 5 a week (IST weeks), score 3.5 or more.
+  The hidden admin account's records are left out. Explanations are fixed templates.
 - **Forecast (P1.7).** Per active membership: renewal amount × (1 − churn score) in the week after
-  it ends; plus open dues × the recent collection rate; plus the recent weekly average of all other
-  income. 90% band.
+  it ends (members already in their grace period: this week, 50% unless scored); plus open dues ×
+  the dues collection rate (of what was still owed after a membership's first payment day, the share
+  paid later, over memberships that ended 30–180 days ago); plus the recent weekly average of all
+  other income. 90% band.
 - **Engagement (P1.7).** 0–1 from use of booked hours, visit days, focus and (1 − churn score).

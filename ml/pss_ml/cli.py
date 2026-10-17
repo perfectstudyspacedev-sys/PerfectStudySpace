@@ -33,7 +33,8 @@ def run(ds: data.Dataset, budget: int, labels: dict[str, str] | None, report_dir
     flags = anomaly.detect(ds)
     fc = forecast.forecast(ds, c.scores)
     eng = forecast.engagement(ds, c.scores, days)
-    rows = publish.build(c.scores, eng.drop(columns=["version"]), prints, flags, fc, ds.as_of, labels)
+    run_at = pd.Timestamp.now(tz="UTC").floor("s")  # every row of this run carries it (see publish.publish)
+    rows = publish.build(c.scores, eng.drop(columns=["version"]), prints, flags, fc, run_at, labels)
     summary = {
         "churn_model": c.chosen,
         "churn_metrics": c.metrics,
@@ -41,6 +42,7 @@ def run(ds: data.Dataset, budget: int, labels: dict[str, str] | None, report_dir
         "clusters": clusters.to_dict("records"),
         "flags": len(flags),
         "today": str(today),
+        "run_at": run_at.isoformat(),
     }
     return rows, summary
 
@@ -73,7 +75,7 @@ def main(argv: list[str] | None = None) -> None:
     counts = publish.publish(
         rows,
         Supabase.from_env() if args.publish else None,
-        summary["today"],
+        summary["run_at"],
         dry_run=not args.publish,
         out_dir=OUT_DIR / ("synthetic" if args.synthetic else "latest"),
     )

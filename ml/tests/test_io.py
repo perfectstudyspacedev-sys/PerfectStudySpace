@@ -27,17 +27,22 @@ class FakeTransport:
             }
         )
         if req.get_method() == "GET":
-            rows = self.rows.get(table, [])
-            off, lim = int(q["offset"]), int(q["limit"])
-            return 200, json.dumps(rows[off : off + lim]).encode()
+            key = q["order"].split(".")[0]
+            rows = sorted(self.rows.get(table, []), key=lambda r: r[key])
+            if key in q:
+                last = q[key].removeprefix("gt.")
+                rows = [r for r in rows if str(r[key]) > last]
+            return 200, json.dumps(rows[: int(q["limit"])]).encode()
         return 201, b""
 
 
 def test_export_pages_past_the_1000_row_cap_and_keeps_personal_data_out(tmp_path):
-    bookings = [{c: None for c in TABLES["bookings"]} | {"id": f"b{i}", "booking_type": "temporary"} for i in range(2500)]
+    bookings = [{c: None for c in TABLES["bookings"]} | {"id": f"b{i:04d}", "booking_type": "temporary"} for i in range(2500)]
     t = FakeTransport({"bookings": bookings})
     counts = export.export(Supabase("https://x.supabase.co", "key", t), tmp_path, pd.Timestamp("2026-10-16T05:30Z"))
-    assert counts["bookings"] == 2500 and len([c for c in t.calls if c["table"] == "bookings"]) == 3
+    pages = [c for c in t.calls if c["table"] == "bookings"]
+    assert counts["bookings"] == 2500 and len(pages) == 4  # 3 full pages, then an empty one
+    assert "id" not in pages[0]["query"] and pages[1]["query"]["id"] == "gt.b0999" and pages[0]["query"]["order"] == "id.asc"
     assert PAGE_SIZE == 1000
     for c in t.calls:
         assert not personal_columns(c["table"]) & set(c["query"]["select"].split(","))
@@ -51,24 +56,34 @@ def test_export_pages_past_the_1000_row_cap_and_keeps_personal_data_out(tmp_path
 
 
 def test_publish_writes_each_table_the_safe_way(synthetic):
-    from pss_ml import cli
+    from pss_ml import cli, fingerprint
 
-    rows, summary = cli.run(
-        synthetic, 8, {"C2 · high focus, comes most days": "Steady regulars"}, __import__("pathlib").Path("/tmp/pss-ml-test")
-    )
+    first_cluster = fingerprint.fingerprints(synthetic)[1]["cluster"].iloc[0]
+    rows, summary = cli.run(synthetic, 8, {first_cluster: "Steady regulars"}, __import__("pathlib").Path("/tmp/pss-ml-test"))
     for table, data in rows.items():
         for r in data:
             assert not (PERSONAL | {"name", "display_name"}) & set(r), table
     assert any(r["cluster"] == "Steady regulars" for r in rows["fingerprints"])
     t = FakeTransport()
-    counts = publish.publish(rows, Supabase("https://x.supabase.co", "key", t), summary["today"])
+    counts = publish.publish(rows, Supabase("https://x.supabase.co", "key", t), summary["run_at"])
+    assert all(r["computed_at"] == summary["run_at"] for table in ("student_scores", "fingerprints", "forecasts") for r in rows[table])
     calls = [(c["method"], c["table"], c["query"].get("on_conflict"), c["headers"].get("Prefer")) for c in t.calls]
     assert ("POST", "student_scores", "student_id,model", "resolution=merge-duplicates,return=minimal") in calls
     assert ("POST", "student_score_history", None, "return=minimal") in calls
     assert ("POST", "fingerprints", "student_id", "resolution=merge-duplicates,return=minimal") in calls
     assert ("POST", "anomaly_flags", "kind,ref_table,ref_id", "resolution=ignore-duplicates,return=minimal") in calls
-    delete = next(c for c in t.calls if c["method"] == "DELETE")
-    assert delete["table"] == "forecasts" and delete["query"] == {"kind": "eq.cash_inflow", "period_start": "gte.2026-10-16"}
+    # Rows of earlier runs go only after this run's rows are in, and only for what this run produced.
+    older = f"lt.{summary['run_at']}"
+    deletes = [(c["table"], c["query"]) for c in t.calls if c["method"] == "DELETE"]
+    assert deletes == [
+        ("student_scores", {"model": "eq.churn", "computed_at": older}),
+        ("student_scores", {"model": "eq.engagement", "computed_at": older}),
+        ("fingerprints", {"computed_at": older}),
+        ("forecasts", {"kind": "eq.cash_inflow", "computed_at": older}),
+    ]
+    order = [(c["method"], c["table"]) for c in t.calls]
+    assert order.index(("POST", "forecasts")) < order.index(("DELETE", "forecasts"))
+    assert order.index(("POST", "student_scores")) < order.index(("DELETE", "student_scores"))
     assert counts["forecasts"] == 9 and counts["anomaly_flags"] == 6
     assert all(r["status"] == "open" for r in rows["anomaly_flags"])
 
@@ -83,3 +98,16 @@ def test_dry_run_writes_files_only(tmp_path, synthetic):
         "forecasts.json",
         "student_scores.json",
     ]
+
+
+def test_http_errors_keep_postgrest_text_but_never_the_key():
+    def failing(req):
+        return 400, b'{"message":"column students.phone does not exist"}'
+
+    db = Supabase("https://x.supabase.co", "secret-service-key", failing)
+    try:
+        db.select_all("students", ["id"])
+    except RuntimeError as e:
+        assert "does not exist" in str(e) and "secret-service-key" not in str(e)
+    else:
+        raise AssertionError("expected an error")

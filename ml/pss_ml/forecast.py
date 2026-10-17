@@ -1,9 +1,12 @@
 """P1.7 — cash-flow forecast (I31) and engagement score.
 
 Forecast: for each active membership, its renewal amount × (1 − churn score) on the day after it
-ends, plus open dues × the collection rate seen in the last 180 days, plus the recent weekly average
-of everything else (walk-ins, food, lockers, overtime). Weekly rows for FORECAST_DAYS with a
-low/high band (90%).
+ends (members already in their grace period: this week, at a 50% chance unless scored), plus open
+dues × the dues collection rate, plus the recent weekly average of everything else (walk-ins, food,
+lockers, overtime). Weekly rows for FORECAST_DAYS with a low/high band (90%).
+
+Dues collection rate: of what was still owed after a membership's first payment day, the share paid
+later — over memberships that ended 30 to 180 days ago (their dues have had time to be collected).
 
 Engagement: 0–1 per active member from recent use of booked hours, visit days, focus and
 (1 − churn score).
@@ -14,7 +17,7 @@ from __future__ import annotations
 import numpy as np
 import pandas as pd
 
-from .config import FORECAST_DAYS, MODEL_VERSION
+from .config import FORECAST_DAYS, GRACE_DAYS, MODEL_VERSION
 from .data import Dataset
 from .features import ist_day
 from .fingerprint import active_students, habits
@@ -35,22 +38,24 @@ def forecast(ds: Dataset, churn: pd.DataFrame | None = None) -> pd.DataFrame:
         i = int((day - today).days // 7)
         return i if 0 <= i < len(weeks) else None
 
-    for row in active.itertuples():
-        i = week_of(row.end_date + pd.Timedelta(days=1))
+    # Still active but past their end date: in the grace period, not renewed yet (a renewal switches
+    # the old membership off). If they renew, it is now.
+    grace = m[
+        m["is_active"].fillna(False).astype(bool) & (m["end_date"] < today) & (m["end_date"] >= today - pd.Timedelta(days=GRACE_DAYS))
+    ]
+    for row, in_grace in [(r, False) for r in active.itertuples()] + [(r, True) for r in grace.itertuples()]:
+        i = 0 if in_grace else week_of(row.end_date + pd.Timedelta(days=1))
         if i is None:
             continue
         amount = float(row.plan_amount) if pd.notna(row.plan_amount) else float(row.monthly_fee or 0) * float(row.months_paid or 1)
-        p = 1 - float(risk.get(row.student_id, 0.3))
+        p = 1 - float(risk.get(row.student_id, 0.5 if in_grace else 0.3))
         mean[i] += amount * p
         var[i] += amount * amount * p * (1 - p)
 
-    # Dues: what share of membership dues was collected recently, spread over the next two weeks.
+    # Dues, spread over the next two weeks at the dues collection rate.
     tx = ds["transactions"]
-    recent_mem = m[(m["end_date"] >= today - pd.Timedelta(days=180)) & (m["end_date"] < today)]
-    billed = (recent_mem["plan_amount"].fillna(recent_mem["monthly_fee"] * recent_mem["months_paid"])).sum()
-    collected = tx[tx["membership_id"].isin(recent_mem["id"]) & (tx["category"] == "membership")]["amount"].sum()
-    rate = float(np.clip(collected / billed, 0, 1)) if billed else 0.8
-    dues = float(active["fee_due"].fillna(0).clip(lower=0).sum())
+    rate = dues_collection_rate(ds, today)
+    dues = float(pd.concat([active, grace])["fee_due"].fillna(0).clip(lower=0).sum())
     for i in range(min(2, len(weeks))):
         mean[i] += dues * rate / 2
         var[i] += (dues / 2) ** 2 * rate * (1 - rate)
@@ -73,6 +78,20 @@ def forecast(ds: Dataset, churn: pd.DataFrame | None = None) -> pd.DataFrame:
             "high": np.round(mean + Z90 * sd, 0),
         }
     )
+
+
+def dues_collection_rate(ds: Dataset, today: pd.Timestamp, default: float = 0.5) -> float:
+    m = ds["memberships"]
+    done = m[(m["end_date"] < today - pd.Timedelta(days=30)) & (m["end_date"] >= today - pd.Timedelta(days=180))]
+    tx = ds["transactions"]
+    tx = tx[tx["membership_id"].isin(done["id"]) & (tx["category"] == "membership")].copy()
+    if done.empty:
+        return default
+    tx["day"] = ist_day(tx["created_at"])
+    first = tx.groupby("membership_id")["day"].transform("min")
+    later = float(tx.loc[tx["day"] > first, "amount"].sum())
+    outstanding = float(done["fee_due"].fillna(0).clip(lower=0).sum())
+    return float(later / (later + outstanding)) if later + outstanding > 0 else default
 
 
 def engagement(ds: Dataset, churn: pd.DataFrame | None = None, days: pd.DataFrame | None = None) -> pd.DataFrame:

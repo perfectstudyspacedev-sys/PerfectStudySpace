@@ -18,7 +18,7 @@ def export(db: Supabase, out_dir: Path = DATA_DIR, now: pd.Timestamp | None = No
     for name, columns in TABLES.items():
         assert not personal_columns(name) & set(columns), f"{name} would export personal data"
         filters = {"action": f"in.({','.join(EVENT_ACTIONS)})", "ok": "eq.true"} if name == "events" else None
-        rows = db.select_all(name, columns, filters, order=ORDER.get(name, "id"))
+        rows = db.select_all(name, columns, filters, key=ORDER.get(name, "id"))
         df = pd.DataFrame(rows, columns=columns)
         if name == "events":
             df["payload"] = df["payload"].map(lambda p: None if p is None else json.dumps(p))

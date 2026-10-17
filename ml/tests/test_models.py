@@ -19,9 +19,13 @@ def test_churn_beats_the_seven_day_reminder_on_planted_data(result):
     assert result.chosen in ("cox", "gradient_boosting")
 
 
-def test_churn_scores_every_active_member_once_with_a_known_reason(result, synthetic):
+def test_churn_scores_members_ending_within_28_days_once_with_a_known_reason(result, synthetic):
     s = result.scores
-    assert s["student_id"].is_unique and len(s) == len(fingerprint.active_students(synthetic))
+    m = synthetic["memberships"]
+    today = pd.Timestamp("2026-10-16")
+    latest = m[m["is_active"] & (m["end_date"] >= today)].sort_values("end_date").groupby("student_id").tail(1)
+    due = set(latest.loc[(latest["end_date"] - today).dt.days <= 28, "student_id"])
+    assert s["student_id"].is_unique and set(s["student_id"]) == due and len(due) < len(latest) or set(s["student_id"]) == due
     assert s["score"].between(0, 1).all() and set(s["reason"]) <= set(churn.REASONS)
     assert (s.loc[s["score"] < 0.3, "reason"] == "other").all()
 
@@ -82,3 +86,62 @@ def test_engagement_is_between_zero_and_one_for_every_active_member(result, synt
     assert e["score"].between(0, 1).all()
     assert e.loc[e["score"] >= 0.5, "reason"].isna().all()
     json.dumps(e.to_dict("records"), default=str)
+
+
+def test_holds_count_only_up_to_the_prediction_point(synthetic):
+    from pss_ml.features import membership_frame
+
+    frame = membership_frame(synthetic)
+    held = synthetic["membership_holds"].iloc[0]
+    row = frame[frame["id"] == held["membership_id"]]
+    created = pd.Timestamp(held["created_at"]).tz_convert("Asia/Kolkata").tz_localize(None).normalize()
+    before = churn.features_at(synthetic, row, pd.Series(created - pd.Timedelta(days=1), index=row.index))
+    after = churn.features_at(synthetic, row, pd.Series(created, index=row.index))
+    assert before["holds"].iloc[0] == 0 and before["hold_days_taken"].iloc[0] == 0
+    assert after["holds"].iloc[0] == 1 and after["hold_days_taken"].iloc[0] == held["days_paused"]
+
+
+def test_budget_comparison_contacts_nobody_twice(result):
+    b = result.budget
+    assert len(b) and len(set().union(*b["model_ids"])) == b["model_contacted"].sum()
+    assert result.metrics["model_churners_reached"] == b["model_hits"].sum()
+
+
+def test_the_hidden_admin_is_never_flagged(synthetic):
+    f = anomaly.detect(synthetic)
+    admin = synthetic["staff"].loc[synthetic["staff"]["role"] == "admin", "id"].iloc[0]
+    big = synthetic["membership_discounts"].loc[synthetic["membership_discounts"]["applied_by_staff_id"] == admin, "id"]
+    assert len(big) == 1 and big.iloc[0] not in set(f["ref_id"]) and not f["explanation"].str.contains("Dev").any()
+
+
+def test_only_recent_records_are_flagged(synthetic):
+    from pss_ml.data import Dataset
+
+    later = Dataset(synthetic.tables, synthetic.as_of + pd.Timedelta(days=30))
+    assert anomaly.detect(later).empty
+
+
+def test_anomaly_reads_the_payload_keys_the_app_actually_sends():
+    """Contract with supabase/functions/api/domains/*.ts: the keys anomaly.py reads must be ones the
+    handlers destructure from their payload."""
+    import re
+    from pathlib import Path
+
+    root = Path(__file__).resolve().parents[2] / "supabase" / "functions" / "api" / "domains"
+    expected = {
+        ("sessions.ts", "update_attendance"): {"bookingId", "startTime", "endTime"},
+        ("sessions.ts", "add_attendance"): {"branchId", "studentId", "startTime", "endTime"},
+        ("money.ts", "set_overtime_excluded"): {"overtimeSessionId", "excluded"},
+    }
+    for (file, action), keys in expected.items():
+        src = (root / file).read_text()
+        body = src[src.index(f"{action}: async") :][:800]
+        m = re.search(r"const \{([^}]*)\} = payload", body)
+        assert m, action
+        sent = {k.strip().split(":")[0] for k in m.group(1).split(",")}
+        assert keys <= sent, (action, keys - sent)
+
+
+def test_dues_collection_rate_measures_what_was_paid_after_the_first_day(synthetic):
+    rate = forecast.dues_collection_rate(synthetic, pd.Timestamp("2026-10-16"))
+    assert 0 <= rate <= 1

@@ -22,6 +22,7 @@ const chitra = insert("students", { name: "Chitra Devi", phone: "9100000003", br
 const done1 = insert("bookings", { student_id: asha.id, branch_id: b1.id, booking_type: "temporary", status: "completed", start_time: new Date(Date.now() - 6 * 3600e3).toISOString(), hours: 6, amount: 0 });
 const walkin = insert("bookings", { student_id: bala.id, branch_id: b1.id, booking_type: "walkin", status: "completed", start_time: new Date(Date.now() - 3 * 3600e3).toISOString(), hours: 3, amount: 35 });
 const active = insert("bookings", { student_id: bala.id, branch_id: b1.id, booking_type: "temporary", status: "active", start_time: new Date(Date.now() - 1 * 3600e3).toISOString(), hours: 6, amount: 0 });
+const old = insert("bookings", { student_id: asha.id, branch_id: b1.id, booking_type: "temporary", status: "completed", start_time: new Date(Date.now() - 72 * 3600e3).toISOString(), hours: 6, amount: 0 });
 const other = insert("bookings", { student_id: chitra.id, branch_id: b2.id, booking_type: "temporary", status: "completed", start_time: new Date(Date.now() - 5 * 3600e3).toISOString(), hours: 6, amount: 0 });
 
 // ── Feature flags ──
@@ -53,8 +54,9 @@ const other = insert("bookings", { student_id: chitra.id, branch_id: b2.id, book
   const a = await call("record_focus_rating", { bookingId: active.id, rating: 5 }, tP);
   const x = await call("record_focus_rating", { bookingId: other.id, rating: 5 }, tP);
   const n = await call("record_focus_rating", { bookingId: "00000000-0000-4000-8000-ffffffffffff", rating: 5 }, tP);
-  check(w.status === 400 && /Walk-in/.test(w.error) && a.status === 400 && x.status === 403 && n.status === 404 && rows("focus_ratings").length === 1,
-    "P1.1: walk-ins, sessions not yet checked out, other branches and unknown sessions are refused", { w, a, x, n });
+  const o = await call("record_focus_rating", { bookingId: old.id, rating: 5 }, tP);
+  check(w.status === 400 && /Walk-in/.test(w.error) && a.status === 400 && x.status === 403 && n.status === 404 && o.status === 400 && /too old/.test(o.error) && rows("focus_ratings").length === 1,
+    "P1.1: walk-ins, sessions not yet checked out, other branches, unknown sessions and sessions over two days old are refused", { w, a, x, n, o });
   for (const bad of [0, 6, 3.5, "x", null]) {
     const r = await call("record_focus_rating", { bookingId: done1.id, rating: bad }, tP);
     check(r.status === 400 && rows("focus_ratings")[0].rating === 2, `P1.1: rating ${JSON.stringify(bad)} is refused`, r);
@@ -77,6 +79,7 @@ const other = insert("bookings", { student_id: chitra.id, branch_id: b2.id, book
   check(one.scores.length === 2 && one.scores[0].model === "churn" && one.fingerprint.cluster === "early-bird", "P1.3: one student's scores and fingerprint", one);
   const branch = await call("get_student_scores", { branchId: b1.id, model: "churn" }, tO);
   check(branch.scores.map((s: any) => s.students.name).join() === "Asha Rao,Bala Kumar", "P1.3: a branch's churn ranking, highest risk first, only that branch", branch.scores);
+  check(!JSON.stringify(branch).includes("9100000001") && !("phone" in branch.scores[0].students), "P1.3: rankings carry names only, no phone numbers", branch.scores[0]);
   const all = await call("get_student_scores", { allBranches: true }, tO);
   check(all.model === "churn" && all.scores.length === 3, "P1.3: all branches for the owner; model defaults to churn");
   const staffTry = await call("get_student_scores", { branchId: b1.id }, tP);

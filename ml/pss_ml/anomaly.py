@@ -1,7 +1,8 @@
 """P1.6 — anomaly detector. Each discount, cashback, waiver, manual attendance edit and overtime
-exclusion is compared with the same staff member's history, the branch's history and, when those are
-too short, every record of its kind (robust z-score: distance from the median in MADs). The top
-ANOMALY_TOP_N per week above ANOMALY_MIN_SCORE become flags. Explanations come from fixed templates,
+exclusion is compared with the same staff member's history, the branch's history and, when both are
+too short, every record of its kind (robust z-score: distance from the median in MADs). Records from
+the last ANOMALY_RECENT_DAYS can be flagged: the top ANOMALY_TOP_N per IST week above ANOMALY_MIN_SCORE.
+The hidden admin account's records are left out. Explanations come from fixed templates,
 never from a language model."""
 
 from __future__ import annotations
@@ -12,7 +13,7 @@ import uuid
 import numpy as np
 import pandas as pd
 
-from .config import ANOMALY_MIN_SCORE, ANOMALY_TOP_N
+from .config import ANOMALY_MIN_SCORE, ANOMALY_RECENT_DAYS, ANOMALY_TOP_N
 from .data import Dataset
 
 EVENT_NS = uuid.UUID("6f1c2f0e-4b8e-4d56-9b0a-5a1f3c9e7d21")  # events have numeric ids; flags need a uuid
@@ -76,7 +77,10 @@ def records(ds: Dataset) -> pd.DataFrame:
     if not ev.empty:
         ev["p"] = ev["payload"].map(lambda p: json.loads(p) if isinstance(p, str) else (p or {}))
         att = ev[ev["action"].isin(["add_attendance", "update_attendance"])]
-        hours = att["p"].map(lambda p: p.get("hours"))
+        hours = att["p"].map(_entry_hours)
+        # add_attendance sends branchId (the event has it); update_attendance only the booking.
+        booking_branch = ds["bookings"].set_index("id")["branch_id"]
+        att_branch = att["branch_id"].fillna(att["p"].map(lambda p: p.get("bookingId")).map(booking_branch))
         parts.append(
             pd.DataFrame(
                 {
@@ -84,7 +88,7 @@ def records(ds: Dataset) -> pd.DataFrame:
                     "ref_table": "events",
                     "ref_id": att["id"].map(event_ref),
                     "staff_id": att["actor_id"],
-                    "branch_id": att["branch_id"],
+                    "branch_id": att_branch,
                     "value": pd.to_numeric(hours, errors="coerce"),
                     "unit": "h",
                     "at": att["occurred_at"],
@@ -92,8 +96,8 @@ def records(ds: Dataset) -> pd.DataFrame:
             )
         )
         exc = ev[(ev["action"] == "set_overtime_excluded") & ev["p"].map(lambda p: p.get("excluded") is True)]
-        ot = ds["overtime_sessions"].set_index("id")["billed_amount"]
-        oid = exc["p"].map(lambda p: p.get("overtimeId"))
+        sessions = ds["overtime_sessions"].set_index("id")
+        oid = exc["p"].map(lambda p: p.get("overtimeSessionId"))  # set_overtime_excluded's payload key
         parts.append(
             pd.DataFrame(
                 {
@@ -101,15 +105,31 @@ def records(ds: Dataset) -> pd.DataFrame:
                     "ref_table": "overtime_sessions",
                     "ref_id": oid,
                     "staff_id": exc["actor_id"],
-                    "branch_id": exc["branch_id"],
-                    "value": oid.map(ot).astype(float),
+                    "branch_id": exc["branch_id"].fillna(oid.map(sessions["branch_id"])),
+                    "value": oid.map(sessions["billed_amount"]).astype(float),
                     "unit": "₹",
                     "at": exc["occurred_at"],
                 }
             )
         )
     r = pd.concat([p for p in parts if not p.empty], ignore_index=True)
+    # The hidden admin account never appears on the owner's pages (R6), so its records are left out.
+    admins = set(ds["staff"].loc[ds["staff"]["role"] == "admin", "id"])
+    r = r[~r["staff_id"].isin(admins)]
     return r.dropna(subset=["value", "ref_id"])
+
+
+def _entry_hours(p: dict) -> float:
+    """Hours of a manual attendance entry: from its start and end time (what the app sends), else
+    an explicit hours field."""
+    start, end = p.get("startTime"), p.get("endTime")
+    if start and end:
+        try:
+            return (pd.Timestamp(end) - pd.Timestamp(start)).total_seconds() / 3600
+        except (ValueError, TypeError):
+            pass
+    h = p.get("hours")
+    return float(h) if isinstance(h, (int, float)) else np.nan
 
 
 def _robust_z(values: pd.Series) -> pd.Series:
@@ -127,7 +147,11 @@ def _robust_z(values: pd.Series) -> pd.Series:
     return pd.Series(out, index=values.index)
 
 
-def detect(ds: Dataset, top_n: int = ANOMALY_TOP_N, min_score: float = ANOMALY_MIN_SCORE) -> pd.DataFrame:
+def detect(
+    ds: Dataset, top_n: int = ANOMALY_TOP_N, min_score: float = ANOMALY_MIN_SCORE, recent_days: int = ANOMALY_RECENT_DAYS
+) -> pd.DataFrame:
+    """Baselines use the whole history; only records from the last `recent_days` can be flagged,
+    so the first run does not fill the Flags page with old weeks."""
     r = records(ds)
     if r.empty:
         return pd.DataFrame(columns=["kind", "ref_table", "ref_id", "branch_id", "score", "explanation"])
@@ -136,14 +160,16 @@ def detect(ds: Dataset, top_n: int = ANOMALY_TOP_N, min_score: float = ANOMALY_M
         g = r.groupby(keys, dropna=False)["value"]
         r[f"z_{level}"] = g.transform(_robust_z)
         r[f"median_{level}"] = g.transform(lambda v: v.median() if len(v) < 2 else v.drop(v.idxmax()).median())
-    z = r[[f"z_{lv}" for lv in levels]]
-    r["score"] = z.max(axis=1)
-    r["level"] = z.fillna(-np.inf).idxmax(axis=1).str[2:]
-    r = r[r["score"] >= min_score].copy()
+    # The staff member's and the branch's history decide; all records of the kind only when both
+    # are too short to judge.
+    local = r[["z_staff", "z_branch"]]
+    r["score"] = local.max(axis=1).fillna(r["z_all"])
+    r["level"] = np.where(local.notna().any(axis=1), local.fillna(-np.inf).idxmax(axis=1).str[2:], "all")
+    r = r[(r["score"] >= min_score) & (r["at"] >= ds.as_of - pd.Timedelta(days=recent_days))].copy()
     if r.empty:
         return pd.DataFrame(columns=["kind", "ref_table", "ref_id", "branch_id", "score", "explanation"])
     names = ds["staff"].set_index("id")["display_name"]
-    r["week"] = r["at"].dt.tz_convert(None).dt.to_period("W-SUN")
+    r["week"] = r["at"].dt.tz_convert("Asia/Kolkata").dt.tz_localize(None).dt.to_period("W-SUN")  # IST weeks
     r = r.sort_values("score", ascending=False).groupby("week").head(top_n)
     r["explanation"] = [_explain(row, names) for row in r.itertuples()]
     r["score"] = r["score"].round(2)

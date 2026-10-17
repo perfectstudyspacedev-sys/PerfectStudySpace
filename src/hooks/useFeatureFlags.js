@@ -2,23 +2,27 @@ import { useEffect, useState } from 'react'
 import { api } from '../lib/api'
 
 // PSS-AI R9 — which Phase 1 features the owner has switched on (app_settings pssai_* rows).
-// Read once per page load and shared by every component; until the answer arrives, and if the
-// read fails, everything counts as off.
+// Shared by every component and read again when a component mounts more than 10 minutes after the
+// last read, so a desk tab left open picks up a change. Until the first answer arrives, and if the
+// read fails, everything counts as off (the server checks the switches too).
 const OFF = { focusPulse: false, anomaly: false, discountConfirmOver: 1000 }
+const MAX_AGE_MS = 10 * 60 * 1000
 let cached = null
+let cachedAt = 0
 let pending = null
 
 function load() {
   pending ??= api('get_feature_flags')
-    .then((res) => (cached = { ...OFF, ...res }))
-    .catch(() => { pending = null; return OFF })
+    .then((res) => { cached = { ...OFF, ...res }; cachedAt = Date.now(); return cached })
+    .catch(() => cached ?? OFF)
+    .finally(() => { pending = null })
   return pending
 }
 
 export function useFeatureFlags() {
   const [flags, setFlags] = useState(cached ?? OFF)
   useEffect(() => {
-    if (cached) return undefined
+    if (cached && Date.now() - cachedAt < MAX_AGE_MS) return undefined
     let live = true
     load().then((f) => { if (live) setFlags(f) })
     return () => { live = false }

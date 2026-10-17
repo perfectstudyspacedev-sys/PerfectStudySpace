@@ -46,13 +46,24 @@ def _paid_by(ds: Dataset) -> dict[str, tuple[np.ndarray, np.ndarray]]:
     return out
 
 
+def _holds_by(ds: Dataset) -> dict[str, tuple[np.ndarray, np.ndarray]]:
+    hd = ds["membership_holds"].dropna(subset=["membership_id"]).sort_values("created_at")
+    return {
+        mid: (ist_day(g["created_at"]).to_numpy(), g["days_paused"].fillna(0).astype(float).cumsum().to_numpy())
+        for mid, g in hd.groupby("membership_id")
+    }
+
+
 def features_at(ds: Dataset, members: pd.DataFrame, points: pd.Series, days: pd.DataFrame | None = None) -> pd.DataFrame:
     """Features of each membership row as of its point (an IST day), using only data up to then."""
     days = student_days(ds) if days is None else days
     by_student = {sid: g for sid, g in days.groupby("student_id")}
     paid = _paid_by(ds)
+    holds = _holds_by(ds)
     rows = []
     for (_, m), point in zip(members.iterrows(), points, strict=True):
+        hold_days, hold_cum = holds.get(m["id"], (np.array([], dtype="datetime64[ns]"), np.array([])))
+        h = np.searchsorted(hold_days, np.datetime64(point), side="right")  # holds taken by the point only
         g = by_student.get(m["student_id"])
         if g is not None:
             g = g[g["day"] <= point]
@@ -88,8 +99,8 @@ def features_at(ds: Dataset, members: pd.DataFrame, points: pd.Series, days: pd.
                 "prior_early": m["prior_early"],
                 "prior_grace": m["prior_grace"],
                 "prior_late": m["prior_late"],
-                "holds": m["holds"],
-                "hold_days_taken": m["hold_days_taken"],
+                "holds": float(h),
+                "hold_days_taken": float(hold_cum[h - 1]) if h else 0.0,
                 "hours_per_day": m["hours_per_day"],
                 "months_paid": m["months_paid"],
                 "plan_length": m["plan_length"],
@@ -189,18 +200,21 @@ class ChurnResult:
 def _budget_table(test: pd.DataFrame, scored: np.ndarray, frame: pd.DataFrame, budget: int) -> pd.DataFrame:
     """Per week and branch: the model contacts its top `budget` among members ending in the next
     28 days (scored that day); the baseline contacts `budget` members expiring in the next 7 days,
-    soonest first. Hits = contacted members who then churned. `*_ids` keep each membership once, so
-    the totals count people, not weeks."""
+    soonest first. Hits = contacted members who then churned. Nobody is contacted twice: a member the
+    model already contacted is left out of later weeks, so both sides count people, not weeks."""
     test = test.assign(score=scored)
     labelled = frame[frame["observable"]]
     weeks = pd.date_range(test["point"].min().normalize(), test["end_date"].max() - pd.Timedelta(days=28), freq="7D")
     out = []
+    contacted: dict[str, set] = {}
     for w in weeks:
         for branch in sorted(test["branch_id"].dropna().unique()):
-            pool = test[(test["branch_id"] == branch) & (test["point"] == w)]
+            done = contacted.setdefault(branch, set())
+            pool = test[(test["branch_id"] == branch) & (test["point"] == w) & ~test["membership_id"].isin(done)]
             if pool.empty:
                 continue
             pick = pool.sort_values("score", ascending=False).head(budget)
+            done.update(pick["membership_id"])
             base = (
                 labelled[
                     (labelled["branch_id"] == branch) & (labelled["end_date"] >= w) & (labelled["end_date"] < w + pd.Timedelta(days=7))
@@ -216,6 +230,7 @@ def _budget_table(test: pd.DataFrame, scored: np.ndarray, frame: pd.DataFrame, b
                     "model_hits": int(pick["churned"].sum()),
                     "baseline_contacted": len(base),
                     "baseline_hits": int(base["churned"].sum()),
+                    "model_ids": set(pick["membership_id"]),
                     "model_hit_ids": set(pick.loc[pick["churned"] == 1, "membership_id"]),
                     "baseline_hit_ids": set(base.loc[base["churned"] == 1, "id"]),
                 }
@@ -236,7 +251,7 @@ def _weekly_pool(ds: Dataset, frame: pd.DataFrame, days: pd.DataFrame, start: pd
         x["branch_id"], x["end_date"], x["point"], x["churned"] = sel["branch_id"], sel["end_date"], w, sel["churned"]
         x["student_id"], x["membership_id"] = sel["student_id"], sel["id"]
         parts.append(x)
-    return pd.concat(parts) if parts else pd.DataFrame()
+    return pd.concat(parts, ignore_index=True) if parts else pd.DataFrame()
 
 
 def train_and_score(ds: Dataset, budget: int = CONTACT_BUDGET, test_days: int = TEST_DAYS) -> ChurnResult:
@@ -248,7 +263,9 @@ def train_and_score(ds: Dataset, budget: int = CONTACT_BUDGET, test_days: int = 
         return ChurnResult(None, "none", {}, pd.DataFrame(), pd.DataFrame(), ["No membership has a known outcome yet."])
     last_end = rows["end_date"].max()
     cut = last_end - pd.Timedelta(days=test_days)
-    train, test = rows[rows["end_date"] <= cut], rows[rows["end_date"] > cut]
+    # A gap of GRACE_DAYS: a training label is known GRACE_DAYS after its end date, so training ends
+    # that much before the test period starts and no training label looks into the test period.
+    train, test = rows[rows["end_date"] <= cut - pd.Timedelta(days=GRACE_DAYS)], rows[rows["end_date"] > cut]
     if len(train) < 40 or train["churned"].nunique() < 2 or test["churned"].nunique() < 2:
         notes.append(f"Too little history for a time-based test (train {len(train)}, test {len(test)} rows); not scored.")
         return ChurnResult(None, "none", {"train_rows": len(train), "test_rows": len(test)}, pd.DataFrame(), pd.DataFrame(), notes)
@@ -286,6 +303,8 @@ def train_and_score(ds: Dataset, budget: int = CONTACT_BUDGET, test_days: int = 
     today = ist_day(pd.Series([ds.as_of]))[0]
     active = frame[frame["is_active"].fillna(False).astype(bool) & (frame["end_date"] >= today)]
     active = active.sort_values("end_date").groupby("student_id").tail(1)  # an early renewal counts, not the old plan
+    # Scored only where the model was trained and validated: memberships ending in the next 28 days.
+    active = active[(active["end_date"] - today).dt.days <= max(TRAIN_OFFSETS)]
     scores = pd.DataFrame(columns=["student_id", "score", "reason"])
     if not active.empty:
         x = features_at(ds, active, pd.Series(today, index=active.index), days)
@@ -307,7 +326,8 @@ def report(result: ChurnResult, as_of: pd.Timestamp, budget: int = CONTACT_BUDGE
         f"# Churn model report — {as_of.date()}",
         "",
         f"Model version `{MODEL_VERSION}`. Label: no new membership starting within {GRACE_DAYS} days after the end date. "
-        f"Prediction point: {PREDICTION_DAYS} days before the end date. Time-based split: memberships ending after "
+        f"Prediction point: {PREDICTION_DAYS} days before the end date. "
+        f"Time-based split ({GRACE_DAYS}-day gap after training): memberships ending after "
         f"{m.get('split_end_date', '—')} are the test set.",
         "",
     ]
@@ -342,7 +362,9 @@ def report(result: ChurnResult, as_of: pd.Timestamp, budget: int = CONTACT_BUDGE
         lines += [
             "## Today's scores",
             "",
-            f"{len(result.scores)} active members scored. Reasons: " + ", ".join(f"{k} {v}" for k, v in counts.items()) + ".",
+            f"{len(result.scores)} members ending in the next 28 days scored. Reasons: "
+            + ", ".join(f"{k} {v}" for k, v in counts.items())
+            + ".",
         ]
     lines += [""] + [f"- {n}" for n in result.notes]
     return "\n".join(lines).rstrip() + "\n"

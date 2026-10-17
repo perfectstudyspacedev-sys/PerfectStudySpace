@@ -77,6 +77,13 @@ function parseCond(expr: string): (r: Row) => boolean {
   return opFn(col, op, val);
 }
 function opFn(col: string, op: string, val: any): (r: Row) => boolean {
+  // "students.branch_id": a column of the joined row (PostgREST filter on an !inner embed).
+  if (col.includes(".")) {
+    const [rel, field] = col.split(".");
+    const fk = `${SINGULAR[rel] ?? rel.replace(/s$/, "")}_id`;
+    const inner = opFn(field, op, val);
+    return (r) => { const hit = tbl(rel).find((x) => x.id === r[fk]); return !!hit && inner(hit); };
+  }
   switch (op) {
     case "eq": return (r) => eqv(r[col], val);
     case "neq": return (r) => !eqv(r[col], val);
@@ -107,7 +114,7 @@ function project(table: string, row: Row, cols: string): Row {
       // alias:fk(...)  |  table!fk(...)  |  table(...)
       let key = emb[1]; let target = emb[1]; let fk: string | undefined;
       if (emb[2]) { fk = emb[2]; target = key === "staff" ? "staff" : key; }
-      if (emb[3]) { fk = emb[3]; }
+      if (emb[3] && emb[3] !== "inner" && emb[3] !== "left") { fk = emb[3]; } // !inner/!left are join hints
       const sub = emb[4] || "*";
       if (!fk) {
         const sing = SINGULAR[target] ?? target.replace(/s$/, "");

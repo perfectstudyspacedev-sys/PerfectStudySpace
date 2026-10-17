@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import json
 import os
+import urllib.error
 import urllib.parse
 import urllib.request
 from collections.abc import Callable, Iterable
@@ -31,7 +32,7 @@ def load_env(path=ENV_FILE) -> dict[str, str]:
             values[key] = os.environ[key]
     missing = [k for k in ("SUPABASE_URL", "SUPABASE_SERVICE_ROLE_KEY") if not values.get(k)]
     if missing:
-        raise SystemExit(f"Missing {', '.join(missing)} — copy ml/.env.example to ml/.env and fill it in")
+        raise SystemExit(f"Missing {', '.join(missing)} — copy ml/env.example to ml/.env and fill it in")
     return values
 
 
@@ -39,8 +40,11 @@ Transport = Callable[[urllib.request.Request], tuple[int, bytes]]
 
 
 def _default_transport(req: urllib.request.Request) -> tuple[int, bytes]:
-    with urllib.request.urlopen(req, timeout=120) as res:  # noqa: S310 (URL comes from ml/.env)
-        return res.status, res.read()
+    try:
+        with urllib.request.urlopen(req, timeout=120) as res:  # noqa: S310 (URL comes from ml/.env)
+            return res.status, res.read()
+    except urllib.error.HTTPError as e:  # keep PostgREST's error text (it never contains the key)
+        return e.code, e.read()
 
 
 class Supabase:
@@ -72,16 +76,23 @@ class Supabase:
             raise RuntimeError(f"{method} {table} failed with HTTP {status}: {raw[:300]!r}")
         return json.loads(raw) if raw else None
 
-    def select_all(self, table: str, columns: Iterable[str], filters: dict[str, str] | None = None, order: str = "id") -> list[dict]:
-        """Every row of `table`, a page at a time (the default 1,000-row cap never truncates)."""
+    def select_all(self, table: str, columns: Iterable[str], filters: dict[str, str] | None = None, key: str = "id") -> list[dict]:
+        """Every row of `table`, a page at a time, paged by key (`key > last seen`) rather than by
+        offset, so rows added or removed while it runs cannot shift the pages; stops on an empty
+        page, so a server row cap below PAGE_SIZE cannot cut it short."""
+        cols = list(columns)
+        if key not in cols:
+            raise ValueError(f"{table}: the paging key {key} must be selected")
         rows: list[dict] = []
         while True:
-            params = {"select": ",".join(columns), "order": order, "offset": str(len(rows)), "limit": str(PAGE_SIZE)}
+            params = {"select": ",".join(cols), "order": f"{key}.asc", "limit": str(PAGE_SIZE)}
             params.update(filters or {})
+            if rows:
+                params[key] = f"gt.{rows[-1][key]}"
             page = self._request("GET", table, params)
-            rows.extend(page)
-            if len(page) < PAGE_SIZE:
+            if not page:
                 return rows
+            rows.extend(page)
 
     def upsert(self, table: str, rows: list[dict], on_conflict: str, ignore_duplicates: bool = False) -> None:
         resolution = "ignore-duplicates" if ignore_duplicates else "merge-duplicates"
