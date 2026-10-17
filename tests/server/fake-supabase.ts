@@ -25,6 +25,11 @@ const DEFAULTS: Record<string, Row> = {
 };
 
 function uuid() { return crypto.randomUUID(); }
+// events has a BIGSERIAL id and occurred_at (migration 052), so it takes no uuid from the seeded counter.
+function baseRow(table: string): Row {
+  if (table === "events") return { id: tbl(table).reduce((m, r) => Math.max(m, r.id), 0) + 1, occurred_at: new Date().toISOString() };
+  return { id: uuid(), created_at: new Date().toISOString() };
+}
 function tbl(name: string) { return (fake.tables[name] ??= []); }
 const clone = (v: any) => (v == null ? v : JSON.parse(JSON.stringify(v)));
 
@@ -184,13 +189,17 @@ class Query {
           const hit = tbl(this.table).find((r) => keys.every((k) => eqv(r[k], p[k])));
           if (hit) { if (!this.upsertOpts.ignoreDuplicates) Object.assign(hit, clone(p)); continue; }
         }
-        const row = { id: uuid(), created_at: new Date().toISOString(), ...clone(DEFAULTS[this.table] ?? {}), ...clone(p) };
+        const row = { ...baseRow(this.table), ...clone(DEFAULTS[this.table] ?? {}), ...clone(p) };
         const err = g.__FAKE_CHECK__?.(this.table, row);
         if (err) return { data: null, error: typeof err === "string" ? { message: err } : err };
         tbl(this.table).push(row); inserted.push(row);
       }
       if (!this.returning) return { data: null, error: null };
       return this.finish(inserted, this.returnCols);
+    }
+    if ((this.op === "update" || this.op === "delete") && this.table === "events") {
+      // mirrors the append-only trigger in migration 052
+      return { data: null, error: { message: `events is append-only: ${this.op.toUpperCase()} is not allowed`, code: "P0001" } };
     }
     if (this.op === "update") {
       const rows = this.match();

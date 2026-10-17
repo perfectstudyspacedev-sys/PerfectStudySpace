@@ -4316,6 +4316,8 @@
       "status": "new"
      },
      {
+      "actor_id": null,
+      "actor_type": "public",
       "branch_id": "00000000-0000-4000-8000-000000000001",
       "branches": {
        "name": "Hopes"
@@ -4326,6 +4328,7 @@
       "message": "Package interest: 6h\n\nhi",
       "name": "Web Lead",
       "phone": "9500000001",
+      "run_id": null,
       "source": "website_form"
      }
     ],
@@ -6157,6 +6160,8 @@
    "label": "create enquiry",
    "res": {
     "enquiry": {
+     "actor_id": "00000000-0000-4000-8000-000000000005",
+     "actor_type": "staff",
      "branch_id": "00000000-0000-4000-8000-000000000001",
      "created_at": "2026-10-17T06:40:00.000Z",
      "created_by_staff_id": "00000000-0000-4000-8000-000000000005",
@@ -6165,6 +6170,7 @@
      "message": "Morning?",
      "name": "Lead",
      "phone": "9200000003",
+     "run_id": null,
      "source": "walk_in"
     },
     "status": 200
@@ -6366,6 +6372,8 @@
     "total_pause_minutes": 0
    },
    {
+    "actor_id": "00000000-0000-4000-8000-000000000003",
+    "actor_type": "owner",
     "amount": 35,
     "booking_type": "walkin",
     "branch_id": "00000000-0000-4000-8000-000000000001",
@@ -6379,6 +6387,7 @@
     "membership_id": null,
     "paused_at": null,
     "payment_mode": "cash",
+    "run_id": null,
     "scheduled_hours": 3,
     "start_time": "2026-10-16T05:30:00.000Z",
     "status": "active",
@@ -6386,6 +6395,8 @@
     "total_pause_minutes": 0
    },
    {
+    "actor_id": "00000000-0000-4000-8000-000000000005",
+    "actor_type": "staff",
     "amount": 35,
     "booking_type": "walkin",
     "branch_id": "00000000-0000-4000-8000-000000000001",
@@ -6399,6 +6410,7 @@
     "membership_id": null,
     "paused_at": null,
     "payment_mode": "other",
+    "run_id": null,
     "scheduled_hours": 3,
     "start_time": "2026-10-16T05:30:00.000Z",
     "status": "active",
@@ -6406,6 +6418,8 @@
     "total_pause_minutes": 0
    },
    {
+    "actor_id": "00000000-0000-4000-8000-000000000005",
+    "actor_type": "staff",
     "amount": 0,
     "booking_type": "temporary",
     "branch_id": "00000000-0000-4000-8000-000000000001",
@@ -6418,6 +6432,7 @@
     "is_paused": false,
     "membership_id": "00000000-0000-4000-8000-00000000001e",
     "paused_at": null,
+    "run_id": null,
     "scheduled_hours": 6,
     "start_time": "2026-10-16T05:30:00.000Z",
     "status": "active",
@@ -6425,6 +6440,8 @@
     "total_pause_minutes": 0
    },
    {
+    "actor_id": "00000000-0000-4000-8000-000000000003",
+    "actor_type": "owner",
     "amount": 0,
     "booking_type": "temporary",
     "branch_id": "00000000-0000-4000-8000-000000000001",
@@ -6437,6 +6454,7 @@
     "is_paused": false,
     "membership_id": "00000000-0000-4000-8000-000000000026",
     "paused_at": null,
+    "run_id": null,
     "scheduled_hours": 6,
     "start_time": "2026-10-15T03:30:00.000Z",
     "status": "completed",
@@ -6609,6 +6627,8 @@
     "updated_at": "2026-10-17T06:40:00.000Z"
    },
    {
+    "actor_id": null,
+    "actor_type": "public",
     "branch_id": "00000000-0000-4000-8000-000000000001",
     "created_at": "2026-10-16T05:30:00.000Z",
     "created_by_staff_id": null,
@@ -6616,9 +6636,12 @@
     "message": "Package interest: 6h\n\nhi",
     "name": "Web Lead",
     "phone": "9500000001",
+    "run_id": null,
     "source": "website_form"
    },
    {
+    "actor_id": "00000000-0000-4000-8000-000000000005",
+    "actor_type": "staff",
     "branch_id": "00000000-0000-4000-8000-000000000001",
     "created_at": "2026-10-17T06:40:00.000Z",
     "created_by_staff_id": "00000000-0000-4000-8000-000000000005",
@@ -6627,6 +6650,7 @@
     "message": "Morning?",
     "name": "Lead",
     "phone": "9200000003",
+    "run_id": null,
     "source": "walk_in"
    }
   ],
@@ -6656,6 +6680,1872 @@
     "enquiry_id": "00000000-0000-4000-8000-000000000035",
     "id": "00000000-0000-4000-8000-000000000088",
     "note": "Visit"
+   }
+  ],
+  "events": [
+   {
+    "action": "login",
+    "actor_id": null,
+    "actor_type": "public",
+    "branch_id": null,
+    "error": null,
+    "id": 1,
+    "occurred_at": "2026-10-16T05:30:00.000Z",
+    "ok": true,
+    "payload": {
+     "password": "[redacted]",
+     "username": "priya"
+    },
+    "reason": null,
+    "run_id": null,
+    "student_id": null,
+    "tier": "T1"
+   },
+   {
+    "action": "login",
+    "actor_id": null,
+    "actor_type": "public",
+    "branch_id": null,
+    "error": "Invalid login credentials",
+    "id": 2,
+    "occurred_at": "2026-10-16T05:30:00.000Z",
+    "ok": false,
+    "payload": {
+     "password": "[redacted]",
+     "username": "priya"
+    },
+    "reason": null,
+    "run_id": null,
+    "student_id": null,
+    "tier": "T1"
+   },
+   {
+    "action": "public_create_enquiry",
+    "actor_id": null,
+    "actor_type": "public",
+    "branch_id": null,
+    "error": "Unauthorized",
+    "id": 3,
+    "occurred_at": "2026-10-16T05:30:00.000Z",
+    "ok": false,
+    "payload": {
+     "name": "X",
+     "phone": "1"
+    },
+    "reason": null,
+    "run_id": null,
+    "student_id": null,
+    "tier": "T1"
+   },
+   {
+    "action": "public_create_enquiry",
+    "actor_id": null,
+    "actor_type": "public",
+    "branch_id": null,
+    "error": null,
+    "id": 4,
+    "occurred_at": "2026-10-16T05:30:00.000Z",
+    "ok": true,
+    "payload": {
+     "branch": "Hopes",
+     "message": "hi",
+     "name": "Web Lead",
+     "packageInterest": "6h",
+     "phone": "9500000001",
+     "siteKey": "site-key"
+    },
+    "reason": null,
+    "run_id": null,
+    "student_id": null,
+    "tier": "T1"
+   },
+   {
+    "action": "public_signup_submit",
+    "actor_id": null,
+    "actor_type": "public",
+    "branch_id": null,
+    "error": null,
+    "id": 5,
+    "occurred_at": "2026-10-16T05:30:00.000Z",
+    "ok": true,
+    "payload": {
+     "code": "abcdefgh2345",
+     "course": "CA",
+     "emergencyContact": "9600000002",
+     "name": "Self Signer",
+     "phone": "9600000001",
+     "referralSource": "instagram",
+     "website": ""
+    },
+    "reason": null,
+    "run_id": null,
+    "student_id": null,
+    "tier": "T1"
+   },
+   {
+    "action": "create_walkin",
+    "actor_id": "00000000-0000-4000-8000-000000000003",
+    "actor_type": "owner",
+    "branch_id": "00000000-0000-4000-8000-000000000001",
+    "error": null,
+    "id": 6,
+    "occurred_at": "2026-10-16T05:30:00.000Z",
+    "ok": true,
+    "payload": {
+     "branchId": "00000000-0000-4000-8000-000000000001",
+     "deskId": "00000000-0000-4000-8000-00000000000b",
+     "hours": 3,
+     "name": "Walk Two",
+     "paymentMode": "cash",
+     "phone": "9700000001"
+    },
+    "reason": null,
+    "run_id": null,
+    "student_id": null,
+    "tier": "T2"
+   },
+   {
+    "action": "create_walkin",
+    "actor_id": "00000000-0000-4000-8000-000000000005",
+    "actor_type": "staff",
+    "branch_id": "00000000-0000-4000-8000-000000000001",
+    "error": null,
+    "id": 7,
+    "occurred_at": "2026-10-16T05:30:00.000Z",
+    "ok": true,
+    "payload": {
+     "branchId": "00000000-0000-4000-8000-000000000001",
+     "cashAmount": 20,
+     "deskId": "00000000-0000-4000-8000-00000000000c",
+     "hours": 3,
+     "name": "Walk Two",
+     "paymentMode": "split",
+     "phone": "9700000001",
+     "upiAmount": 15
+    },
+    "reason": null,
+    "run_id": null,
+    "student_id": null,
+    "tier": "T2"
+   },
+   {
+    "action": "check_in_member",
+    "actor_id": "00000000-0000-4000-8000-000000000005",
+    "actor_type": "staff",
+    "branch_id": "00000000-0000-4000-8000-000000000001",
+    "error": null,
+    "id": 8,
+    "occurred_at": "2026-10-16T05:30:00.000Z",
+    "ok": true,
+    "payload": {
+     "branchId": "00000000-0000-4000-8000-000000000001",
+     "deskId": "00000000-0000-4000-8000-000000000009",
+     "studentId": "00000000-0000-4000-8000-00000000001d"
+    },
+    "reason": null,
+    "run_id": null,
+    "student_id": "00000000-0000-4000-8000-00000000001d",
+    "tier": "T1"
+   },
+   {
+    "action": "check_in_member",
+    "actor_id": "00000000-0000-4000-8000-000000000005",
+    "actor_type": "staff",
+    "branch_id": "00000000-0000-4000-8000-000000000001",
+    "error": "Student is already checked in — check them out first",
+    "id": 9,
+    "occurred_at": "2026-10-16T05:30:00.000Z",
+    "ok": false,
+    "payload": {
+     "branchId": "00000000-0000-4000-8000-000000000001",
+     "deskId": "00000000-0000-4000-8000-000000000009",
+     "studentId": "00000000-0000-4000-8000-00000000001d"
+    },
+    "reason": null,
+    "run_id": null,
+    "student_id": "00000000-0000-4000-8000-00000000001d",
+    "tier": "T1"
+   },
+   {
+    "action": "check_in_member",
+    "actor_id": "00000000-0000-4000-8000-000000000005",
+    "actor_type": "staff",
+    "branch_id": "00000000-0000-4000-8000-000000000001",
+    "error": "Selected desk is not available",
+    "id": 10,
+    "occurred_at": "2026-10-16T05:30:00.000Z",
+    "ok": false,
+    "payload": {
+     "branchId": "00000000-0000-4000-8000-000000000001",
+     "deskId": "00000000-0000-4000-8000-00000000000c",
+     "studentId": "00000000-0000-4000-8000-00000000001b"
+    },
+    "reason": null,
+    "run_id": null,
+    "student_id": "00000000-0000-4000-8000-00000000001b",
+    "tier": "T1"
+   },
+   {
+    "action": "pause_session",
+    "actor_id": "00000000-0000-4000-8000-000000000005",
+    "actor_type": "staff",
+    "branch_id": null,
+    "error": null,
+    "id": 11,
+    "occurred_at": "2026-10-16T05:30:00.000Z",
+    "ok": true,
+    "payload": {
+     "bookingId": "00000000-0000-4000-8000-000000000028"
+    },
+    "reason": null,
+    "run_id": null,
+    "student_id": null,
+    "tier": "T1"
+   },
+   {
+    "action": "resume_session",
+    "actor_id": "00000000-0000-4000-8000-000000000005",
+    "actor_type": "staff",
+    "branch_id": null,
+    "error": null,
+    "id": 12,
+    "occurred_at": "2026-10-16T05:40:00.000Z",
+    "ok": true,
+    "payload": {
+     "bookingId": "00000000-0000-4000-8000-000000000028"
+    },
+    "reason": null,
+    "run_id": null,
+    "student_id": null,
+    "tier": "T1"
+   },
+   {
+    "action": "add_attendance",
+    "actor_id": "00000000-0000-4000-8000-000000000003",
+    "actor_type": "owner",
+    "branch_id": "00000000-0000-4000-8000-000000000001",
+    "error": null,
+    "id": 13,
+    "occurred_at": "2026-10-16T05:40:00.000Z",
+    "ok": true,
+    "payload": {
+     "branchId": "00000000-0000-4000-8000-000000000001",
+     "endTime": "2026-10-15T06:30:00.000Z",
+     "startTime": "2026-10-15T03:30:00.000Z",
+     "studentId": "00000000-0000-4000-8000-000000000025"
+    },
+    "reason": null,
+    "run_id": null,
+    "student_id": "00000000-0000-4000-8000-000000000025",
+    "tier": "T3"
+   },
+   {
+    "action": "add_attendance",
+    "actor_id": "00000000-0000-4000-8000-000000000003",
+    "actor_type": "owner",
+    "branch_id": "00000000-0000-4000-8000-000000000001",
+    "error": "Attendance for 15-10-26, 09:00–14:30 is already recorded and overlaps this one — edit that record instead of adding it again.",
+    "id": 14,
+    "occurred_at": "2026-10-16T05:40:00.000Z",
+    "ok": false,
+    "payload": {
+     "branchId": "00000000-0000-4000-8000-000000000001",
+     "endTime": "2026-10-15T05:30:00.000Z",
+     "startTime": "2026-10-15T04:30:00.000Z",
+     "studentId": "00000000-0000-4000-8000-000000000017"
+    },
+    "reason": null,
+    "run_id": null,
+    "student_id": "00000000-0000-4000-8000-000000000017",
+    "tier": "T3"
+   },
+   {
+    "action": "update_attendance",
+    "actor_id": "00000000-0000-4000-8000-000000000003",
+    "actor_type": "owner",
+    "branch_id": null,
+    "error": null,
+    "id": 15,
+    "occurred_at": "2026-10-16T05:40:00.000Z",
+    "ok": true,
+    "payload": {
+     "bookingId": "00000000-0000-4000-8000-00000000002d",
+     "endTime": "2026-10-16T05:00:00.000Z",
+     "hours": 2.5,
+     "startTime": "2026-10-16T02:30:00.000Z",
+     "status": "active"
+    },
+    "reason": null,
+    "run_id": null,
+    "student_id": null,
+    "tier": "T3"
+   },
+   {
+    "action": "create_food_bill",
+    "actor_id": "00000000-0000-4000-8000-000000000005",
+    "actor_type": "staff",
+    "branch_id": "00000000-0000-4000-8000-000000000001",
+    "error": null,
+    "id": 16,
+    "occurred_at": "2026-10-16T06:40:00.000Z",
+    "ok": true,
+    "payload": {
+     "branchId": "00000000-0000-4000-8000-000000000001",
+     "items": [
+      {
+       "foodItemId": "00000000-0000-4000-8000-000000000030",
+       "quantity": 2
+      },
+      {
+       "foodItemId": "00000000-0000-4000-8000-000000000031",
+       "quantity": 1
+      }
+     ],
+     "paymentMode": "cash",
+     "studentId": "00000000-0000-4000-8000-000000000021"
+    },
+    "reason": null,
+    "run_id": null,
+    "student_id": "00000000-0000-4000-8000-000000000021",
+    "tier": "T2"
+   },
+   {
+    "action": "create_food_bill",
+    "actor_id": "00000000-0000-4000-8000-000000000005",
+    "actor_type": "staff",
+    "branch_id": "00000000-0000-4000-8000-000000000001",
+    "error": null,
+    "id": 17,
+    "occurred_at": "2026-10-16T06:40:00.000Z",
+    "ok": true,
+    "payload": {
+     "branchId": "00000000-0000-4000-8000-000000000001",
+     "discountAmount": 5,
+     "discountType": "flat",
+     "discountValue": 5,
+     "items": [
+      {
+       "foodItemId": "00000000-0000-4000-8000-000000000030",
+       "quantity": 1
+      }
+     ],
+     "paymentMode": "upi",
+     "studentName": "Guest",
+     "studentPhone": "9800000001"
+    },
+    "reason": null,
+    "run_id": null,
+    "student_id": null,
+    "tier": "T2"
+   },
+   {
+    "action": "create_food_bill",
+    "actor_id": "00000000-0000-4000-8000-000000000005",
+    "actor_type": "staff",
+    "branch_id": "00000000-0000-4000-8000-000000000001",
+    "error": "Only 4 of Sandwich available",
+    "id": 18,
+    "occurred_at": "2026-10-16T06:40:00.000Z",
+    "ok": false,
+    "payload": {
+     "branchId": "00000000-0000-4000-8000-000000000001",
+     "items": [
+      {
+       "foodItemId": "00000000-0000-4000-8000-000000000031",
+       "quantity": 99
+      }
+     ],
+     "paymentMode": "cash"
+    },
+    "reason": null,
+    "run_id": null,
+    "student_id": null,
+    "tier": "T2"
+   },
+   {
+    "action": "create_food_bill",
+    "actor_id": "00000000-0000-4000-8000-000000000005",
+    "actor_type": "staff",
+    "branch_id": "00000000-0000-4000-8000-000000000001",
+    "error": null,
+    "id": 19,
+    "occurred_at": "2026-10-16T06:40:00.000Z",
+    "ok": true,
+    "payload": {
+     "bookingId": "00000000-0000-4000-8000-000000000028",
+     "branchId": "00000000-0000-4000-8000-000000000001",
+     "items": [
+      {
+       "foodItemId": "00000000-0000-4000-8000-000000000030",
+       "quantity": 1
+      }
+     ],
+     "paymentMode": "cash",
+     "skipFoodPass": true,
+     "studentId": "00000000-0000-4000-8000-000000000017"
+    },
+    "reason": null,
+    "run_id": null,
+    "student_id": "00000000-0000-4000-8000-000000000017",
+    "tier": "T2"
+   },
+   {
+    "action": "checkout_booking",
+    "actor_id": "00000000-0000-4000-8000-000000000005",
+    "actor_type": "staff",
+    "branch_id": null,
+    "error": null,
+    "id": 20,
+    "occurred_at": "2026-10-16T06:40:00.000Z",
+    "ok": true,
+    "payload": {
+     "bookingId": "00000000-0000-4000-8000-000000000028",
+     "overtimeMinutes": 70,
+     "overtimePayNow": true,
+     "overtimePaymentMode": "cash"
+    },
+    "reason": null,
+    "run_id": null,
+    "student_id": null,
+    "tier": "T2"
+   },
+   {
+    "action": "checkout_booking",
+    "actor_id": "00000000-0000-4000-8000-000000000005",
+    "actor_type": "staff",
+    "branch_id": null,
+    "error": "This session has already been checked out.",
+    "id": 21,
+    "occurred_at": "2026-10-16T06:40:00.000Z",
+    "ok": false,
+    "payload": {
+     "bookingId": "00000000-0000-4000-8000-000000000028",
+     "overtimeMinutes": 70
+    },
+    "reason": null,
+    "run_id": null,
+    "student_id": null,
+    "tier": "T2"
+   },
+   {
+    "action": "checkout_booking",
+    "actor_id": "00000000-0000-4000-8000-000000000005",
+    "actor_type": "staff",
+    "branch_id": null,
+    "error": null,
+    "id": 22,
+    "occurred_at": "2026-10-16T06:40:00.000Z",
+    "ok": true,
+    "payload": {
+     "bookingId": "00000000-0000-4000-8000-00000000002d",
+     "overtimeMinutes": 0
+    },
+    "reason": null,
+    "run_id": null,
+    "student_id": null,
+    "tier": "T2"
+   },
+   {
+    "action": "collect_food_bill_shortfall",
+    "actor_id": "00000000-0000-4000-8000-000000000003",
+    "actor_type": "owner",
+    "branch_id": null,
+    "error": null,
+    "id": 23,
+    "occurred_at": "2026-10-16T06:40:00.000Z",
+    "ok": true,
+    "payload": {
+     "billId": "00000000-0000-4000-8000-000000000032",
+     "paymentMode": "cash"
+    },
+    "reason": null,
+    "run_id": null,
+    "student_id": null,
+    "tier": "T2"
+   },
+   {
+    "action": "set_overtime_excluded",
+    "actor_id": "00000000-0000-4000-8000-000000000003",
+    "actor_type": "owner",
+    "branch_id": null,
+    "error": "Enter a reason",
+    "id": 24,
+    "occurred_at": "2026-10-16T06:40:00.000Z",
+    "ok": false,
+    "payload": {
+     "excluded": true,
+     "overtimeSessionId": "00000000-0000-4000-8000-000000000033"
+    },
+    "reason": null,
+    "run_id": null,
+    "student_id": null,
+    "tier": "T3"
+   },
+   {
+    "action": "set_overtime_excluded",
+    "actor_id": "00000000-0000-4000-8000-000000000003",
+    "actor_type": "owner",
+    "branch_id": null,
+    "error": null,
+    "id": 25,
+    "occurred_at": "2026-10-16T06:40:00.000Z",
+    "ok": true,
+    "payload": {
+     "excluded": true,
+     "overtimeSessionId": "00000000-0000-4000-8000-000000000033",
+     "reason": "clock late"
+    },
+    "reason": "clock late",
+    "run_id": null,
+    "student_id": null,
+    "tier": "T3"
+   },
+   {
+    "action": "create_membership",
+    "actor_id": "00000000-0000-4000-8000-000000000005",
+    "actor_type": "staff",
+    "branch_id": "00000000-0000-4000-8000-000000000001",
+    "error": null,
+    "id": 26,
+    "occurred_at": "2026-10-16T06:40:00.000Z",
+    "ok": true,
+    "payload": {
+     "advanceAmount": null,
+     "branchId": "00000000-0000-4000-8000-000000000001",
+     "category": "temporary",
+     "course": "NEET",
+     "emergencyContact": "9110000002",
+     "hoursPerDay": 6,
+     "lockerNo": "5",
+     "monthsPaid": 3,
+     "name": "New Member",
+     "paymentMode": "cash",
+     "phone": "9110000001",
+     "referralSource": "google_search",
+     "withLocker": true
+    },
+    "reason": null,
+    "run_id": null,
+    "student_id": null,
+    "tier": "T2"
+   },
+   {
+    "action": "create_membership",
+    "actor_id": "00000000-0000-4000-8000-000000000005",
+    "actor_type": "staff",
+    "branch_id": "00000000-0000-4000-8000-000000000001",
+    "error": "Asha Rao (9100000001) already has an active temporary membership at Hopes, valid until 2026-11-04. Use Renew on their profile to extend it, Transfer Branch to move them, or close/delete that membership first — registering again would create a duplicate.",
+    "id": 27,
+    "occurred_at": "2026-10-16T06:40:00.000Z",
+    "ok": false,
+    "payload": {
+     "branchId": "00000000-0000-4000-8000-000000000001",
+     "category": "temporary",
+     "emergencyContact": "9110000002",
+     "hoursPerDay": 6,
+     "monthsPaid": 1,
+     "name": "Asha Rao",
+     "paymentMode": "cash",
+     "phone": "9100000001",
+     "referralSource": "flex"
+    },
+    "reason": null,
+    "run_id": null,
+    "student_id": null,
+    "tier": "T2"
+   },
+   {
+    "action": "create_membership",
+    "actor_id": "00000000-0000-4000-8000-000000000003",
+    "actor_type": "owner",
+    "branch_id": "00000000-0000-4000-8000-000000000001",
+    "error": "Selected cabin is no longer available — pick another one",
+    "id": 28,
+    "occurred_at": "2026-10-16T06:40:00.000Z",
+    "ok": false,
+    "payload": {
+     "advanceAmount": 1000,
+     "branchId": "00000000-0000-4000-8000-000000000001",
+     "category": "permanent",
+     "deskId": "00000000-0000-4000-8000-00000000000c",
+     "emergencyContact": "9110000004",
+     "hoursPerDay": 12,
+     "monthsPaid": 1,
+     "name": "Perm One",
+     "paymentMode": "upi",
+     "phone": "9110000003",
+     "referralSource": "word_of_mouth"
+    },
+    "reason": null,
+    "run_id": null,
+    "student_id": null,
+    "tier": "T2"
+   },
+   {
+    "action": "create_membership",
+    "actor_id": "00000000-0000-4000-8000-000000000006",
+    "actor_type": "staff",
+    "branch_id": "00000000-0000-4000-8000-000000000001",
+    "error": "Branch access denied",
+    "id": 29,
+    "occurred_at": "2026-10-16T06:40:00.000Z",
+    "ok": false,
+    "payload": {
+     "branchId": "00000000-0000-4000-8000-000000000001",
+     "category": "temporary",
+     "emergencyContact": "9400000002",
+     "hoursPerDay": 4,
+     "monthsPaid": 1,
+     "name": "New Student",
+     "paymentMode": "cash",
+     "phone": "9400000001",
+     "referralSource": "flex",
+     "signupId": "00000000-0000-4000-8000-00000000003d"
+    },
+    "reason": null,
+    "run_id": null,
+    "student_id": null,
+    "tier": "T2"
+   },
+   {
+    "action": "claim_signup_request",
+    "actor_id": "00000000-0000-4000-8000-000000000005",
+    "actor_type": "staff",
+    "branch_id": null,
+    "error": null,
+    "id": 30,
+    "occurred_at": "2026-10-16T06:40:00.000Z",
+    "ok": true,
+    "payload": {
+     "id": "00000000-0000-4000-8000-00000000003d"
+    },
+    "reason": null,
+    "run_id": null,
+    "student_id": null,
+    "tier": "T1"
+   },
+   {
+    "action": "claim_signup_request",
+    "actor_id": "00000000-0000-4000-8000-000000000003",
+    "actor_type": "owner",
+    "branch_id": null,
+    "error": "This sign-up is being handled by Priya.",
+    "id": 31,
+    "occurred_at": "2026-10-16T06:40:00.000Z",
+    "ok": false,
+    "payload": {
+     "id": "00000000-0000-4000-8000-00000000003d"
+    },
+    "reason": null,
+    "run_id": null,
+    "student_id": null,
+    "tier": "T1"
+   },
+   {
+    "action": "create_membership",
+    "actor_id": "00000000-0000-4000-8000-000000000005",
+    "actor_type": "staff",
+    "branch_id": "00000000-0000-4000-8000-000000000001",
+    "error": null,
+    "id": 32,
+    "occurred_at": "2026-10-16T06:40:00.000Z",
+    "ok": true,
+    "payload": {
+     "branchId": "00000000-0000-4000-8000-000000000001",
+     "category": "temporary",
+     "emergencyContact": "9400000002",
+     "hoursPerDay": 4,
+     "monthsPaid": 1,
+     "name": "New Student",
+     "paymentMode": "cash",
+     "phone": "9400000001",
+     "referralSource": "flex",
+     "signupId": "00000000-0000-4000-8000-00000000003d"
+    },
+    "reason": null,
+    "run_id": null,
+    "student_id": null,
+    "tier": "T2"
+   },
+   {
+    "action": "release_signup_request",
+    "actor_id": "00000000-0000-4000-8000-000000000005",
+    "actor_type": "staff",
+    "branch_id": null,
+    "error": null,
+    "id": 33,
+    "occurred_at": "2026-10-16T06:40:00.000Z",
+    "ok": true,
+    "payload": {
+     "id": "00000000-0000-4000-8000-000000000041"
+    },
+    "reason": null,
+    "run_id": null,
+    "student_id": null,
+    "tier": "T1"
+   },
+   {
+    "action": "deny_signup_request",
+    "actor_id": "00000000-0000-4000-8000-000000000005",
+    "actor_type": "staff",
+    "branch_id": null,
+    "error": null,
+    "id": 34,
+    "occurred_at": "2026-10-16T06:40:00.000Z",
+    "ok": true,
+    "payload": {
+     "id": "00000000-0000-4000-8000-000000000041"
+    },
+    "reason": null,
+    "run_id": null,
+    "student_id": null,
+    "tier": "T1"
+   },
+   {
+    "action": "rotate_signup_link",
+    "actor_id": "00000000-0000-4000-8000-000000000005",
+    "actor_type": "staff",
+    "branch_id": "00000000-0000-4000-8000-000000000001",
+    "error": "Owner only",
+    "id": 35,
+    "occurred_at": "2026-10-16T06:40:00.000Z",
+    "ok": false,
+    "payload": {
+     "branchId": "00000000-0000-4000-8000-000000000001"
+    },
+    "reason": null,
+    "run_id": null,
+    "student_id": null,
+    "tier": "T3"
+   },
+   {
+    "action": "rotate_signup_link",
+    "actor_id": "00000000-0000-4000-8000-000000000003",
+    "actor_type": "owner",
+    "branch_id": "00000000-0000-4000-8000-000000000001",
+    "error": null,
+    "id": 36,
+    "occurred_at": "2026-10-16T06:40:00.000Z",
+    "ok": true,
+    "payload": {
+     "branchId": "00000000-0000-4000-8000-000000000001"
+    },
+    "reason": null,
+    "run_id": null,
+    "student_id": null,
+    "tier": "T3"
+   },
+   {
+    "action": "renew_membership",
+    "actor_id": "00000000-0000-4000-8000-000000000005",
+    "actor_type": "staff",
+    "branch_id": null,
+    "error": null,
+    "id": 37,
+    "occurred_at": "2026-10-16T06:40:00.000Z",
+    "ok": true,
+    "payload": {
+     "category": "temporary",
+     "expectedTotal": 1150,
+     "hoursPerDay": 6,
+     "membershipId": "00000000-0000-4000-8000-00000000001e",
+     "monthsPaid": 1,
+     "paymentMode": "cash"
+    },
+    "reason": null,
+    "run_id": null,
+    "student_id": null,
+    "tier": "T2"
+   },
+   {
+    "action": "renew_membership",
+    "actor_id": "00000000-0000-4000-8000-000000000005",
+    "actor_type": "staff",
+    "branch_id": null,
+    "error": "This membership has already been renewed or ended — refresh to see the current one.",
+    "id": 38,
+    "occurred_at": "2026-10-16T06:40:00.000Z",
+    "ok": false,
+    "payload": {
+     "category": "temporary",
+     "hoursPerDay": 6,
+     "membershipId": "00000000-0000-4000-8000-00000000001e",
+     "monthsPaid": 1,
+     "paymentMode": "cash"
+    },
+    "reason": null,
+    "run_id": null,
+    "student_id": null,
+    "tier": "T2"
+   },
+   {
+    "action": "change_membership_plan",
+    "actor_id": "00000000-0000-4000-8000-000000000003",
+    "actor_type": "owner",
+    "branch_id": null,
+    "error": "This membership was renewed early and only starts on 2026-10-20. Cancel the early renewal first, then change the plan from the membership that is running now.",
+    "id": 39,
+    "occurred_at": "2026-10-16T06:40:00.000Z",
+    "ok": false,
+    "payload": {
+     "membershipId": "00000000-0000-4000-8000-000000000064",
+     "newCategory": "temporary",
+     "newHoursPerDay": 8
+    },
+    "reason": null,
+    "run_id": null,
+    "student_id": null,
+    "tier": "T3"
+   },
+   {
+    "action": "cancel_early_renewal",
+    "actor_id": "00000000-0000-4000-8000-000000000003",
+    "actor_type": "owner",
+    "branch_id": null,
+    "error": null,
+    "id": 40,
+    "occurred_at": "2026-10-16T06:40:00.000Z",
+    "ok": true,
+    "payload": {
+     "membershipId": "00000000-0000-4000-8000-000000000064",
+     "reason": "mistake"
+    },
+    "reason": "mistake",
+    "run_id": null,
+    "student_id": null,
+    "tier": "T3"
+   },
+   {
+    "action": "renew_membership",
+    "actor_id": "00000000-0000-4000-8000-000000000005",
+    "actor_type": "staff",
+    "branch_id": null,
+    "error": null,
+    "id": 41,
+    "occurred_at": "2026-10-16T06:40:00.000Z",
+    "ok": true,
+    "payload": {
+     "category": "temporary",
+     "expectedTotal": 1500,
+     "hoursPerDay": 8,
+     "membershipId": "00000000-0000-4000-8000-000000000020",
+     "monthsPaid": 1,
+     "paymentMode": "upi"
+    },
+    "reason": null,
+    "run_id": null,
+    "student_id": null,
+    "tier": "T2"
+   },
+   {
+    "action": "record_payment",
+    "actor_id": "00000000-0000-4000-8000-000000000005",
+    "actor_type": "staff",
+    "branch_id": null,
+    "error": null,
+    "id": 42,
+    "occurred_at": "2026-10-16T06:40:00.000Z",
+    "ok": true,
+    "payload": {
+     "amount": 300,
+     "cashAmount": 100,
+     "membershipId": "00000000-0000-4000-8000-000000000022",
+     "paymentMode": "split",
+     "upiAmount": 200
+    },
+    "reason": null,
+    "run_id": null,
+    "student_id": null,
+    "tier": "T2"
+   },
+   {
+    "action": "record_payment",
+    "actor_id": "00000000-0000-4000-8000-000000000005",
+    "actor_type": "staff",
+    "branch_id": null,
+    "error": "This membership has no pending dues — nothing to collect.",
+    "id": 43,
+    "occurred_at": "2026-10-16T06:40:00.000Z",
+    "ok": false,
+    "payload": {
+     "amount": 100,
+     "cashAmount": 10,
+     "membershipId": "00000000-0000-4000-8000-000000000022",
+     "paymentMode": "split",
+     "upiAmount": 20
+    },
+    "reason": null,
+    "run_id": null,
+    "student_id": null,
+    "tier": "T2"
+   },
+   {
+    "action": "apply_loyalty_discount",
+    "actor_id": "00000000-0000-4000-8000-000000000003",
+    "actor_type": "owner",
+    "branch_id": null,
+    "error": null,
+    "id": 44,
+    "occurred_at": "2026-10-16T06:40:00.000Z",
+    "ok": true,
+    "payload": {
+     "discountType": "fixed",
+     "discountValue": 100,
+     "membershipId": "00000000-0000-4000-8000-000000000026",
+     "remarks": "top"
+    },
+    "reason": null,
+    "run_id": null,
+    "student_id": null,
+    "tier": "T3"
+   },
+   {
+    "action": "apply_loyalty_discount",
+    "actor_id": "00000000-0000-4000-8000-000000000003",
+    "actor_type": "owner",
+    "branch_id": null,
+    "error": "Percentage discount cannot exceed 100",
+    "id": 45,
+    "occurred_at": "2026-10-16T06:40:00.000Z",
+    "ok": false,
+    "payload": {
+     "discountType": "percent",
+     "discountValue": 150,
+     "membershipId": "00000000-0000-4000-8000-000000000026"
+    },
+    "reason": null,
+    "run_id": null,
+    "student_id": null,
+    "tier": "T3"
+   },
+   {
+    "action": "grant_cashback",
+    "actor_id": "00000000-0000-4000-8000-000000000003",
+    "actor_type": "owner",
+    "branch_id": "00000000-0000-4000-8000-000000000001",
+    "error": null,
+    "id": 46,
+    "occurred_at": "2026-10-16T06:40:00.000Z",
+    "ok": true,
+    "payload": {
+     "branchId": "00000000-0000-4000-8000-000000000001",
+     "cashbackType": "percent",
+     "cashbackValue": 10,
+     "monthLabel": "Oct 2026",
+     "studentId": "00000000-0000-4000-8000-000000000025"
+    },
+    "reason": null,
+    "run_id": null,
+    "student_id": "00000000-0000-4000-8000-000000000025",
+    "tier": "T3"
+   },
+   {
+    "action": "redeem_cashback_now",
+    "actor_id": "00000000-0000-4000-8000-000000000003",
+    "actor_type": "owner",
+    "branch_id": null,
+    "error": null,
+    "id": 47,
+    "occurred_at": "2026-10-16T06:40:00.000Z",
+    "ok": true,
+    "payload": {
+     "studentId": "00000000-0000-4000-8000-000000000025"
+    },
+    "reason": null,
+    "run_id": null,
+    "student_id": "00000000-0000-4000-8000-000000000025",
+    "tier": "T3"
+   },
+   {
+    "action": "add_manual_payment",
+    "actor_id": "00000000-0000-4000-8000-000000000003",
+    "actor_type": "owner",
+    "branch_id": null,
+    "error": null,
+    "id": 48,
+    "occurred_at": "2026-10-16T06:40:00.000Z",
+    "ok": true,
+    "payload": {
+     "amount": 50,
+     "date": "2026-10-16",
+     "paymentMode": "cash",
+     "reason": "fine",
+     "studentId": "00000000-0000-4000-8000-000000000025"
+    },
+    "reason": "fine",
+    "run_id": null,
+    "student_id": "00000000-0000-4000-8000-000000000025",
+    "tier": "T2"
+   },
+   {
+    "action": "pause_membership",
+    "actor_id": "00000000-0000-4000-8000-000000000005",
+    "actor_type": "staff",
+    "branch_id": null,
+    "error": null,
+    "id": 49,
+    "occurred_at": "2026-10-16T06:40:00.000Z",
+    "ok": true,
+    "payload": {
+     "membershipId": "00000000-0000-4000-8000-000000000026"
+    },
+    "reason": null,
+    "run_id": null,
+    "student_id": null,
+    "tier": "T1"
+   },
+   {
+    "action": "resume_membership",
+    "actor_id": "00000000-0000-4000-8000-000000000005",
+    "actor_type": "staff",
+    "branch_id": null,
+    "error": null,
+    "id": 50,
+    "occurred_at": "2026-10-17T06:40:00.000Z",
+    "ok": true,
+    "payload": {
+     "membershipId": "00000000-0000-4000-8000-000000000026"
+    },
+    "reason": null,
+    "run_id": null,
+    "student_id": null,
+    "tier": "T1"
+   },
+   {
+    "action": "change_membership_plan",
+    "actor_id": "00000000-0000-4000-8000-000000000003",
+    "actor_type": "owner",
+    "branch_id": null,
+    "error": null,
+    "id": 51,
+    "occurred_at": "2026-10-17T06:40:00.000Z",
+    "ok": true,
+    "payload": {
+     "membershipId": "00000000-0000-4000-8000-000000000026",
+     "newCategory": "temporary",
+     "newHoursPerDay": 8
+    },
+    "reason": null,
+    "run_id": null,
+    "student_id": null,
+    "tier": "T3"
+   },
+   {
+    "action": "change_membership_cabin",
+    "actor_id": "00000000-0000-4000-8000-000000000003",
+    "actor_type": "owner",
+    "branch_id": null,
+    "error": null,
+    "id": 52,
+    "occurred_at": "2026-10-17T06:40:00.000Z",
+    "ok": true,
+    "payload": {
+     "deskId": "00000000-0000-4000-8000-00000000000a",
+     "membershipId": "00000000-0000-4000-8000-00000000001a"
+    },
+    "reason": null,
+    "run_id": null,
+    "student_id": null,
+    "tier": "T3"
+   },
+   {
+    "action": "transfer_student_branch",
+    "actor_id": "00000000-0000-4000-8000-000000000003",
+    "actor_type": "owner",
+    "branch_id": null,
+    "error": null,
+    "id": 53,
+    "occurred_at": "2026-10-17T06:40:00.000Z",
+    "ok": true,
+    "payload": {
+     "newBranchId": "00000000-0000-4000-8000-000000000002",
+     "studentId": "00000000-0000-4000-8000-000000000025"
+    },
+    "reason": null,
+    "run_id": null,
+    "student_id": "00000000-0000-4000-8000-000000000025",
+    "tier": "T3"
+   },
+   {
+    "action": "update_student_details",
+    "actor_id": "00000000-0000-4000-8000-000000000005",
+    "actor_type": "staff",
+    "branch_id": null,
+    "error": null,
+    "id": 54,
+    "occurred_at": "2026-10-17T06:40:00.000Z",
+    "ok": true,
+    "payload": {
+     "course": "CA",
+     "emergencyContact": "9000000001",
+     "name": "Farah Ali Khan",
+     "phone": "9100000006",
+     "referralSource": "instagram",
+     "studentId": "00000000-0000-4000-8000-000000000021"
+    },
+    "reason": null,
+    "run_id": null,
+    "student_id": "00000000-0000-4000-8000-000000000021",
+    "tier": "T1"
+   },
+   {
+    "action": "fix_membership_dates",
+    "actor_id": "00000000-0000-4000-8000-000000000003",
+    "actor_type": "owner",
+    "branch_id": null,
+    "error": null,
+    "id": 55,
+    "occurred_at": "2026-10-17T06:40:00.000Z",
+    "ok": true,
+    "payload": {},
+    "reason": null,
+    "run_id": null,
+    "student_id": null,
+    "tier": "T3"
+   },
+   {
+    "action": "fix_negative_food_pass_balances",
+    "actor_id": "00000000-0000-4000-8000-000000000003",
+    "actor_type": "owner",
+    "branch_id": null,
+    "error": null,
+    "id": 56,
+    "occurred_at": "2026-10-17T06:40:00.000Z",
+    "ok": true,
+    "payload": {},
+    "reason": null,
+    "run_id": null,
+    "student_id": null,
+    "tier": "T3"
+   },
+   {
+    "action": "topup_food_pass",
+    "actor_id": "00000000-0000-4000-8000-000000000005",
+    "actor_type": "staff",
+    "branch_id": "00000000-0000-4000-8000-000000000001",
+    "error": null,
+    "id": 57,
+    "occurred_at": "2026-10-17T06:40:00.000Z",
+    "ok": true,
+    "payload": {
+     "amount": 200,
+     "branchId": "00000000-0000-4000-8000-000000000001",
+     "paymentMode": "upi",
+     "studentId": "00000000-0000-4000-8000-000000000021"
+    },
+    "reason": null,
+    "run_id": null,
+    "student_id": "00000000-0000-4000-8000-000000000021",
+    "tier": "T2"
+   },
+   {
+    "action": "add_locker",
+    "actor_id": "00000000-0000-4000-8000-000000000005",
+    "actor_type": "staff",
+    "branch_id": "00000000-0000-4000-8000-000000000001",
+    "error": null,
+    "id": 58,
+    "occurred_at": "2026-10-17T06:40:00.000Z",
+    "ok": true,
+    "payload": {
+     "branchId": "00000000-0000-4000-8000-000000000001",
+     "lockerNo": "7",
+     "paymentMode": "cash",
+     "studentId": "00000000-0000-4000-8000-000000000017"
+    },
+    "reason": null,
+    "run_id": null,
+    "student_id": "00000000-0000-4000-8000-000000000017",
+    "tier": "T2"
+   },
+   {
+    "action": "record_locker_payment",
+    "actor_id": "00000000-0000-4000-8000-000000000005",
+    "actor_type": "staff",
+    "branch_id": null,
+    "error": "This locker has no pending dues — nothing to collect.",
+    "id": 59,
+    "occurred_at": "2026-10-17T06:40:00.000Z",
+    "ok": false,
+    "payload": {
+     "amount": 100,
+     "lockerId": "00000000-0000-4000-8000-00000000002e",
+     "paymentMode": "cash"
+    },
+    "reason": null,
+    "run_id": null,
+    "student_id": null,
+    "tier": "T2"
+   },
+   {
+    "action": "renew_locker",
+    "actor_id": "00000000-0000-4000-8000-000000000005",
+    "actor_type": "staff",
+    "branch_id": null,
+    "error": null,
+    "id": 60,
+    "occurred_at": "2026-10-17T06:40:00.000Z",
+    "ok": true,
+    "payload": {
+     "lockerId": "00000000-0000-4000-8000-00000000002e",
+     "paymentMode": "upi"
+    },
+    "reason": null,
+    "run_id": null,
+    "student_id": null,
+    "tier": "T2"
+   },
+   {
+    "action": "update_locker_due_date",
+    "actor_id": "00000000-0000-4000-8000-000000000003",
+    "actor_type": "owner",
+    "branch_id": null,
+    "error": null,
+    "id": 61,
+    "occurred_at": "2026-10-17T06:40:00.000Z",
+    "ok": true,
+    "payload": {
+     "dueDate": "2026-11-25",
+     "lockerId": "00000000-0000-4000-8000-00000000002e"
+    },
+    "reason": null,
+    "run_id": null,
+    "student_id": null,
+    "tier": "T3"
+   },
+   {
+    "action": "update_locker_number",
+    "actor_id": "00000000-0000-4000-8000-000000000003",
+    "actor_type": "owner",
+    "branch_id": null,
+    "error": null,
+    "id": 62,
+    "occurred_at": "2026-10-17T06:40:00.000Z",
+    "ok": true,
+    "payload": {
+     "lockerId": "00000000-0000-4000-8000-00000000002e",
+     "lockerNo": "4"
+    },
+    "reason": null,
+    "run_id": null,
+    "student_id": null,
+    "tier": "T3"
+   },
+   {
+    "action": "remove_locker",
+    "actor_id": "00000000-0000-4000-8000-000000000003",
+    "actor_type": "owner",
+    "branch_id": null,
+    "error": null,
+    "id": 63,
+    "occurred_at": "2026-10-17T06:40:00.000Z",
+    "ok": true,
+    "payload": {
+     "lockerId": "00000000-0000-4000-8000-000000000076",
+     "paymentMode": "cash",
+     "withholdDeposit": false
+    },
+    "reason": null,
+    "run_id": null,
+    "student_id": null,
+    "tier": "T3"
+   },
+   {
+    "action": "close_membership",
+    "actor_id": "00000000-0000-4000-8000-000000000003",
+    "actor_type": "owner",
+    "branch_id": null,
+    "error": "₹208.00 still needs to be collected before closing — choose a payment mode.",
+    "id": 64,
+    "occurred_at": "2026-10-17T06:40:00.000Z",
+    "ok": false,
+    "payload": {
+     "membershipId": "00000000-0000-4000-8000-00000000001c"
+    },
+    "reason": null,
+    "run_id": null,
+    "student_id": null,
+    "tier": "T3"
+   },
+   {
+    "action": "close_membership",
+    "actor_id": "00000000-0000-4000-8000-000000000003",
+    "actor_type": "owner",
+    "branch_id": null,
+    "error": "Enter a reason for waiving the overstay charge",
+    "id": 65,
+    "occurred_at": "2026-10-17T06:40:00.000Z",
+    "ok": false,
+    "payload": {
+     "membershipId": "00000000-0000-4000-8000-00000000001c",
+     "paymentMode": "cash",
+     "waiveOverstayCharge": true
+    },
+    "reason": null,
+    "run_id": null,
+    "student_id": null,
+    "tier": "T3"
+   },
+   {
+    "action": "close_membership",
+    "actor_id": "00000000-0000-4000-8000-000000000003",
+    "actor_type": "owner",
+    "branch_id": null,
+    "error": null,
+    "id": 66,
+    "occurred_at": "2026-10-17T06:40:00.000Z",
+    "ok": true,
+    "payload": {
+     "membershipId": "00000000-0000-4000-8000-00000000001c",
+     "paymentMode": "cash"
+    },
+    "reason": null,
+    "run_id": null,
+    "student_id": null,
+    "tier": "T3"
+   },
+   {
+    "action": "delete_membership",
+    "actor_id": "00000000-0000-4000-8000-000000000003",
+    "actor_type": "owner",
+    "branch_id": null,
+    "error": null,
+    "id": 67,
+    "occurred_at": "2026-10-17T06:40:00.000Z",
+    "ok": true,
+    "payload": {
+     "membershipId": "00000000-0000-4000-8000-000000000024",
+     "paymentMode": "cash",
+     "reason": "moving"
+    },
+    "reason": "moving",
+    "run_id": null,
+    "student_id": null,
+    "tier": "T3"
+   },
+   {
+    "action": "delete_membership",
+    "actor_id": "00000000-0000-4000-8000-000000000005",
+    "actor_type": "staff",
+    "branch_id": null,
+    "error": null,
+    "id": 68,
+    "occurred_at": "2026-10-17T06:40:00.000Z",
+    "ok": true,
+    "payload": {
+     "membershipId": "00000000-0000-4000-8000-00000000001a",
+     "reason": "x"
+    },
+    "reason": "x",
+    "run_id": null,
+    "student_id": null,
+    "tier": "T3"
+   },
+   {
+    "action": "join_permanent_waitlist",
+    "actor_id": "00000000-0000-4000-8000-000000000005",
+    "actor_type": "staff",
+    "branch_id": "00000000-0000-4000-8000-000000000001",
+    "error": "Permanent seats are still available — register directly instead of waitlisting",
+    "id": 69,
+    "occurred_at": "2026-10-17T06:40:00.000Z",
+    "ok": false,
+    "payload": {
+     "branchId": "00000000-0000-4000-8000-000000000001",
+     "hoursPerDay": 12,
+     "name": "Wait Two",
+     "phone": "9300000002"
+    },
+    "reason": null,
+    "run_id": null,
+    "student_id": null,
+    "tier": "T1"
+   },
+   {
+    "action": "remove_from_waitlist",
+    "actor_id": "00000000-0000-4000-8000-000000000005",
+    "actor_type": "staff",
+    "branch_id": null,
+    "error": null,
+    "id": 70,
+    "occurred_at": "2026-10-17T06:40:00.000Z",
+    "ok": true,
+    "payload": {
+     "status": "converted",
+     "waitlistId": "00000000-0000-4000-8000-00000000003b"
+    },
+    "reason": null,
+    "run_id": null,
+    "student_id": null,
+    "tier": "T1"
+   },
+   {
+    "action": "create_food_item",
+    "actor_id": "00000000-0000-4000-8000-000000000003",
+    "actor_type": "owner",
+    "branch_id": "00000000-0000-4000-8000-000000000001",
+    "error": null,
+    "id": 71,
+    "occurred_at": "2026-10-17T06:40:00.000Z",
+    "ok": true,
+    "payload": {
+     "branchId": "00000000-0000-4000-8000-000000000001",
+     "name": "Coffee",
+     "price": 20
+    },
+    "reason": null,
+    "run_id": null,
+    "student_id": null,
+    "tier": "T3"
+   },
+   {
+    "action": "update_food_item",
+    "actor_id": "00000000-0000-4000-8000-000000000003",
+    "actor_type": "owner",
+    "branch_id": null,
+    "error": null,
+    "id": 72,
+    "occurred_at": "2026-10-17T06:40:00.000Z",
+    "ok": true,
+    "payload": {
+     "itemId": "00000000-0000-4000-8000-000000000030",
+     "price": 18
+    },
+    "reason": null,
+    "run_id": null,
+    "student_id": null,
+    "tier": "T3"
+   },
+   {
+    "action": "add_inventory_item",
+    "actor_id": "00000000-0000-4000-8000-000000000005",
+    "actor_type": "staff",
+    "branch_id": "00000000-0000-4000-8000-000000000001",
+    "error": "Owner only",
+    "id": 73,
+    "occurred_at": "2026-10-17T06:40:00.000Z",
+    "ok": false,
+    "payload": {
+     "addQuantity": 5,
+     "branchId": "00000000-0000-4000-8000-000000000001",
+     "name": "Milk"
+    },
+    "reason": null,
+    "run_id": null,
+    "student_id": null,
+    "tier": "T2"
+   },
+   {
+    "action": "avail_inventory_item",
+    "actor_id": "00000000-0000-4000-8000-000000000005",
+    "actor_type": "staff",
+    "branch_id": null,
+    "error": null,
+    "id": 74,
+    "occurred_at": "2026-10-17T06:40:00.000Z",
+    "ok": true,
+    "payload": {
+     "itemId": "00000000-0000-4000-8000-00000000003c",
+     "quantity": 3
+    },
+    "reason": null,
+    "run_id": null,
+    "student_id": null,
+    "tier": "T2"
+   },
+   {
+    "action": "update_branch",
+    "actor_id": "00000000-0000-4000-8000-000000000003",
+    "actor_type": "owner",
+    "branch_id": "00000000-0000-4000-8000-000000000001",
+    "error": null,
+    "id": 75,
+    "occurred_at": "2026-10-17T06:40:00.000Z",
+    "ok": true,
+    "payload": {
+     "branchId": "00000000-0000-4000-8000-000000000001",
+     "lockerCapacity": 25
+    },
+    "reason": null,
+    "run_id": null,
+    "student_id": null,
+    "tier": "T3"
+   },
+   {
+    "action": "update_branch",
+    "actor_id": "00000000-0000-4000-8000-000000000005",
+    "actor_type": "staff",
+    "branch_id": "00000000-0000-4000-8000-000000000001",
+    "error": "Owner only",
+    "id": 76,
+    "occurred_at": "2026-10-17T06:40:00.000Z",
+    "ok": false,
+    "payload": {
+     "branchId": "00000000-0000-4000-8000-000000000001",
+     "lockerCapacity": 1
+    },
+    "reason": null,
+    "run_id": null,
+    "student_id": null,
+    "tier": "T3"
+   },
+   {
+    "action": "add_desk",
+    "actor_id": "00000000-0000-4000-8000-000000000003",
+    "actor_type": "owner",
+    "branch_id": "00000000-0000-4000-8000-000000000001",
+    "error": null,
+    "id": 77,
+    "occurred_at": "2026-10-17T06:40:00.000Z",
+    "ok": true,
+    "payload": {
+     "branchId": "00000000-0000-4000-8000-000000000001",
+     "label": "C7"
+    },
+    "reason": null,
+    "run_id": null,
+    "student_id": null,
+    "tier": "T3"
+   },
+   {
+    "action": "remove_desk",
+    "actor_id": "00000000-0000-4000-8000-000000000003",
+    "actor_type": "owner",
+    "branch_id": null,
+    "error": "Cannot remove occupied desk",
+    "id": 78,
+    "occurred_at": "2026-10-17T06:40:00.000Z",
+    "ok": false,
+    "payload": {
+     "deskId": "00000000-0000-4000-8000-00000000000b"
+    },
+    "reason": null,
+    "run_id": null,
+    "student_id": null,
+    "tier": "T3"
+   },
+   {
+    "action": "update_fee_config",
+    "actor_id": "00000000-0000-4000-8000-000000000003",
+    "actor_type": "owner",
+    "branch_id": null,
+    "error": null,
+    "id": 79,
+    "occurred_at": "2026-10-17T06:40:00.000Z",
+    "ok": true,
+    "payload": {
+     "fee": 40,
+     "id": "00000000-0000-4000-8000-00000000000e"
+    },
+    "reason": null,
+    "run_id": null,
+    "student_id": null,
+    "tier": "T3"
+   },
+   {
+    "action": "update_welcome_template",
+    "actor_id": "00000000-0000-4000-8000-000000000003",
+    "actor_type": "owner",
+    "branch_id": null,
+    "error": null,
+    "id": 80,
+    "occurred_at": "2026-10-17T06:40:00.000Z",
+    "ok": true,
+    "payload": {
+     "value": "Hello {name}"
+    },
+    "reason": null,
+    "run_id": null,
+    "student_id": null,
+    "tier": "T3"
+   },
+   {
+    "action": "create_staff",
+    "actor_id": "00000000-0000-4000-8000-000000000003",
+    "actor_type": "owner",
+    "branch_id": "00000000-0000-4000-8000-000000000001",
+    "error": null,
+    "id": 81,
+    "occurred_at": "2026-10-17T06:40:00.000Z",
+    "ok": true,
+    "payload": {
+     "branchId": "00000000-0000-4000-8000-000000000001",
+     "displayName": "New",
+     "password": "[redacted]",
+     "role": "staff",
+     "username": "newstaff"
+    },
+    "reason": null,
+    "run_id": null,
+    "student_id": null,
+    "tier": "T3"
+   },
+   {
+    "action": "update_staff",
+    "actor_id": "00000000-0000-4000-8000-000000000003",
+    "actor_type": "owner",
+    "branch_id": null,
+    "error": null,
+    "id": 82,
+    "occurred_at": "2026-10-17T06:40:00.000Z",
+    "ok": true,
+    "payload": {
+     "displayName": "Ravi K",
+     "staffId": "00000000-0000-4000-8000-000000000006"
+    },
+    "reason": null,
+    "run_id": null,
+    "student_id": null,
+    "tier": "T3"
+   },
+   {
+    "action": "assign_staff_override",
+    "actor_id": "00000000-0000-4000-8000-000000000003",
+    "actor_type": "owner",
+    "branch_id": "00000000-0000-4000-8000-000000000001",
+    "error": null,
+    "id": 83,
+    "occurred_at": "2026-10-17T06:40:00.000Z",
+    "ok": true,
+    "payload": {
+     "branchId": "00000000-0000-4000-8000-000000000001",
+     "staffId": "00000000-0000-4000-8000-000000000006"
+    },
+    "reason": null,
+    "run_id": null,
+    "student_id": null,
+    "tier": "T3"
+   },
+   {
+    "action": "clear_staff_override",
+    "actor_id": "00000000-0000-4000-8000-000000000003",
+    "actor_type": "owner",
+    "branch_id": null,
+    "error": null,
+    "id": 84,
+    "occurred_at": "2026-10-17T06:40:00.000Z",
+    "ok": true,
+    "payload": {
+     "staffId": "00000000-0000-4000-8000-000000000006"
+    },
+    "reason": null,
+    "run_id": null,
+    "student_id": null,
+    "tier": "T3"
+   },
+   {
+    "action": "create_task",
+    "actor_id": "00000000-0000-4000-8000-000000000003",
+    "actor_type": "owner",
+    "branch_id": "00000000-0000-4000-8000-000000000001",
+    "error": "Invalid repeat interval",
+    "id": 85,
+    "occurred_at": "2026-10-17T06:40:00.000Z",
+    "ok": false,
+    "payload": {
+     "assignedToStaffIds": [
+      "00000000-0000-4000-8000-000000000005"
+     ],
+     "branchId": "00000000-0000-4000-8000-000000000001",
+     "dueDate": "2026-10-16",
+     "repeatInterval": "once",
+     "title": "Refill water"
+    },
+    "reason": null,
+    "run_id": null,
+    "student_id": null,
+    "tier": "T1"
+   },
+   {
+    "action": "update_task_status",
+    "actor_id": "00000000-0000-4000-8000-000000000005",
+    "actor_type": "staff",
+    "branch_id": null,
+    "error": null,
+    "id": 86,
+    "occurred_at": "2026-10-17T06:40:00.000Z",
+    "ok": true,
+    "payload": {
+     "date": "2026-10-16",
+     "done": true,
+     "taskId": "00000000-0000-4000-8000-000000000038"
+    },
+    "reason": null,
+    "run_id": null,
+    "student_id": null,
+    "tier": "T1"
+   },
+   {
+    "action": "send_message",
+    "actor_id": "00000000-0000-4000-8000-000000000005",
+    "actor_type": "staff",
+    "branch_id": "00000000-0000-4000-8000-000000000001",
+    "error": null,
+    "id": 87,
+    "occurred_at": "2026-10-17T06:40:00.000Z",
+    "ok": true,
+    "payload": {
+     "branchId": "00000000-0000-4000-8000-000000000001",
+     "channel": "branch",
+     "content": "Hi",
+     "recipientType": "staff"
+    },
+    "reason": null,
+    "run_id": null,
+    "student_id": null,
+    "tier": "T1"
+   },
+   {
+    "action": "resolve_alert",
+    "actor_id": "00000000-0000-4000-8000-000000000005",
+    "actor_type": "staff",
+    "branch_id": null,
+    "error": null,
+    "id": 88,
+    "occurred_at": "2026-10-17T06:40:00.000Z",
+    "ok": true,
+    "payload": {
+     "alertId": "00000000-0000-4000-8000-000000000039"
+    },
+    "reason": null,
+    "run_id": null,
+    "student_id": null,
+    "tier": "T1"
+   },
+   {
+    "action": "create_enquiry",
+    "actor_id": "00000000-0000-4000-8000-000000000005",
+    "actor_type": "staff",
+    "branch_id": "00000000-0000-4000-8000-000000000001",
+    "error": null,
+    "id": 89,
+    "occurred_at": "2026-10-17T06:40:00.000Z",
+    "ok": true,
+    "payload": {
+     "branchId": "00000000-0000-4000-8000-000000000001",
+     "message": "Morning?",
+     "name": "Lead",
+     "phone": "9200000003",
+     "source": "walk_in"
+    },
+    "reason": null,
+    "run_id": null,
+    "student_id": null,
+    "tier": "T1"
+   },
+   {
+    "action": "update_enquiry",
+    "actor_id": "00000000-0000-4000-8000-000000000005",
+    "actor_type": "staff",
+    "branch_id": null,
+    "error": null,
+    "id": 90,
+    "occurred_at": "2026-10-17T06:40:00.000Z",
+    "ok": true,
+    "payload": {
+     "fields": {
+      "status": "contacted"
+     },
+     "id": "00000000-0000-4000-8000-000000000035"
+    },
+    "reason": null,
+    "run_id": null,
+    "student_id": null,
+    "tier": "T1"
+   },
+   {
+    "action": "add_enquiry_activity",
+    "actor_id": "00000000-0000-4000-8000-000000000005",
+    "actor_type": "staff",
+    "branch_id": null,
+    "error": null,
+    "id": 91,
+    "occurred_at": "2026-10-17T06:40:00.000Z",
+    "ok": true,
+    "payload": {
+     "enquiryId": "00000000-0000-4000-8000-000000000035",
+     "note": "Spoke",
+     "type": "call"
+    },
+    "reason": null,
+    "run_id": null,
+    "student_id": null,
+    "tier": "T1"
+   },
+   {
+    "action": "add_enquiry_followup",
+    "actor_id": "00000000-0000-4000-8000-000000000005",
+    "actor_type": "staff",
+    "branch_id": null,
+    "error": null,
+    "id": 92,
+    "occurred_at": "2026-10-17T06:40:00.000Z",
+    "ok": true,
+    "payload": {
+     "dueAt": "2026-10-18T05:30:00.000Z",
+     "enquiryId": "00000000-0000-4000-8000-000000000035",
+     "note": "Visit"
+    },
+    "reason": null,
+    "run_id": null,
+    "student_id": null,
+    "tier": "T1"
+   },
+   {
+    "action": "update_enquiry_followup",
+    "actor_id": "00000000-0000-4000-8000-000000000005",
+    "actor_type": "staff",
+    "branch_id": null,
+    "error": null,
+    "id": 93,
+    "occurred_at": "2026-10-17T06:40:00.000Z",
+    "ok": true,
+    "payload": {
+     "fields": {
+      "done": true
+     },
+     "id": "00000000-0000-4000-8000-000000000037"
+    },
+    "reason": null,
+    "run_id": null,
+    "student_id": null,
+    "tier": "T1"
+   },
+   {
+    "action": "delete_enquiries",
+    "actor_id": "00000000-0000-4000-8000-000000000003",
+    "actor_type": "owner",
+    "branch_id": null,
+    "error": null,
+    "id": 94,
+    "occurred_at": "2026-10-17T06:40:00.000Z",
+    "ok": true,
+    "payload": {
+     "ids": [
+      "00000000-0000-4000-8000-000000000036"
+     ]
+    },
+    "reason": null,
+    "run_id": null,
+    "student_id": null,
+    "tier": "T3"
+   },
+   {
+    "action": "end_staff_session",
+    "actor_id": "00000000-0000-4000-8000-000000000005",
+    "actor_type": "staff",
+    "branch_id": null,
+    "error": null,
+    "id": 95,
+    "occurred_at": "2026-10-17T06:40:00.000Z",
+    "ok": true,
+    "payload": {
+     "password": "[redacted]"
+    },
+    "reason": null,
+    "run_id": null,
+    "student_id": null,
+    "tier": "T3"
    }
   ],
   "fee_config": [
@@ -6781,6 +8671,8 @@
     "total": 45
    },
    {
+    "actor_id": "00000000-0000-4000-8000-000000000005",
+    "actor_type": "staff",
     "branch_id": "00000000-0000-4000-8000-000000000001",
     "created_at": "2026-10-16T06:40:00.000Z",
     "created_by_staff_id": "00000000-0000-4000-8000-000000000005",
@@ -6789,11 +8681,14 @@
     "id": "00000000-0000-4000-8000-00000000004e",
     "paid": true,
     "payment_mode": "other",
+    "run_id": null,
     "student_id": "00000000-0000-4000-8000-000000000021",
     "subtotal": 90,
     "total": 90
    },
    {
+    "actor_id": "00000000-0000-4000-8000-000000000005",
+    "actor_type": "staff",
     "branch_id": "00000000-0000-4000-8000-000000000001",
     "created_at": "2026-10-16T06:40:00.000Z",
     "created_by_staff_id": "00000000-0000-4000-8000-000000000005",
@@ -6803,12 +8698,15 @@
     "id": "00000000-0000-4000-8000-000000000051",
     "paid": true,
     "payment_mode": "upi",
+    "run_id": null,
     "student_name": "Guest",
     "student_phone": "9800000001",
     "subtotal": 15,
     "total": 10
    },
    {
+    "actor_id": "00000000-0000-4000-8000-000000000005",
+    "actor_type": "staff",
     "booking_id": "00000000-0000-4000-8000-000000000028",
     "branch_id": "00000000-0000-4000-8000-000000000001",
     "created_at": "2026-10-16T06:40:00.000Z",
@@ -6818,6 +8716,7 @@
     "id": "00000000-0000-4000-8000-000000000054",
     "paid": true,
     "payment_mode": "cash",
+    "run_id": null,
     "student_id": "00000000-0000-4000-8000-000000000017",
     "subtotal": 15,
     "total": 15
@@ -6873,12 +8772,15 @@
   "inventory_logs": [
    {
     "action": "avail",
+    "actor_id": "00000000-0000-4000-8000-000000000005",
+    "actor_type": "staff",
     "branch_id": "00000000-0000-4000-8000-000000000001",
     "created_at": "2026-10-17T06:40:00.000Z",
     "created_by_staff_id": "00000000-0000-4000-8000-000000000005",
     "id": "00000000-0000-4000-8000-000000000080",
     "inventory_item_id": "00000000-0000-4000-8000-00000000003c",
-    "quantity": 3
+    "quantity": 3,
+    "run_id": null
    }
   ],
   "lockers": [
@@ -7221,6 +9123,8 @@
     "total_paid": 1250
    },
    {
+    "actor_id": "00000000-0000-4000-8000-000000000005",
+    "actor_type": "staff",
     "branch_id": "00000000-0000-4000-8000-000000000001",
     "cabin_no": null,
     "category": "temporary",
@@ -7245,6 +9149,7 @@
     "plan_amount": 3375,
     "plan_days": 92,
     "renewed_from_membership_id": null,
+    "run_id": null,
     "seat_type": "floating",
     "start_date": "2026-10-16",
     "student_id": "00000000-0000-4000-8000-00000000005b",
@@ -7252,6 +9157,8 @@
     "total_paid": 3375
    },
    {
+    "actor_id": "00000000-0000-4000-8000-000000000005",
+    "actor_type": "staff",
     "branch_id": "00000000-0000-4000-8000-000000000001",
     "cabin_no": null,
     "category": "temporary",
@@ -7276,6 +9183,7 @@
     "plan_amount": 800,
     "plan_days": 31,
     "renewed_from_membership_id": null,
+    "run_id": null,
     "seat_type": "floating",
     "start_date": "2026-10-16",
     "student_id": "00000000-0000-4000-8000-000000000061",
@@ -7283,6 +9191,8 @@
     "total_paid": 800
    },
    {
+    "actor_id": "00000000-0000-4000-8000-000000000005",
+    "actor_type": "staff",
     "branch_id": "00000000-0000-4000-8000-000000000001",
     "cabin_no": null,
     "category": "temporary",
@@ -7307,6 +9217,7 @@
     "plan_amount": 1250,
     "plan_days": 31,
     "renewed_from_membership_id": "00000000-0000-4000-8000-00000000001e",
+    "run_id": null,
     "seat_type": "floating",
     "start_date": "2026-10-20",
     "student_id": "00000000-0000-4000-8000-00000000001d",
@@ -7314,6 +9225,8 @@
     "total_paid": 1150
    },
    {
+    "actor_id": "00000000-0000-4000-8000-000000000005",
+    "actor_type": "staff",
     "branch_id": "00000000-0000-4000-8000-000000000001",
     "cabin_no": null,
     "category": "temporary",
@@ -7338,6 +9251,7 @@
     "plan_amount": 1500,
     "plan_days": 31,
     "renewed_from_membership_id": "00000000-0000-4000-8000-000000000020",
+    "run_id": null,
     "seat_type": "floating",
     "start_date": "2026-10-14",
     "student_id": "00000000-0000-4000-8000-00000000001f",
@@ -7409,6 +9323,8 @@
   ],
   "payouts": [
    {
+    "actor_id": "00000000-0000-4000-8000-000000000003",
+    "actor_type": "owner",
     "amount": 1150,
     "branch_id": "00000000-0000-4000-8000-000000000001",
     "created_at": "2026-10-16T06:40:00.000Z",
@@ -7416,9 +9332,12 @@
     "id": "00000000-0000-4000-8000-000000000066",
     "notes": "Early renewal cancelled — renewal money refunded. Reason: mistake",
     "payout_type": "membership_refund",
+    "run_id": null,
     "student_id": "00000000-0000-4000-8000-00000000001d"
    },
    {
+    "actor_id": "00000000-0000-4000-8000-000000000003",
+    "actor_type": "owner",
     "amount": 225,
     "branch_id": "00000000-0000-4000-8000-000000000001",
     "created_at": "2026-10-16T06:40:00.000Z",
@@ -7426,9 +9345,12 @@
     "id": "00000000-0000-4000-8000-00000000006f",
     "notes": "Cashback redeemed immediately as cash, outside a renewal/closure",
     "payout_type": "cashback",
+    "run_id": null,
     "student_id": "00000000-0000-4000-8000-000000000025"
    },
    {
+    "actor_id": "00000000-0000-4000-8000-000000000003",
+    "actor_type": "owner",
     "amount": 100,
     "branch_id": "00000000-0000-4000-8000-000000000001",
     "created_at": "2026-10-17T06:40:00.000Z",
@@ -7436,9 +9358,12 @@
     "id": "00000000-0000-4000-8000-000000000079",
     "notes": "Locker caution deposit returned — locker removed",
     "payout_type": "locker_deposit",
+    "run_id": null,
     "student_id": "00000000-0000-4000-8000-000000000017"
    },
    {
+    "actor_id": "00000000-0000-4000-8000-000000000003",
+    "actor_type": "owner",
     "amount": 3000,
     "branch_id": "00000000-0000-4000-8000-000000000001",
     "created_at": "2026-10-17T06:40:00.000Z",
@@ -7446,9 +9371,12 @@
     "id": "00000000-0000-4000-8000-00000000007c",
     "notes": "Refund for 80 unused day(s) × ₹37.5 (plan ₹3375 ÷ 90 days) — membership deleted",
     "payout_type": "membership_refund",
+    "run_id": null,
     "student_id": "00000000-0000-4000-8000-000000000023"
    },
    {
+    "actor_id": "00000000-0000-4000-8000-000000000005",
+    "actor_type": "staff",
     "amount": 210,
     "branch_id": "00000000-0000-4000-8000-000000000001",
     "created_at": "2026-10-17T06:40:00.000Z",
@@ -7456,6 +9384,7 @@
     "id": "00000000-0000-4000-8000-00000000007e",
     "notes": "Refund for 3 unused day(s) × ₹70 (plan ₹2100 ÷ 30 days) — membership deleted",
     "payout_type": "membership_refund",
+    "run_id": null,
     "student_id": "00000000-0000-4000-8000-000000000019"
    }
   ],
@@ -7759,6 +9688,8 @@
   ],
   "transactions": [
    {
+    "actor_id": "00000000-0000-4000-8000-000000000003",
+    "actor_type": "owner",
     "amount": 35,
     "booking_id": "00000000-0000-4000-8000-000000000047",
     "branch_id": "00000000-0000-4000-8000-000000000001",
@@ -7771,9 +9702,12 @@
     "membership_id": null,
     "notes": null,
     "payment_mode": "cash",
+    "run_id": null,
     "student_id": "00000000-0000-4000-8000-000000000046"
    },
    {
+    "actor_id": "00000000-0000-4000-8000-000000000005",
+    "actor_type": "staff",
     "amount": 20,
     "booking_id": "00000000-0000-4000-8000-000000000049",
     "branch_id": "00000000-0000-4000-8000-000000000001",
@@ -7786,9 +9720,12 @@
     "membership_id": null,
     "notes": null,
     "payment_mode": "cash",
+    "run_id": null,
     "student_id": "00000000-0000-4000-8000-000000000046"
    },
    {
+    "actor_id": "00000000-0000-4000-8000-000000000005",
+    "actor_type": "staff",
     "amount": 15,
     "booking_id": "00000000-0000-4000-8000-000000000049",
     "branch_id": "00000000-0000-4000-8000-000000000001",
@@ -7801,9 +9738,12 @@
     "membership_id": null,
     "notes": null,
     "payment_mode": "upi",
+    "run_id": null,
     "student_id": "00000000-0000-4000-8000-000000000046"
    },
    {
+    "actor_id": "00000000-0000-4000-8000-000000000005",
+    "actor_type": "staff",
     "amount": 10,
     "booking_id": null,
     "branch_id": "00000000-0000-4000-8000-000000000001",
@@ -7816,9 +9756,12 @@
     "membership_id": null,
     "notes": null,
     "payment_mode": "upi",
+    "run_id": null,
     "student_id": null
    },
    {
+    "actor_id": "00000000-0000-4000-8000-000000000005",
+    "actor_type": "staff",
     "amount": 15,
     "booking_id": null,
     "branch_id": "00000000-0000-4000-8000-000000000001",
@@ -7831,9 +9774,12 @@
     "membership_id": null,
     "notes": null,
     "payment_mode": "cash",
+    "run_id": null,
     "student_id": "00000000-0000-4000-8000-000000000017"
    },
    {
+    "actor_id": "00000000-0000-4000-8000-000000000005",
+    "actor_type": "staff",
     "amount": 10,
     "booking_id": "00000000-0000-4000-8000-000000000028",
     "branch_id": "00000000-0000-4000-8000-000000000001",
@@ -7846,9 +9792,12 @@
     "membership_id": null,
     "notes": "70m overtime, flat-rate billed",
     "payment_mode": "cash",
+    "run_id": null,
     "student_id": "00000000-0000-4000-8000-000000000017"
    },
    {
+    "actor_id": "00000000-0000-4000-8000-000000000003",
+    "actor_type": "owner",
     "amount": 45,
     "booking_id": null,
     "branch_id": "00000000-0000-4000-8000-000000000001",
@@ -7861,9 +9810,12 @@
     "membership_id": null,
     "notes": "Food Pass shortfall collected at order time",
     "payment_mode": "cash",
+    "run_id": null,
     "student_id": "00000000-0000-4000-8000-00000000001b"
    },
    {
+    "actor_id": "00000000-0000-4000-8000-000000000005",
+    "actor_type": "staff",
     "amount": 3375,
     "booking_id": null,
     "branch_id": "00000000-0000-4000-8000-000000000001",
@@ -7876,9 +9828,12 @@
     "membership_id": "00000000-0000-4000-8000-00000000005c",
     "notes": null,
     "payment_mode": "cash",
+    "run_id": null,
     "student_id": "00000000-0000-4000-8000-00000000005b"
    },
    {
+    "actor_id": "00000000-0000-4000-8000-000000000005",
+    "actor_type": "staff",
     "amount": 200,
     "booking_id": null,
     "branch_id": "00000000-0000-4000-8000-000000000001",
@@ -7891,9 +9846,12 @@
     "membership_id": null,
     "notes": "Locker rent + deposit",
     "payment_mode": "cash",
+    "run_id": null,
     "student_id": "00000000-0000-4000-8000-00000000005b"
    },
    {
+    "actor_id": "00000000-0000-4000-8000-000000000005",
+    "actor_type": "staff",
     "amount": 800,
     "booking_id": null,
     "branch_id": "00000000-0000-4000-8000-000000000001",
@@ -7906,9 +9864,12 @@
     "membership_id": "00000000-0000-4000-8000-000000000062",
     "notes": null,
     "payment_mode": "cash",
+    "run_id": null,
     "student_id": "00000000-0000-4000-8000-000000000061"
    },
    {
+    "actor_id": "00000000-0000-4000-8000-000000000005",
+    "actor_type": "staff",
     "amount": 1150,
     "booking_id": null,
     "branch_id": "00000000-0000-4000-8000-000000000001",
@@ -7921,9 +9882,12 @@
     "membership_id": "00000000-0000-4000-8000-000000000064",
     "notes": "Renewal (early — starts 2026-10-20), ₹100 cashback applied",
     "payment_mode": "cash",
+    "run_id": null,
     "student_id": "00000000-0000-4000-8000-00000000001d"
    },
    {
+    "actor_id": "00000000-0000-4000-8000-000000000005",
+    "actor_type": "staff",
     "amount": 1500,
     "booking_id": null,
     "branch_id": "00000000-0000-4000-8000-000000000001",
@@ -7936,9 +9900,12 @@
     "membership_id": "00000000-0000-4000-8000-000000000068",
     "notes": "Renewal (grace — from 2026-10-14)",
     "payment_mode": "upi",
+    "run_id": null,
     "student_id": "00000000-0000-4000-8000-00000000001f"
    },
    {
+    "actor_id": "00000000-0000-4000-8000-000000000005",
+    "actor_type": "staff",
     "amount": 100,
     "booking_id": null,
     "branch_id": "00000000-0000-4000-8000-000000000001",
@@ -7951,9 +9918,12 @@
     "membership_id": "00000000-0000-4000-8000-000000000022",
     "notes": null,
     "payment_mode": "cash",
+    "run_id": null,
     "student_id": "00000000-0000-4000-8000-000000000021"
    },
    {
+    "actor_id": "00000000-0000-4000-8000-000000000005",
+    "actor_type": "staff",
     "amount": 200,
     "booking_id": null,
     "branch_id": "00000000-0000-4000-8000-000000000001",
@@ -7966,9 +9936,12 @@
     "membership_id": "00000000-0000-4000-8000-000000000022",
     "notes": null,
     "payment_mode": "upi",
+    "run_id": null,
     "student_id": "00000000-0000-4000-8000-000000000021"
    },
    {
+    "actor_id": "00000000-0000-4000-8000-000000000003",
+    "actor_type": "owner",
     "amount": 50,
     "booking_id": null,
     "branch_id": "00000000-0000-4000-8000-000000000001",
@@ -7981,9 +9954,12 @@
     "membership_id": null,
     "notes": "fine",
     "payment_mode": "cash",
+    "run_id": null,
     "student_id": "00000000-0000-4000-8000-000000000025"
    },
    {
+    "actor_id": "00000000-0000-4000-8000-000000000005",
+    "actor_type": "staff",
     "amount": 200,
     "booking_id": null,
     "branch_id": "00000000-0000-4000-8000-000000000001",
@@ -7996,9 +9972,12 @@
     "membership_id": null,
     "notes": "Food Pass top-up",
     "payment_mode": "upi",
+    "run_id": null,
     "student_id": "00000000-0000-4000-8000-000000000021"
    },
    {
+    "actor_id": "00000000-0000-4000-8000-000000000005",
+    "actor_type": "staff",
     "amount": 163,
     "booking_id": null,
     "branch_id": "00000000-0000-4000-8000-000000000001",
@@ -8011,9 +9990,12 @@
     "membership_id": null,
     "notes": "Locker — prorated 19d rent (₹63) + deposit (₹100)",
     "payment_mode": "cash",
+    "run_id": null,
     "student_id": "00000000-0000-4000-8000-000000000017"
    },
    {
+    "actor_id": "00000000-0000-4000-8000-000000000005",
+    "actor_type": "staff",
     "amount": 100,
     "booking_id": null,
     "branch_id": "00000000-0000-4000-8000-000000000001",
@@ -8026,9 +10008,12 @@
     "membership_id": null,
     "notes": "Locker renewal",
     "payment_mode": "upi",
+    "run_id": null,
     "student_id": "00000000-0000-4000-8000-000000000021"
    },
    {
+    "actor_id": "00000000-0000-4000-8000-000000000003",
+    "actor_type": "owner",
     "amount": 208,
     "booking_id": null,
     "branch_id": "00000000-0000-4000-8000-000000000001",
@@ -8041,11 +10026,14 @@
     "membership_id": "00000000-0000-4000-8000-00000000001c",
     "notes": "Final settlement at membership closure (₹208 for 5 day(s) used after expiry)",
     "payment_mode": "cash",
+    "run_id": null,
     "student_id": "00000000-0000-4000-8000-00000000001b"
    }
   ],
   "waivers": [
    {
+    "actor_id": "00000000-0000-4000-8000-000000000003",
+    "actor_type": "owner",
     "amount": 20,
     "branch_id": "00000000-0000-4000-8000-000000000001",
     "created_at": "2026-10-16T06:40:00.000Z",
@@ -8054,6 +10042,7 @@
     "membership_id": "00000000-0000-4000-8000-000000000018",
     "reason": "clock late",
     "related_id": "00000000-0000-4000-8000-000000000033",
+    "run_id": null,
     "student_id": "00000000-0000-4000-8000-000000000017",
     "waiver_type": "overtime_omit"
    }

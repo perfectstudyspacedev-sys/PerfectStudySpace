@@ -202,7 +202,7 @@ Acceptance:
 - [x] Same results as before for: login, dashboard, check-in, checkout with overtime, food order with a Food Pass, new membership, early and grace renewals, an enquiry, the revenue page, the sign-up link — the golden master (all 123 actions, 193 calls, final database) is identical after the split; every moved block was checked byte-identical by script. Live browser QA against a deployed function still to do after deploy.
 - [x] No frontend file changed in this step
 
-## P0.5 Event log and actor audit (F8, F2) — migrations 052, 053
+## P0.5 Event log and actor audit (F8, F2) — migrations 052, 053 ✅
 
 `052_event_log.sql`:
 
@@ -234,11 +234,13 @@ ALTER TABLE events ENABLE ROW LEVEL SECURITY;
 
 `053_actor_audit.sql`: add nullable `actor_type TEXT`, `actor_id UUID` and `run_id UUID` to `bookings`, `food_bills`, `memberships`, `transactions`, `enquiries`, `permanent_waitlist`, `payouts`, `inventory_logs`, `waivers`. No backfill (null means a row from before this plan). Add a helper `withActor(row, ctx)` and use it at every insert site that sets `created_by_staff_id`.
 
+- *As built:* `withActor` (in `_shared/audit.ts`) is applied once, by the router, through `actorDb()`: the request's database client stamps `actor_type`, `actor_id` and `run_id` on every insert into the nine tables. This replaces calling it at each of the 51 insert sites, most of them inside money paths that R1 says not to touch; no site can be missed and no action code changed. Rows written outside the api (seeds, SQL) stay NULL. The grep check is replaced by tests that look at the rows themselves. The event is written with the plain client after the handler answers; a failed event write is reported with `console.error` and never changes the response. Events are written only when an action runs (not for 401 or an unknown action). The append-only trigger also refuses TRUNCATE. Responses that return whole rows (for example `list_enquiries`, `create_enquiry`) now include the three new columns; the app ignores them.
+
 Acceptance:
-- [ ] Ten different mutating actions each write exactly one event row
-- [ ] UPDATE and DELETE on `events` fail
-- [ ] A login and a sign-up leave no password, PIN or Aadhaar data in any event payload
-- [ ] Every insert that sets `created_by_staff_id` also sets `actor_type` and `actor_id` (grep check)
+- [x] Ten different mutating actions each write exactly one event row — `tests/server/events_test.ts` E1 (plus: reads write none, refused and thrown actions write one failed event, a broken events insert does not break the action). The golden master now records 95 events for its 193 calls and is otherwise identical once the new columns are removed (checked by script).
+- [x] UPDATE and DELETE on `events` fail — migrations 001–053 were applied to a real Postgres (PGlite; 002 and 010 skipped there for lack of Supabase's `storage` schema): UPDATE, DELETE and TRUNCATE are refused by the trigger, the tier/actor CHECKs refuse bad values, RLS is on, and re-applying 052/053 is harmless.
+- [x] A login and a sign-up leave no password, PIN or Aadhaar data in any event payload — events_test E4 (also a staff password set through `create_staff`)
+- [x] Every insert that sets `created_by_staff_id` also sets `actor_type` and `actor_id` — by construction (`actorDb`); events_test A1 checks every row the ten actions inserted, and the golden master records the stamped rows of all 123 actions
 
 ## P0.6 Idempotency keys (F4) — migration 054
 

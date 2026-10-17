@@ -2,9 +2,12 @@
 // Since PSS-AI P0.4 this file is only the router; each action lives in domains/*.ts and is listed
 // in registry.ts. The order is the same as the old if-chain: public actions run without a login,
 // everything else needs a staff token (and marks the day's attendance) before the action runs.
+// Since P0.5 every mutating action also writes one row to the events log, and inserts into the
+// audited tables are stamped with the caller (see _shared/audit.ts).
 import { withCors, err } from "../_shared/http.ts";
 import { adminClient, authStaff, markAttendanceIfNeeded } from "../_shared/auth.ts";
-import type { Caller, Ctx } from "./registry.ts";
+import { actorDb, eventRow, writeEvent } from "../_shared/audit.ts";
+import type { ActionDef, Caller, Ctx } from "./registry.ts";
 import { REGISTRY } from "./actions.ts";
 
 Deno.serve(async (req) => withCors(req, await handleRequest(req)));
@@ -20,8 +23,7 @@ async function handleRequest(req: Request): Promise<Response> {
 
     // ─── PUBLIC ───
     if (def && def.callers.includes("public")) {
-      const ctx: Ctx = { db, req, action, actor: { type: "public", id: null } };
-      return (await def.handler(ctx, payload)) ?? err(`Unknown action: ${action}`);
+      return await runAction(def, { db, req, action, actor: { type: "public", id: null } }, payload);
     }
 
     const staff = await authStaff(req);
@@ -29,9 +31,26 @@ async function handleRequest(req: Request): Promise<Response> {
     await markAttendanceIfNeeded(db, staff.id, staff.role, staff.homeBranchId);
 
     if (!def) return err(`Unknown action: ${action}`);
-    const ctx: Ctx = { db, req, action, staff, actor: { type: staff.role as Caller, id: staff.id } };
-    return (await def.handler(ctx, payload)) ?? err(`Unknown action: ${action}`);
+    return await runAction(def, { db, req, action, staff, actor: { type: staff.role as Caller, id: staff.id } }, payload);
   } catch (e) {
     return err(e instanceof Error ? e.message : "Server error", 500);
   }
+}
+
+// Runs one action and logs it: every mutating action (success or failure), and reads only for
+// agent and student callers. The handler gets a client that stamps the caller on audited inserts;
+// the event itself is written with the plain client.
+// deno-lint-ignore no-explicit-any
+async function runAction(def: ActionDef, ctx: Ctx, payload: any): Promise<Response> {
+  let res: Response;
+  try {
+    const handlerCtx: Ctx = { ...ctx, db: actorDb(ctx.db, ctx.actor, ctx.runId) };
+    res = (await def.handler(handlerCtx, payload)) ?? err(`Unknown action: ${ctx.action}`);
+  } catch (e) {
+    res = err(e instanceof Error ? e.message : "Server error", 500);
+  }
+  if (def.mutating || ctx.actor.type === "agent" || ctx.actor.type === "student") {
+    await writeEvent(ctx.db, await eventRow(def, ctx.actor, ctx.runId, payload, res));
+  }
+  return res;
 }
