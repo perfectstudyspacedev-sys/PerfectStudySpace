@@ -65,3 +65,32 @@ Smoke test: log in, open the Dashboard, check one student in and out, record a s
 - Website: redeploy the previous Cloudflare Pages build.
 - Functions: from a checkout of `main`, run `supabase functions deploy api` (the cron function can stay; without its schedules it does nothing). Roll the website back first.
 - Database: the three migrations only add things and can stay. To stop the scheduled jobs: `SELECT cron.unschedule(jobname) FROM cron.job WHERE jobname LIKE 'pss_%';`
+
+# Deploying PSS-AI Phase 1
+
+Branch `pss-ai/p1-data-brain` (it contains Phase 0). Only after Phase 0 is live and its exit gate is
+ticked. Every Phase 1 feature starts switched off.
+
+1. `npm run predeploy` on the branch → "✓ predeploy passed".
+2. Database: `055_focus_pulse.sql`, `056_model_outputs.sql` (additions only).
+3. Functions: `supabase functions deploy api` (the cron function is unchanged).
+4. Website: merge into `main`; Cloudflare Pages rebuilds.
+5. Nothing changes for staff until you switch features on (SQL editor):
+   ```sql
+   -- the optional "How focused was today?" after a member's checkout
+   INSERT INTO app_settings (key, value) VALUES ('pssai_focus_pulse', 'on')
+     ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = now();
+   -- the owner's Flags page (after the first ML publish)
+   INSERT INTO app_settings (key, value) VALUES ('pssai_anomaly', 'on')
+     ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = now();
+   -- optional: the amount above which a discount or cashback asks for a second confirm (default 1000)
+   INSERT INTO app_settings (key, value) VALUES ('pssai_discount_confirm_over', '1000')
+     ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = now();
+   ```
+   Staff see a switch after their next page reload. To switch off, set the value to `off`.
+6. Models, on your computer, once a week: see `ml/README.md` (`uv sync`, copy `ml/env.example` to
+   `ml/.env` with the service-role key, `uv run pss-ml export`, `uv run pss-ml run`, read the reports,
+   then `uv run pss-ml run --publish`). Approve or rename the cluster labels before using them.
+7. Phase 1 exit gate (owner): the churn report beats the 7-day reminder on your data; two weeks of
+   flags reviewed with an acceptable false-alarm rate; the owner analyst (P1.8) passes its evaluation
+   — P1.8 waits for decision D3.
