@@ -442,6 +442,21 @@ export async function claimDesk(db: ReturnType<typeof adminClient>, deskId: stri
   return !!data?.length;
 }
 
+// Remind staff to collect renewal during the student's final week of validity — kept alive
+// (re-upserted) on every run, resolved on renew/close. Moved unchanged from the end of
+// list_active_memberships (PSS-AI P0.7) so the 06:00 cron job runs the same loop.
+export async function remindExpiringMembers(db: ReturnType<typeof adminClient>, members: { student_id?: string; branch_id: string; student_name?: string; end_date: string }[]) {
+  const today = todayISO();
+  const weekOut = addDays(today, 7);
+  for (const m of members) {
+    if (!m.student_id) continue;
+    if (m.end_date >= today && m.end_date <= weekOut) {
+      await createAlert(db, m.student_id, m.branch_id, "expiry", m.end_date,
+        `${m.student_name}'s membership expires on ${m.end_date} — remind them to renew.`);
+    }
+  }
+}
+
 export async function createAlert(db: ReturnType<typeof adminClient>, studentId: string, branchId: string, type: string, dueDate: string, message: string) {
   const { data: existing } = await db.from("alerts").select("id")
     .eq("student_id", studentId).eq("alert_type", type).eq("status", "pending").maybeSingle();

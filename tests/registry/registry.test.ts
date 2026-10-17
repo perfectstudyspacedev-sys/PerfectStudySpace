@@ -10,8 +10,12 @@ const T3_LIST = ['delete_membership', 'close_membership', 'cancel_early_renewal'
 // Appendix D, T2 = money comes in (amounts calculated by code).
 const T2_LIST = ['record_payment', 'record_locker_payment', 'add_manual_payment', 'topup_food_pass', 'create_food_bill', 'collect_food_bill_shortfall', 'create_walkin', 'create_membership', 'renew_membership', 'renew_locker', 'add_locker', 'checkout_booking']
 
+// Scheduled jobs added in P0.7/P0.8; run only by the cron function.
+const SYSTEM_JOBS = ['cron_expiry_alerts', 'cron_integrity_report', 'cron_purge_idempotency', 'cron_purge_signups']
+const PEOPLE = ['public', 'staff', 'owner', 'admin']
+
 describe('action registry (P0.4)', () => {
-  test('every action handled today is registered — names match tests/registry/actions.snapshot.json', () => {
+  test('every action is registered — names match tests/registry/actions.snapshot.json (123 from P0.4, plus P0.7–P0.8)', () => {
     expect(ACTION_META.map((a) => a.name).sort()).toEqual(snapshot)
   })
   test('no action is registered twice', () => {
@@ -25,8 +29,12 @@ describe('action registry (P0.4)', () => {
   test('reads are not mutating; every mutating staff action needs an idempotency key', () => {
     for (const a of ACTION_META) {
       if (/^(list_|get_|lookup_|search_)/.test(a.name) || a.name === 'whoami') expect(a.mutating, a.name).toBe(false)
-      if (a.mutating && !a.callers.includes('public')) expect(a.idempotent, a.name).toBe(false)
+      if (a.mutating && a.callers.some((c) => ['staff', 'owner', 'admin'].includes(c))) expect(a.idempotent, a.name).toBe(false)
     }
+  })
+  test('system jobs are callable by the system only, and nothing else is', () => {
+    expect(ACTION_META.filter((a) => a.callers.includes('system')).map((a) => a.name).sort()).toEqual(SYSTEM_JOBS)
+    for (const a of ACTION_META.filter((x) => SYSTEM_JOBS.includes(x.name))) expect(a.callers, a.name).toEqual(['system'])
   })
 })
 
@@ -34,8 +42,11 @@ describe('permission tiers (P0.9)', () => {
   test('every registry entry has a tier', () => {
     for (const a of ACTION_META) expect(['T0', 'T1', 'T2', 'T3'], a.name).toContain(a.tier)
   })
-  test('the T3 set equals the explicit list in Appendix D', () => {
-    expect(ACTION_META.filter((a) => a.tier === 'T3').map((a) => a.name).sort()).toEqual([...T3_LIST].sort())
+  test('the T3 set equals the explicit list in Appendix D (actions people and agents can call)', () => {
+    expect(ACTION_META.filter((a) => a.tier === 'T3' && a.callers.some((c) => PEOPLE.includes(c))).map((a) => a.name).sort()).toEqual([...T3_LIST].sort())
+  })
+  test('system purges destroy records, so they are T3', () => {
+    for (const n of ['cron_purge_signups', 'cron_purge_idempotency']) expect(ACTION_META.find((a) => a.name === n)?.tier, n).toBe('T3')
   })
   test('every action Appendix D names as T2 is T2', () => {
     for (const n of T2_LIST) expect(ACTION_META.find((a) => a.name === n)?.tier, n).toBe('T2')

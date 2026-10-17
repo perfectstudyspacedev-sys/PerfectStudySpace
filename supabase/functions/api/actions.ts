@@ -11,9 +11,10 @@ import { handlers as reportsHandlers } from "./domains/reports.ts";
 import { handlers as sessionsHandlers } from "./domains/sessions.ts";
 import { handlers as signupHandlers } from "./domains/signup.ts";
 import { handlers as staffHandlers } from "./domains/staff.ts";
+import { handlers as systemHandlers } from "./domains/system.ts";
 
 const all: Record<string, Handler> = {};
-for (const set of [authHandlers(), branchesHandlers(), enquiriesHandlers(), foodHandlers(), membersHandlers(), moneyHandlers(), reportsHandlers(), sessionsHandlers(), signupHandlers(), staffHandlers()]) {
+for (const set of [authHandlers(), branchesHandlers(), enquiriesHandlers(), foodHandlers(), membersHandlers(), moneyHandlers(), reportsHandlers(), sessionsHandlers(), signupHandlers(), staffHandlers(), systemHandlers()]) {
   for (const [name, handler] of Object.entries(set)) {
     if (all[name]) throw new Error(`Action ${name} is handled twice`);
     all[name] = handler;

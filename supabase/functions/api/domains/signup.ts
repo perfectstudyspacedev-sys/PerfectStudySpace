@@ -4,6 +4,7 @@
 import type { Ctx, Handler } from "../registry.ts";
 import { err, json } from "../../_shared/http.ts";
 import { isOwnerOrAdmin, requireBranch } from "../../_shared/auth.ts";
+import { featureOn } from "../../_shared/flags.ts";
 import { SIGNUP_PENDING_LIMIT, claimSignup, isSignupLinkCode, newSignupLinkCode, newSignupRef, purgeExpiredSignups, signupBusyMessage, signupClaimCutoff, validateSignupFields } from "../lib.ts";
 
 export function handlers(): Record<string, Handler> {
@@ -95,7 +96,8 @@ export function handlers(): Record<string, Handler> {
         if (!bid || !requireBranch(staff, bid)) return err("Branch access denied", 403);
         q = q.eq("branch_id", bid);
       }
-      await purgeExpiredSignups(db);
+      // The 00:05 cron job does this once pssai_cron is on.
+      if (!(await featureOn(db, "cron"))) await purgeExpiredSignups(db);
       const { data, error } = await q;
       if (error) return err(error.message, 500);
       type SignupRow = { id: string; branch_id: string; ref_code: string; name: string; phone: string; emergency_contact: string; course: string | null; referral_source: string; claimed_by_staff_id: string | null; claimed_at: string | null; created_at: string; branches: { name: string } | null; staff: { display_name: string | null; username: string } | null };

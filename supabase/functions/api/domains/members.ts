@@ -6,7 +6,8 @@ import { addDays, addMonths, daysBetween, endDateForMonths, toISTDateStr, todayI
 import { computeStudentStatus, multiMonthDiscount, notStartedYetMessage, renewalKind, unusedDaysRefund } from "../../_shared/membership.ts";
 import { err, json } from "../../_shared/http.ts";
 import { isOwnerOrAdmin, requireBranch } from "../../_shared/auth.ts";
-import { DEV_MODE, claimDesk, claimSignup, computeOverstay, createAlert, fetchAllRows, getMembershipPackage, hasOpenSession, insertPaymentTransactions, isISODate, lockerNumberSequence, recordPayout, recordSettlementIncome, recordTransaction, recordWaiver, refreshStudentStatus, settlePendingCashbacks, signupBusyMessage, storedPaymentMode, unpaidFoodBillsFor, upsertStudent } from "../lib.ts";
+import { DEV_MODE, claimDesk, claimSignup, computeOverstay, fetchAllRows, getMembershipPackage, hasOpenSession, insertPaymentTransactions, isISODate, lockerNumberSequence, recordPayout, recordSettlementIncome, recordTransaction, recordWaiver, refreshStudentStatus, remindExpiringMembers, settlePendingCashbacks, signupBusyMessage, storedPaymentMode, unpaidFoodBillsFor, upsertStudent } from "../lib.ts";
+import { featureOn } from "../../_shared/flags.ts";
 
 // Used to be declared inside the request handler, reading its db and staff. This factory gives it
 // the same two values; the function text is unchanged.
@@ -993,17 +994,9 @@ export function handlers(): Record<string, Handler> {
         unbilled_overtime_due: m.students?.id ? (overtimeDueByStudent.get(m.students.id) ?? 0) : 0,
       }));
 
-      // Remind staff to collect renewal during the student's final week of validity —
-      // kept alive (re-upserted) every time this list loads, resolved on renew/close.
-      const today = todayISO();
-      const weekOut = addDays(today, 7);
-      for (const m of members) {
-        if (!m.student_id) continue;
-        if (m.end_date >= today && m.end_date <= weekOut) {
-          await createAlert(db, m.student_id, m.branch_id, "expiry", m.end_date,
-            `${m.student_name}'s membership expires on ${m.end_date} — remind them to renew.`);
-        }
-      }
+      // Renewal reminders for the final week. Once the 06:00 cron job is switched on
+      // (pssai_cron), it creates them instead and opening this list has no side effect.
+      if (!(await featureOn(db, "cron"))) await remindExpiringMembers(db, members);
 
       return json({ members });
     },

@@ -19,6 +19,7 @@
 ## Findings for the owner (not fixed — R1)
 
 - **F-1 Split payment mismatch (found in P0.6 tests).** If `record_payment` is called with a cash + UPI split that does not add up, it lowers the membership's due and raises its total paid first, then refuses the split with a 500 — so the membership is credited and no transaction is written. The staff app cannot send such a split (its forms check it first), so today it needs a hand-made API call. `add_locker`, `remove_locker`, `record_locker_payment`, `add_manual_payment`, `renew_locker` and `create_walkin` also check the split only when writing the transaction and may leave the same partial write (not checked one by one). Suggested fix, for the owner to approve: check the split before any write, as `create_membership` and `renew_membership` already do. This matters before agents (Phase 2) call payment actions.
+- **F-2 `fix_membership_dates` sees at most 1,000 memberships (found in P0.8).** It reads memberships with one plain select, and Supabase returns at most 1,000 rows per request by default, so with more memberships than that it checks only some of them. The integrity report pages through all of them, so its count can be higher than what one `fix_membership_dates` run fixes. Suggested fix, for the owner to approve: page through all rows, as the report does.
 
 ## How to use this file in a future chat
 
@@ -261,7 +262,7 @@ Acceptance:
 - [x] Two identical `record_payment` calls with the same key create one transaction row — `tests/server/idempotency_test.ts` I1 (also checkout and renewal, I6; double click, I5)
 - [x] Two calls with different keys behave as they do today — I2 (and calls without a key)
 
-## P0.7 Scheduler and the `cron` function (F3, closes G20)
+## P0.7 Scheduler and the `cron` function (F3, closes G20) ✅
 
 - Owner steps: enable the `pg_cron` and `pg_net` extensions in the Supabase dashboard; add the secret `CRON_SECRET`.
 - New edge function `supabase/functions/cron/index.ts`. Add `[functions.cron] verify_jwt = false` to `supabase/config.toml`. Reject any request without the correct `x-cron-secret` header. Jobs are registry actions with caller `system`:
@@ -272,11 +273,13 @@ Acceptance:
 - Put the schedules in `docs/ops/cron.sql` for the owner to run in the SQL editor. It is not a migration because it contains the project URL and secret. pg_cron uses UTC unless `cron.timezone` is set: expiry alerts at 06:00 IST = `30 0 * * *`; sign-up purge at 00:05 IST = `35 18 * * *`; key purge hourly; integrity report at 02:00 IST = `30 20 * * *`.
 - Read paths: when `app_settings.pssai_cron` is `on`, `list_active_memberships` skips its alert loop and sign-up reads skip `purgeExpiredSignups`. When it is `off`, behaviour is exactly as today.
 
-Acceptance:
-- [ ] Each job runs once when triggered manually with the secret, and is refused without it
-- [ ] With the flag on, opening the Members page creates no alerts; the 06:00 job does
+- *As built:* jobs live in `api/domains/system.ts` with callers `['system']`; the `api` router answers "Unknown action" for them, so only the `cron` function (secret checked in constant time; no secret set = every call refused) can run them. Each run goes through the same `runAction` as the api (`api/run.ts`) and writes an event with actor `system`. The alert loop moved unchanged into `remindExpiringMembers()` (lib.ts), used by both `list_active_memberships` (flag off) and `cron_expiry_alerts`. The flag is read by `featureOn()` (`_shared/flags.ts`). The sign-up purge is skipped only on the read (`list_signup_requests`); `public_signup_submit` keeps its purge, because resubmissions match on phone. `docs/ops/cron.sql` keeps the project URL and secret in Supabase Vault, so the schedules never contain the secret. Purges are tier T3 (records destroyed); the Appendix D T3 test now covers the actions people and agents can call.
 
-## P0.8 Nightly integrity report (F10, closes G19)
+Acceptance:
+- [x] Each job runs once when triggered manually with the secret, and is refused without it — `tests/server/cron_test.ts` C1, C2 (against the real handler). On Supabase: owner step 5 of the deploy order, then `SELECT pss_run_cron_job('cron_integrity_report')`.
+- [x] With the flag on, opening the Members page creates no alerts; the 06:00 job does — C3 (same reminders as the page made, no duplicates on a re-run, inactive branches skipped); sign-ups C4; key purge C5
+
+## P0.8 Nightly integrity report (F10, closes G19) ✅
 
 `cron_integrity_report` runs read-only checks and writes one `events` row with `action = 'integrity_report'` and the findings as its payload:
 
@@ -286,18 +289,20 @@ Acceptance:
 
 Add an owner/admin T0 action `get_integrity_report` that returns the latest report. On the Dashboard, show a card to owner and admin when the report has any findings.
 
-Acceptance:
-- [ ] On a staging copy, the counts match what the `fix_*` actions would change
-- [ ] The Dashboard card appears only for owner and admin
+- *As built:* the report stores ids, dates and amounts only (no names or phone numbers), lists at most 100 rows per check and always the full counts. `get_integrity_report` returns the latest report. The card (`src/components/IntegrityReportCard.jsx`) shows on the branch Dashboard and on Combined Hall, only when a count is above zero.
 
-## P0.9 Declare permission tiers (A8, part 1)
+Acceptance:
+- [ ] On a staging copy, the counts match what the `fix_*` actions would change — matches in `cron_test.ts` I2 (counts equal what `fix_membership_dates` and `fix_negative_food_pass_balances` then change, and the next report is clean); the staging-copy check waits for deploy. See F-2.
+- [x] The Dashboard card appears only for owner and admin — browser QA (mocked api): shows for owner with findings, on Combined Hall and at 390 px with no sideways scroll; hidden when clean or before the first report; staff never request it
+
+## P0.9 Declare permission tiers (A8, part 1) ✅
 
 - Give every registry action a tier using the rules in **Appendix D**.
 - In Phase 0 tiers are only declared and written to `events.tier`. Staff and owner access still uses today's checks. Enforcement for `agent` and `student` callers starts in Phase 2.
 
 Acceptance:
-- [ ] A test fails if any registry entry has no tier
-- [ ] The T3 set equals the explicit list in Appendix D
+- [x] A test fails if any registry entry has no tier — `tests/registry/registry.test.ts`; every event row carries the action's tier (P0.5)
+- [x] The T3 set equals the explicit list in Appendix D — same file (for actions people and agents can call; the two system purges are also T3)
 
 ## P0.10 Pre-deploy check (F9, closes G39)
 

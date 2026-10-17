@@ -39,6 +39,7 @@ const STAFF: Caller[] = ["staff", "owner", "admin"];
 const OWNER: Caller[] = ["owner", "admin"];
 const ADMIN: Caller[] = ["admin"];
 const PUBLIC: Caller[] = ["public"];
+const SYSTEM: Caller[] = ["system"]; // scheduled jobs: cron function only (P0.7)
 
 // name, tier, callers, mutating, idempotent
 export const ACTION_META: ActionMeta[] = ([
@@ -68,6 +69,10 @@ export const ACTION_META: ActionMeta[] = ([
   ["create_staff", "T3", OWNER, true, false],
   ["create_task", "T1", STAFF, true, false],
   ["create_walkin", "T2", STAFF, true, false],
+  ["cron_expiry_alerts", "T1", SYSTEM, true, true],
+  ["cron_integrity_report", "T0", SYSTEM, false, true],
+  ["cron_purge_idempotency", "T3", SYSTEM, true, true],
+  ["cron_purge_signups", "T3", SYSTEM, true, true],
   ["delete_enquiries", "T3", STAFF, true, false],
   ["delete_membership", "T3", STAFF, true, false],
   ["deny_signup_request", "T1", STAFF, true, false],
@@ -82,6 +87,7 @@ export const ACTION_META: ActionMeta[] = ([
   ["get_dashboard", "T0", STAFF, false, true],
   ["get_discounts_waivers", "T0", STAFF, false, true],
   ["get_food_pass", "T0", STAFF, false, true],
+  ["get_integrity_report", "T0", OWNER, false, true],
   ["get_locker_removal_summary", "T0", STAFF, false, true],
   ["get_locker_status", "T0", STAFF, false, true],
   ["get_membership_closure_summary", "T0", STAFF, false, true],

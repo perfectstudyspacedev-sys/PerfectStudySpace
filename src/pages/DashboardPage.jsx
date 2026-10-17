@@ -4,6 +4,7 @@ import { useAuth } from '../context/AuthContext'
 import { api } from '../lib/api'
 import { nowTimeStr, localTimeStrToISO, formatCurrency, formatDate, todayISO } from '../lib/utils'
 import WalkInModal from '../components/WalkInModal'
+import IntegrityReportCard from '../components/IntegrityReportCard'
 
 // Every branch that appears in either list, even one with pending payments but nothing
 // expiring (or vice versa) — so that branch's card still shows up with a clear "none" for
@@ -71,6 +72,7 @@ function CombinedDashboard() {
     <>
       <div className="page-header"><h1>Combined Hall</h1></div>
       {error && <p className="error-msg" style={{ marginBottom: '1rem' }}>{error}</p>}
+      <IntegrityReportCard />
 
       {hall && (
         <>
@@ -591,6 +593,8 @@ export default function DashboardPage() {
           ✓ Attendance
         </button>
       </div>
+
+      <IntegrityReportCard />
 
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(300px, 1fr))', gap: '1rem', marginBottom: '1.5rem' }}>
         <div className="card">

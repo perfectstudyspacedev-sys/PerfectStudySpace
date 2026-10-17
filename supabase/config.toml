@@ -10,3 +10,8 @@ project_id = "ozatixapvxwrwbpdxuzt"
 # the edge.
 [functions.api]
 verify_jwt = false
+
+# PSS-AI P0.7: called only by pg_cron through pg_net, which sends no Supabase JWT. The function
+# refuses every request without the correct x-cron-secret header (the CRON_SECRET secret).
+[functions.cron]
+verify_jwt = false
