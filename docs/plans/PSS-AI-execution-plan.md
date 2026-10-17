@@ -355,7 +355,7 @@ Acceptance:
 Acceptance:
 - [x] One rating per booking at most; Skip leaves no row; walk-ins never see the prompt — `tests/server/insights_test.ts` (P1.1 checks), primary key checked on Postgres (PGlite), browser QA (prompt after a member checkout, rating 4 sent once, Skip sends nothing, no prompt for walk-ins or with the switch off)
 
-## P1.2 ML workspace (`ml/`)
+## P1.2 ML workspace (`ml/`) ✅
 
 - A Python project managed with uv (`ml/pyproject.toml`), using pandas, scikit-learn and lifelines, with pytest and ruff (both already allowed in `.claude/settings.json`).
 - `ml/export.py` reads with the Supabase service key from `ml/.env`. That file is gitignored and never committed (`.claude/settings.json` already denies reading `.env`). Export `bookings`, `memberships`, `transactions`, `focus_ratings`, `waivers` and `cashbacks` to `ml/data/` (gitignored) as Parquet.
@@ -364,6 +364,7 @@ Acceptance:
   - per membership: plan, `months_paid`, tenure, holds, days since last visit, past renewal kinds (early, grace, late), dues
 - `ml/publish.py` upserts results into the tables from P1.3.
 - Add `ml/.env` and `ml/data/` to `.gitignore`.
+- *As built:* package `ml/pss_ml/` (export, features, fingerprint, churn, anomaly, forecast, publish, `cli.py`: `uv run pss-ml export | run [--publish]`), standard-library PostgREST client that pages past the 1,000-row cap. Exports also `students` (ids, branch, status), `staff` (display names), `branches`, `membership_discounts`, `membership_holds`, `food_bills` (no names/phones), `overtime_sessions` and the `events` rows of manual attendance edits and overtime exclusions; the export refuses any personal column. `ml/.gitignore` keeps `.env`, `data/`, `out/` and `.venv/` out of git; the example env file is `ml/env.example` (the root `.gitignore` hides `.env.*`). `pss_ml/synthetic.py` makes a hall with planted signals so everything runs and is tested without real data: `uv run pytest` (18 tests) and `uv run ruff check .` pass. Steps for the owner/developer: `ml/README.md`.
 
 ## P1.3 Model output tables — migration 056
 
@@ -385,9 +386,11 @@ New T0 reads (owner and admin): `get_student_scores`, `list_anomaly_flags`, `get
 - Version 2, only if version 1 holds up: a small GRU encoder trained to predict the next day's minutes, with its hidden state used as the vector.
 - Write `fingerprints` rows. The owner reviews the clusters and gives each one a plain-language label.
 
+- *As built:* `pss_ml/fingerprint.py`; k from 3 to 6 by silhouette; each cluster gets a plain description from its centre (e.g. "C2 · high focus, comes most days") and `ml/reports/clusters-<date>.md` lists them for the owner, who renames them with `--labels`. A member with no visits in the window gets "new or away". Version 2 (GRU) not built — only if version 1 holds up.
+
 Acceptance:
-- [ ] Every active member has a fingerprint and a cluster
-- [ ] Cluster labels are approved by the owner
+- [x] Every active member has a fingerprint and a cluster — `ml/tests/test_models.py` (synthetic data); on real data at the first `pss-ml run --publish`
+- [ ] Cluster labels are approved by the owner — waits for the first real run
 
 ## P1.5 Churn model (I2)
 
@@ -397,24 +400,29 @@ Acceptance:
 - Reason codes come from the top contributing feature group: `attendance_drop`, `dues`, `short_tenure`, `holds`, `late_payer`, `other`.
 - Validation is time-based: train on older months, test on the most recent two to three months. Report the concordance index and the hit rate at the owner's weekly contact budget (for example the top 20 per branch), compared with the baseline "everyone expiring in the next 7 days".
 
-Acceptance:
-- [ ] A validation report in `ml/reports/churn-<date>.md` shows the model beating the 7-day baseline at the same contact budget
-- [ ] Scores and reasons for every active member are in `student_scores`
+- *As built:* `pss_ml/churn.py`. Training rows are taken 7, 14, 21 and 28 days before the end date (days-to-end is a feature) so members can be scored on any day of their last four weeks; the headline concordance is at 21 days. Concordance is reported as AUC (equal to the c-index for a yes/no outcome). Budget comparison, per branch per week: the model contacts its top N of members ending in the next 28 days; the baseline contacts N members expiring in the next 7 days, soonest first; hit rate = contacted who then churned, churners counted once. Reasons are given only to members at 0.3 risk or more ("other" below). Too little history → the report says "Not scored" and nothing is published. On the synthetic hall: Cox 0.95, gradient boosting 0.98, hit rate 85% vs 40% at a budget of 8.
 
-## P1.6 Anomaly detector (I23) and discount confirm (closes G14, G15)
+Acceptance:
+- [ ] A validation report in `ml/reports/churn-<date>.md` shows the model beating the 7-day baseline at the same contact budget — the report is produced and the comparison is tested on synthetic data; the real report waits for the first export
+- [ ] Scores and reasons for every active member are in `student_scores` — written by `pss-ml run --publish` (tested against a fake PostgREST); waits for the first real run
+
+## P1.6 Anomaly detector (I23) and discount confirm (closes G14, G15) ✅ (built; gate below)
 
 - Inputs: waivers, discounts and cashbacks, manual attendance edits (`add_attendance` / `update_attendance` events) and overtime exclusions (`set_overtime_excluded`).
 - Method: baselines per staff member and per branch; robust z-scores or Isolation Forest; flag the top N per week. Explanations come from a fixed template, not from a language model.
 - Owner page "Flags" (OwnerRoute) lists open flags; the owner marks each one ok or problem.
 - G14: the server already rejects percentages over 100; keep that. Add a confirm dialog in the discount and cashback forms when a flat amount is above the fee due or above `app_settings.pssai_discount_confirm_over` (default ₹1,000).
 
-Acceptance:
-- [ ] The owner reviews two weeks of flags and agrees the false-alarm rate is acceptable
+- *As built:* `ml/pss_ml/anomaly.py` scores each record against the staff member's, the branch's and (when those have fewer than 5 records) all records' medians — leave-one-out robust z-score with a floor of 25% of the median on the spread, so a tight history does not turn small changes into alarms. Fixed cashbacks only (a percent has no amount until used). Event rows have numeric ids, so their flags use a stable uuid5 of the event id as `ref_id`. On three synthetic seeds it flags exactly the six planted records and nothing else. Owner page: `src/pages/FlagsPage.jsx` ("It's fine" / "Problem"), link shown to owner/admin when `pssai_anomaly` is on. G14/G15: the confirm shows for a discount whose rupee amount is above `pssai_discount_confirm_over` (default ₹1,000, percent discounts included) or a flat discount above the fee due, and for a fixed cashback above the threshold. The confirm is always on (a safety check, not a feature); raising the threshold relaxes it.
 
-## P1.7 Cash-flow forecast (I31) and engagement score (closes G35, G36)
+Acceptance:
+- [ ] The owner reviews two weeks of flags and agrees the false-alarm rate is acceptable — waits for real data
+
+## P1.7 Cash-flow forecast (I31) and engagement score (closes G35, G36) ✅
 
 - I31: expected income per week for the next 60 days = for each active membership, renewal amount × (1 − churn score) on its expected renewal date, plus dues × a collection rate learned from history. Write weekly rows to `forecasts` with low and high bands.
 - Engagement score: new T0 action `get_engagement_ranking` built from fingerprints and churn scores. Keep `get_top_students` until the UI switches over.
+- *As built:* `ml/pss_ml/forecast.py`. Members without a churn score count at 30% risk; dues are spread over the next two weeks at the collection rate of memberships that ended in the last 180 days; other income is the average of the last 8 weeks. 90% band from the variance of each renewal (and of the weekly other income). Engagement = 0.3 use of booked hours + 0.3 visit days (6 a week = 1) + 0.15 focus + 0.25 (1 − churn score), with a short reason when under 0.5; published as `student_scores` model `engagement`, read by `get_engagement_ranking` (owner/admin, with the cluster). No screen shows the forecast or the ranking yet — the owner analyst (P1.8) and a later UI read them.
 
 ## P1.8 Owner analyst (A6, closes G34) — new `agent` edge function
 

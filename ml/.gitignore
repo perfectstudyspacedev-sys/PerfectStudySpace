@@ -1,0 +1,9 @@
+# Secrets: the Supabase service key lives here and is never committed.
+.env
+# Exported data and run outputs (personal data — never committed).
+data/
+out/
+.venv/
+__pycache__/
+.pytest_cache/
+.ruff_cache/
