@@ -1,5 +1,10 @@
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2.49.1";
 import { SignJWT, jwtVerify } from "https://esm.sh/jose@5";
+import { IST_OFFSET_MS, todayISO, toISTDateStr, istInstant, istDayStart, istDayEnd, addMonths, addDays, daysBetween, endDateForMonths } from "../_shared/dates.ts";
+import { membershipTotalDays, MEMBERSHIP_GRACE_DAYS, notStartedYetMessage, renewalKind, multiMonthDiscount, unusedDaysRefund, computeStudentStatus } from "../_shared/membership.ts";
+import { OVERTIME_GRACE_MINUTES, computeOvertimeCharge } from "../_shared/overtime.ts";
+import { type SettlementOwed, settlementIncomeRows } from "../_shared/settlement.ts";
+import { overstayFromLastVisit } from "../_shared/overstay.ts";
 
 // CORS (P0.1): only these websites may call the api from a browser. The ALLOWED_ORIGINS secret
 // (comma-separated) replaces the built-in list. The public website is on it because its enquiry
@@ -169,48 +174,6 @@ async function getOwnerStaffIds(db: ReturnType<typeof adminClient>): Promise<str
 // return type. Never applied to the admin's own login/session lookup in authStaff, which has
 // to find the row to authenticate it in the first place.
 
-// The edge function runs on UTC infrastructure with no "local" timezone, but the app is
-// used in India — so "today" must be computed in IST (UTC+5:30), not the server's UTC
-// date. Without this shift, the calendar day would flip 5.5 hours early (at UTC midnight,
-// i.e. 5:30 AM IST) instead of at actual IST midnight, throwing off attendance, "due
-// today" checks, daily reports, and the End Session day-lockout.
-const IST_OFFSET_MS = 5.5 * 60 * 60 * 1000;
-function todayISO() { return new Date(Date.now() + IST_OFFSET_MS).toISOString().slice(0, 10); }
-// Same IST shift as todayISO(), but for an arbitrary timestamp (e.g. a stored paused_at)
-// instead of "now" — needed to compare calendar dates rather than raw elapsed hours.
-function toISTDateStr(isoTimestamp: string) { return new Date(new Date(isoTimestamp).getTime() + IST_OFFSET_MS).toISOString().slice(0, 10); }
-
-// Start/end instants of an IST calendar date, for filtering UTC-stored timestamptz columns
-// (created_at, redeemed_at, …) by an IST day. Returned as a plain "…Z" UTC instant (the IST
-// boundary converted to its true UTC moment — e.g. IST midnight is the prior day 18:30 UTC),
-// deliberately with no fractional seconds and no "+" offset so the value is byte-for-byte the
-// same shape PostgREST already accepted here — safe to embed in .gte()/.lte() and inside an
-// .or() filter string alike. Previously these ranges used a literal "…T00:00:00Z", which is
-// actually 05:30 IST, so any row between IST midnight and 05:30 was counted on the wrong day.
-function istInstant(dateStr: string, istClock: string) {
-  return new Date(`${dateStr}T${istClock}+05:30`).toISOString().replace(/\.\d{3}Z$/, "Z");
-}
-function istDayStart(dateStr: string) { return istInstant(dateStr, "00:00:00"); }
-// Inclusive end of the IST day at Postgres's full microsecond precision. A bare "…:59Z"
-// left out anything stamped inside the day's final second (23:59:59.4 IST, say) from every
-// <= range — dropped from that day's revenue and reports without a trace. No "+" is added,
-// so the value stays safe inside .or() filter strings; JS Date parsing truncates it to .999.
-function istDayEnd(dateStr: string) { return istInstant(dateStr, "23:59:59").replace(/Z$/, ".999999Z"); }
-
-// Pure UTC calendar arithmetic — "dateStr + T12:00:00" (no timezone designator) is parsed
-// as *local* time by the JS Date constructor, and if the runtime's local timezone doesn't
-// happen to be UTC, that silently shifts the result by a day. Using Date.UTC directly and
-// getUTCDate/etc. sidesteps that ambiguity entirely, so a start date always advances by
-// exactly N months (clamped to the last day of the target month on overflow, e.g. Jan 31 +
-// 1 month -> Feb 28/29, not a roll into March).
-function addMonths(dateStr: string, months: number): string {
-  const [y, m, d] = dateStr.split("-").map(Number);
-  const date = new Date(Date.UTC(y, m - 1, d));
-  date.setUTCMonth(date.getUTCMonth() + months);
-  if (date.getUTCDate() !== d) date.setUTCDate(0);
-  return date.toISOString().slice(0, 10);
-}
-
 // Hopes branch lockers aren't numbered 1..capacity — the physical units are labeled
 // 1-10, then 25-46, then 63-75 (45 lockers total), so the assignable numbers must
 // follow those gaps instead of a plain sequential range.
@@ -229,54 +192,6 @@ function lockerNumberSequence(branchName: string | undefined | null, capacity: n
   return numbers;
 }
 
-function addDays(dateStr: string, days: number): string {
-  const [y, m, d] = dateStr.split("-").map(Number);
-  const date = new Date(Date.UTC(y, m - 1, d));
-  date.setUTCDate(date.getUTCDate() + days);
-  return date.toISOString().slice(0, 10);
-}
-
-function daysBetween(fromDateStr: string, toDateStr: string): number {
-  return Math.floor((new Date(toDateStr + "T12:00:00").getTime() - new Date(fromDateStr + "T12:00:00").getTime()) / 86_400_000);
-}
-
-// The membership's committed length in days, used to derive a fair per-day rate for
-// prorated refunds (Delete Membership) and overstay charges (Quit/Delete Membership).
-// Primarily start_date→end_date, but floored at months_paid * 30 — Manage Plan lets staff
-// hand-edit end_date to any date independent of start_date/monthly_fee/months_paid (e.g.
-// shortening a plan), and without this floor a heavily-shortened end_date collapses
-// totalDays down to as little as 1, which turns "grossFee ÷ totalDays" into "grossFee ÷ 1"
-// and inflates a single overstay/unused day into the value of the entire remaining plan.
-function membershipTotalDays(mem: { start_date: string; end_date: string; months_paid: number }): number {
-  const dateBased = Math.round(
-    (new Date(mem.end_date + "T00:00:00Z").getTime() - new Date(mem.start_date + "T00:00:00Z").getTime()) / 86_400_000,
-  );
-  return Math.max(1, dateBased, Number(mem.months_paid) * 30);
-}
-
-// How many days past end_date a membership is still allowed to check in / renew as a
-// continuation rather than being treated as a fresh restart. Shared by the check-in gate
-// (blocks check-in once past grace) and renew_membership's startDate calc (below) — both
-// must agree on the same window, or a renewal inside grace could compute a start date the
-// check-in gate would then treat as still-expired.
-const MEMBERSHIP_GRACE_DAYS = 10;
-
-// RSP R2 — which kind of renewal this is, decided only from the current plan's last day:
-// "early" up to and including the end date, "grace" within MEMBERSHIP_GRACE_DAYS after it
-// (the student can still check in then), "late" after that. Staff never pick the type.
-// RSP R5: between an early renewal and its start date the membership hasn't begun yet, so the
-// refund / plan / closing maths for it don't apply. Those actions are blocked with a pointer to
-// Cancel Early Renewal (which restores the previous membership) instead of new special cases.
-function notStartedYetMessage(mem: { start_date: string }, what: string): string | null {
-  if (mem.start_date <= todayISO()) return null;
-  return `This membership was renewed early and only starts on ${mem.start_date}. Cancel the early renewal first, then ${what}.`;
-}
-
-function renewalKind(endDate: string, today: string): "early" | "grace" | "late" {
-  if (today <= endDate) return "early";
-  return daysBetween(endDate, today) <= MEMBERSHIP_GRACE_DAYS ? "grace" : "late";
-}
-
 // Fallback only — used if the app_settings row is ever missing (e.g. a fresh DB before the
 // seed insert ran). The row from migration 048 is the actual source of truth once it exists.
 const DEFAULT_WELCOME_TEMPLATE = `Hi {name}, welcome to Perfect Study Space! 🎉
@@ -287,24 +202,6 @@ Thanks for joining us — we're excited to have you with us. Please take a momen
 https://docs.google.com/forms/d/e/1FAIpQLSeolzoVIDAsOq35SZ0MbsJb1qBrBcInBG4VER6As5yc8A0oEA/viewform?usp=header
 
 If you have any questions, feel free to reach out anytime. We're happy to help! 😊`;
-
-// A membership's end date is billing-cycle style: one day short of the same day N months
-// out, so the period ends the day before it would "restart" on and grace begins on that
-// restart day — e.g. start Aug 20, 1 month ends Sep 19, grace begins Sep 20 (not Sep 20
-// itself as the end date). Starting on the 1st is the case that makes this legible — 1
-// month from the 1st ends the last day of that same month, not the 1st of the next one.
-//
-// Starting on the 29th/30th/31st needs special care: addMonths() clamps to the target
-// month's last day when that day-of-month doesn't exist there (e.g. Jan 31 + 1 month ->
-// Feb 28). That clamped value is already the correct end date — subtracting one more day
-// would double-truncate the period by a day it shouldn't lose. Only subtract when
-// addMonths preserved the exact day-of-month (i.e. no clamping happened).
-function endDateForMonths(startDate: string, months: number): string {
-  const startDay = Number(startDate.split("-")[2]);
-  const target = addMonths(startDate, months);
-  const targetDay = Number(target.split("-")[2]);
-  return targetDay === startDay ? addDays(target, -1) : target;
-}
 
 // A recurring task's "anchor" is its due_date (or, failing that, the day it was created).
 // daily tasks are due every day from the anchor onward; weekly/monthly repeat on the
@@ -319,36 +216,6 @@ function isTaskDueOn(task: { repeat_interval: string; due_date: string | null; c
   if (task.repeat_interval === "weekly") return anchorDate.getDay() === target.getDay();
   if (task.repeat_interval === "monthly") return anchorDate.getDate() === target.getDate();
   return false;
-}
-
-function multiMonthDiscount(months: number): number {
-  if (months >= 6) return 15;
-  if (months >= 3) return 10;
-  if (months >= 2) return 5;
-  return 0;
-}
-
-const OVERTIME_GRACE_MINUTES = 15;
-
-// Overtime is billed in whole-hour blocks after the grace period, flat-rate — not prorated
-// per minute against whatever the person's own hourly rate happens to be. Any overshoot past
-// grace immediately bills a full hour block; going further into a second block bills another
-// full hour, and so on. A walk-in whose *original* booking was exactly 3 hours gets a
-// discounted first overtime hour (hour 4, ₹5 instead of ₹10) as a one-off special case — every
-// other hour, for anyone (walk-in or member), is a flat ₹10. Once total hours used for this
-// visit (booked/allotted hours + overtime hours) reaches 10, the total cost for the visit is
-// capped at a flat ₹100 rather than continuing to add up — computed once, at checkout, per
-// visit (never re-aggregated across separate days/sessions).
-function computeOvertimeCharge(overtimeMinutes: number, bookedHours: number, baseFee: number, isWalkinThreeHour: boolean) {
-  const overtimeHours = Math.ceil(Math.max(0, overtimeMinutes - OVERTIME_GRACE_MINUTES) / 60);
-  let addOn = 0;
-  for (let h = 1; h <= overtimeHours; h++) {
-    addOn += isWalkinThreeHour && h === 1 ? 5 : 10;
-  }
-  const totalHours = bookedHours + overtimeHours;
-  const totalCost = totalHours >= 10 ? 100 : baseFee + addOn;
-  const overtimeCharge = Math.max(totalCost - baseFee, 0);
-  return { overtimeHours, overtimeCharge, totalCost };
 }
 
 function dateRange(period: string, dateFrom?: string, dateTo?: string) {
@@ -486,37 +353,6 @@ async function upsertStudent(db: ReturnType<typeof adminClient>, name: string, p
 }
 
 
-// The single source of truth for what a student's status *is*, given their current
-// membership and locker. Deliberately pure and date-driven: the stored students.status
-// column only changes when some event calls refreshStudentStatus(), so a membership that
-// merely lapses overnight (nobody pays, renews or checks in) would otherwise keep reading
-// "Active" forever — which is exactly how 42 lapsed students came to look settled. Anything
-// displaying a status derives it through here against today's date rather than trusting
-// the stored value, so it can never go stale again.
-function computeStudentStatus(
-  mem: { fee_due: number; end_date: string } | null | undefined,
-  locker: { locker_due_date: string | null; fee_due?: number | null } | null | undefined,
-  today: string,
-) {
-  // Locker money counts the same with or without a membership: rent past its due date, or
-  // an unpaid (Pay Later) rent/deposit balance, means the student still owes the branch.
-  const lockerOwes = !!locker && (
-    (!!locker.locker_due_date && locker.locker_due_date < today) || Number(locker.fee_due ?? 0) > 0
-  );
-  // No membership: a walk-in (or ex-member) still holding a locker is a current customer,
-  // not "inactive" — otherwise they vanish from the default Students list with the locker
-  // (and its deposit) forgotten. Only no membership AND no locker is truly inactive.
-  if (!mem) return locker ? (lockerOwes ? "pending" : "active") : "inactive";
-  // Pending = owes money, or the paid period has run out and needs renewing. Deliberately
-  // not due_date: it's set one month after the start however many months were paid, so a
-  // student who paid 3 months upfront read as Pending from month 2 with nothing owed.
-  if (Number(mem.fee_due) > 0 || mem.end_date < today) return "pending";
-  // An otherwise-active membership still reads as Pending while locker money is owed — a
-  // student shouldn't look fully settled while they owe locker rent.
-  if (lockerOwes) return "pending";
-  return "active";
-}
-
 async function refreshStudentStatus(db: ReturnType<typeof adminClient>, studentId: string) {
   const today = todayISO();
   const { data: mem } = await db.from("memberships").select("*")
@@ -636,54 +472,6 @@ async function recordPayout(db: ReturnType<typeof adminClient>, row: Record<stri
   }
 }
 
-// Income side of a membership close/delete settlement. Everything the student owed is
-// settled at that moment — the positive net (if any) in cash/UPI, and the rest by netting it
-// against the credits owed back to them (deposit, Food Pass balance, cashback, unused-days
-// refund) — while each of those credits is logged in full as its own payout. Recording only
-// the net as income took the credits off Net Revenue twice (once inside the net, then again
-// as payouts) and, when the net favoured the student, dropped the dues they settled from
-// revenue altogether. The netted part goes in as payment mode "other", since no cash or UPI
-// moved for it, so the payment-channel split still matches what reached the drawer.
-// Each owed line is recorded under its own category (membership / locker / food / overtime)
-// so the Revenue breakdown shows, say, overtime as overtime; the cash collected is applied
-// to the lines in that order and whatever it doesn't cover was settled by the netting.
-type SettlementOwed = {
-  netAmount: number; membershipDue: number; overstayCharge: number; overstayDays: number;
-  lockerDue: number; foodPassOwed: number; unpaidFoodTotal: number; overtimeDue: number;
-};
-function settlementIncomeRows(s: SettlementOwed, paymentMode: string | undefined, label: string) {
-  const r2 = (n: number) => Math.round(n * 100) / 100;
-  const lines = [
-    { category: "membership", amount: s.membershipDue + s.overstayCharge, what: [
-      s.membershipDue > 0 && `membership due ₹${r2(s.membershipDue)}`,
-      s.overstayCharge > 0 && `₹${r2(s.overstayCharge)} for ${s.overstayDays} day(s) used after expiry`,
-    ] },
-    { category: "locker", amount: s.lockerDue, what: [`locker rent ₹${r2(s.lockerDue)}`] },
-    { category: "food", amount: s.foodPassOwed + s.unpaidFoodTotal, what: [
-      s.unpaidFoodTotal > 0 && `unpaid food bills ₹${r2(s.unpaidFoodTotal)}`,
-      s.foodPassOwed > 0 && `Food Pass deficit ₹${r2(s.foodPassOwed)}`,
-    ] },
-    { category: "overtime", amount: s.overtimeDue, what: [`overtime ₹${r2(s.overtimeDue)}`] },
-  ];
-  let cashLeft = r2(Math.max(s.netAmount, 0));
-  const rows: { category: string; amount: number; payment_mode: string; notes: string }[] = [];
-  for (const line of lines) {
-    const amount = r2(line.amount);
-    if (!(amount > 0)) continue;
-    const what = line.what.filter(Boolean).join(", ");
-    const paid = r2(Math.min(cashLeft, amount));
-    const offset = r2(amount - paid);
-    cashLeft = r2(cashLeft - paid);
-    if (paid > 0) {
-      rows.push({ category: line.category, amount: paid, payment_mode: paymentMode ?? "cash", notes: `Final settlement at ${label} (${what})` });
-    }
-    if (offset > 0) {
-      rows.push({ category: line.category, amount: offset, payment_mode: "other", notes: `Settled against refunds owed to the student at ${label} — no cash changed hands (${what})` });
-    }
-  }
-  return rows;
-}
-
 async function recordSettlementIncome(
   db: ReturnType<typeof adminClient>,
   base: { student_id: string; branch_id: string; membership_id: string; created_by_staff_id: string },
@@ -700,43 +488,17 @@ async function recordSettlementIncome(
 // MEMBERSHIP_GRACE_DAYS grace is over, so this naturally stops at 10 days — capped here as well.
 // It used to charge every day since expiry, even weeks after the student could no longer get in.
 // Rate is the plan's normal daily rate, monthly fee ÷ 30.
+// The maths is overstayFromLastVisit (_shared/overstay.ts); this only looks up the last visit.
 async function computeOverstay(db: ReturnType<typeof adminClient>, mem: { student_id: string; end_date: string; monthly_fee: number }) {
-  const dailyRate = Number(mem.monthly_fee) / 30;
-  const none = { overstayDays: 0, overstayCharge: 0, lastVisitDate: null as string | null, overstayDailyRate: Math.round(dailyRate * 100) / 100 };
-  if (mem.end_date >= todayISO()) return none;
+  const today = todayISO();
+  if (mem.end_date >= today) return overstayFromLastVisit(mem, null, today);
   const { data, error } = await db.from("bookings").select("start_time")
     .eq("student_id", mem.student_id).neq("booking_type", "walkin").neq("status", "cancelled")
     .gte("start_time", istDayStart(addDays(mem.end_date, 1)))
     .order("start_time", { ascending: false }).limit(1);
   if (error) throw new Error(error.message);
   const lastVisitDate = data?.[0] ? toISTDateStr(data[0].start_time) : null;
-  if (!lastVisitDate) return none;
-  const overstayDays = Math.min(Math.max(daysBetween(mem.end_date, lastVisitDate), 0), MEMBERSHIP_GRACE_DAYS);
-  return { ...none, overstayDays, overstayCharge: Math.round(dailyRate * overstayDays), lastVisitDate };
-}
-
-// RSP D1–D3 — refund for the unused days of a deleted membership, at the rate the student actually
-// paid for the plan: plan price AFTER the multi-month discount ÷ plan days (the owner's choice;
-// it used to use the undiscounted price, refunding more per day than the student had paid).
-// plan_amount/plan_days are stored since migration 050; older rows fall back to the best estimate.
-// Unused days count from today, or from the start date if the period hasn't begun yet. Holds push
-// end_date out without adding paid days, so days-to-end are exactly the unused paid days.
-function unusedDaysRefund(
-  mem: { start_date: string; end_date: string; months_paid: number; monthly_fee: number; discount_percent?: number | null; plan_amount?: number | null; plan_days?: number | null; total_paid: number; fee_due?: number | null },
-  today: string, waive: boolean,
-) {
-  const planAmount = mem.plan_amount != null
-    ? Number(mem.plan_amount)
-    : Number(mem.monthly_fee) * Number(mem.months_paid) * (1 - Number(mem.discount_percent ?? 0) / 100);
-  const planDays = mem.plan_days != null && Number(mem.plan_days) > 0 ? Number(mem.plan_days) : membershipTotalDays(mem);
-  const refDate = mem.start_date > today ? addDays(mem.start_date, -1) : today;
-  const remainingDays = Math.max(0, Math.round(
-    (new Date(mem.end_date + "T00:00:00Z").getTime() - new Date(refDate + "T00:00:00Z").getTime()) / 86_400_000,
-  ));
-  const refundDailyRate = planAmount / planDays;
-  const raw = waive ? 0 : refundDailyRate * remainingDays;
-  const proratedRefund = Math.round(Math.max(0, Math.min(raw, Number(mem.total_paid) + Number(mem.fee_due ?? 0))));
-  return { proratedRefund, remainingDays, totalDays: planDays, planAmount: Math.round(planAmount * 100) / 100, refundDailyRate: Math.round(refundDailyRate * 100) / 100 };
+  return overstayFromLastVisit(mem, lastVisitDate, today);
 }
 
 // Food bills a student ran up without paying (no Food Pass, or more than the pass held).

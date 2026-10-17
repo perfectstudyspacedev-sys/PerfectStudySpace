@@ -133,7 +133,7 @@ Owner steps: set the `ALLOWED_ORIGINS` secret (optional: the code has the same l
 
 Behaviour changed by `DEV_MODE = false` (listed as P0.1 asks): (1) `join_permanent_waitlist` is refused while the branch has free permanent seats ("Permanent seats are still available — register directly instead of waitlisting"); (2) the Students spreadsheet view is owner/admin only again (`StudentsPage`), and the Membership page's waitlist tab follows the "branch is full" rule. The golden master shows (1) as the only server-side change.
 
-## P0.2 Move pure helpers to `_shared` (F1, part a)
+## ✅ P0.2 Move pure helpers to `_shared` (F1, part a)
 
 - Create `supabase/functions/_shared/` (Supabase's folder for code shared between functions).
 - Move these functions **without changing a line of their logic**:
@@ -147,9 +147,9 @@ Behaviour changed by `DEV_MODE = false` (listed as P0.1 asks): (1) `join_permane
 - `index.ts` imports them back.
 
 Acceptance:
-- [ ] `index.ts` no longer defines the moved functions
-- [ ] `supabase functions serve api` starts locally; login, one check-in and one checkout with overtime work (browser QA)
-- [ ] The diff of each moved function body is whitespace-only (reviewer checks; `overstayFromLastVisit` is the one allowed split)
+- [x] `index.ts` no longer defines the moved functions
+- [x] Login, check-in and checkout with overtime give identical results before and after (golden master, `tests/server`); `supabase functions serve` itself still to be run on a machine with the Supabase CLI
+- [x] The diff of each moved function body is whitespace-only (checked by script: byte-identical apart from `export`; `overstayFromLastVisit` is the one allowed split)
 
 ## P0.3 Money regression tests (F5, closes G21) — needs D0
 
