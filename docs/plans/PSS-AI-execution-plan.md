@@ -2,7 +2,7 @@
 
 | | |
 |---|---|
-| **Status** | Phase 0 built on branch `pss-ai/p0-foundation` (P0.1–P0.10 ✅); its exit gate waits for the owner's deploy. Phase 1 being built on `pss-ai/p1-data-brain` (on top of Phase 0; not to be merged before Phase 0 is live); P1.8 waits for D3. Phases 2–6 not started. |
+| **Status** | All work is on the single branch `pss-ai/all-phases`. Phase 0 built (P0.1–P0.10 ✅); its exit gate waits for the owner's deploy. Phase 1 built except P1.8, which waits for D3; every Phase 1 feature is switched off. Phases 2–6 not started. |
 | **Agreed on** | 2026-10-13 |
 | **Execution order** | P0 → P1 → P2 → P3 → P4 → P5 → P6. A phase starts only after the owner ticks the previous phase's exit gate. |
 | **Verified against** | `main` at commit `cb7beeb` (RSP + SSP merged, PR #2) |
@@ -18,7 +18,7 @@
 
 ## Independent review of Phase 0 (2026-10-17)
 
-A read-only staff-level reviewer read the whole branch. Fixed on `pss-ai/p0-foundation`:
+A read-only staff-level reviewer read the whole branch. Fixed (first on `pss-ai/p0-foundation`; included in `pss-ai/all-phases`):
 
 | # | Finding | Fix |
 |---|---|---|
@@ -47,7 +47,7 @@ Checked and found sound by the reviewer: the router behaves as before, money hel
 - Say **"Build Phase 0"**, **"Build P0.4"**, or **"Build P2 portal R1"**. Refer to items by label, for example *"In P2 skip I27"*.
 - Before writing any code, read this whole file, `CLAUDE.md` and everything in `.claude/rules/`.
 - **Settled decisions** must not be re-decided. **Open decisions** (D0 to D10): if the phase you are building needs one that is still open, stop and ask the owner. Never guess.
-- One branch per phase: `pss-ai/p0-foundation`, `pss-ai/p1-data-brain`, `pss-ai/p2-portal-agents`, and so on.
+- **One branch for every phase: `pss-ai/all-phases`** (owner decision, 2026-10-18). Build each remaining phase on it, one commit per item; never create a branch per phase, and do not touch `main` or any other branch. Phases 0 and 1 were first built on `pss-ai/p0-foundation` and `pss-ai/p1-data-brain`; those two are left as they are (historical), and `pss-ai/all-phases` contains everything in them.
 - When an item is done, mark it ✅ in this file in the same commit as the code.
 - Tick an exit-gate box only with evidence: test output, build output or browser-QA notes. Never by assertion.
 - **Phases 0 and 1 are written at build level.** Phases 2 to 6 are written at spec level. Before building one of them, re-read the repo, rewrite that phase's items here in the same detail as Phase 0, and get the owner's approval on the rewrite.
@@ -143,7 +143,7 @@ Checked and found sound by the reviewer: the router behaves as before, money hel
 
 # PHASE 0 — Foundation (build level)
 
-**Branch:** `pss-ai/p0-foundation` · **Needs:** D0 · **Students see:** no change · **Build in this order:** P0.1 → P0.10
+**Branch:** `pss-ai/all-phases` · **Needs:** D0 · **Students see:** no change · **Build in this order:** P0.1 → P0.10
 
 ## ✅ P0.1 Security quick fixes (closes G37, G38)
 
@@ -364,7 +364,7 @@ Acceptance:
 
 ### Independent review of Phase 1 (2026-10-17)
 
-Fixed on `pss-ai/p1-data-brain`:
+Fixed (first on `pss-ai/p1-data-brain`; included in `pss-ai/all-phases`):
 
 | # | Finding | Fix |
 |---|---|---|
@@ -382,7 +382,7 @@ Fixed on `pss-ai/p1-data-brain`:
 
 Decisions taken (owner may overrule): the hidden admin account's records are left out of anomaly flags, so it never appears on the owner's pages (R6); the discount/cashback confirm stays always on, with `pssai_discount_confirm_over` as its control (see P1.6).
 
-**Branch:** `pss-ai/p1-data-brain` · **Needs:** D3 (for P1.8) · **Students see:** an optional focus rating at checkout · **Nothing is written automatically by AI**
+**Branch:** `pss-ai/all-phases` · **Needs:** D3 (for P1.8) · **Students see:** an optional focus rating at checkout · **Nothing is written automatically by AI**
 
 ## P1.1 Focus pulse (I9) — migration 055 ✅
 
@@ -490,7 +490,7 @@ Acceptance:
 
 # PHASE 2 — Self-service portal and agents (spec level)
 
-**Branch:** `pss-ai/p2-portal-agents` · **Needs:** D1, D2, D4, D6 · **Refine this phase to build level before starting**
+**Branch:** `pss-ai/all-phases` · **Needs:** D1, D2, D4, D6 · **Refine this phase to build level before starting**
 
 The student portal arrives, payments move into it, and the first agents start. With no payment gateway, the owner confirms each UPI payment in one tap. Agents run in shadow mode for two weeks (flag `pssai_agent_shadow`): every reply is a draft until a person approves it.
 
@@ -578,7 +578,7 @@ All agents follow **Appendix F**.
 
 # PHASE 3 — Owner impact engines (spec level)
 
-**Branch:** `pss-ai/p3-owner-impact` · **Needs:** D5, D7, D8 · **Runs at one pilot branch against a control branch**
+**Branch:** `pss-ai/all-phases` · **Needs:** D5, D7, D8 · **Runs at one pilot branch against a control branch**
 
 | Item | What to build | Data and actions | Closes |
 |---|---|---|---|
@@ -605,7 +605,7 @@ All agents follow **Appendix F**.
 
 # PHASE 4 — Self check-in at a pilot branch (spec level)
 
-**Branch:** `pss-ai/p4-self-checkin` · **Needs:** D9, D10 · **Staff stay present as a fallback for four weeks**
+**Branch:** `pss-ai/all-phases` · **Needs:** D9, D10 · **Staff stay present as a fallback for four weeks**
 
 | Item | What to build | Closes |
 |---|---|---|
@@ -635,7 +635,7 @@ All agents follow **Appendix F**.
 
 # PHASE 5 — Self-improving system and staff retirement (spec level)
 
-**Branch:** `pss-ai/p5-self-improving`
+**Branch:** `pss-ai/all-phases`
 
 | Item | What to build |
 |---|---|
@@ -658,7 +658,7 @@ All agents follow **Appendix F**.
 
 # PHASE 6 — New student products (spec level)
 
-**Branch:** `pss-ai/p6-student-products`
+**Branch:** `pss-ai/all-phases`
 
 | Item | What to build |
 |---|---|
