@@ -15,3 +15,8 @@ verify_jwt = false
 # refuses every request without the correct x-cron-secret header (the CRON_SECRET secret).
 [functions.cron]
 verify_jwt = false
+
+# PSS-AI P1.8: the Claude-backed agents. Like the api function it checks the staff token itself
+# (owner or admin), and its cron jobs check the x-cron-secret header (the CRON_SECRET secret).
+[functions.agent]
+verify_jwt = false

@@ -12,6 +12,8 @@ import type { Caller } from "./registry.ts";
 import { REGISTRY } from "./actions.ts";
 import { runOnce } from "./run.ts";
 
+const ROUTED: Caller[] = ["public", "staff", "owner", "admin"];
+
 Deno.serve(async (req) => withCors(req, await handleRequest(req)));
 
 async function handleRequest(req: Request): Promise<Response> {
@@ -22,8 +24,9 @@ async function handleRequest(req: Request): Promise<Response> {
     const { action, ...payload } = body;
     const db = adminClient();
     const found = typeof action === "string" ? REGISTRY.get(action) : undefined;
-    // System jobs (callers: system only) run through the cron function, never through here.
-    const def = found && found.callers.some((c) => c !== "system") ? found : undefined;
+    // Only actions a person may call: system jobs run through the cron function and agent-only
+    // actions (P1.8) through the agent function, never through here.
+    const def = found && found.callers.some((c) => ROUTED.includes(c)) ? found : undefined;
 
     // ─── PUBLIC ───
     if (def && def.callers.includes("public")) {

@@ -1,7 +1,8 @@
 #!/usr/bin/env node
 // PSS-AI P0.10 — run before every deploy: `npm run predeploy`. Refuses when a dev switch is on,
-// the README still shows the seeded passwords, the migration numbers have a gap or a repeat, or
-// the build or any test fails. On success it prints the deploy order (plan rule R10).
+// the README still shows the seeded passwords, the migration numbers have a gap or a repeat, an
+// edge function has no `verify_jwt = false` entry in supabase/config.toml (each one checks its own
+// token or secret), or the build or any test fails. On success it prints the deploy order (R10).
 //   node scripts/predeploy.mjs [--root <dir>]   (--root: check another checkout, e.g. a scratch copy)
 import { existsSync, readdirSync, readFileSync } from 'node:fs'
 import { dirname, join, resolve } from 'node:path'
@@ -34,10 +35,22 @@ export function sourceProblems(root) {
     if (seen.has(n)) problems.push(`migration number ${m[1]} is used twice: ${seen.get(n)} and ${f}`)
     else seen.set(n, f)
   }
+  for (const fn of functionNames(root)) {
+    const config = existsSync(join(root, 'supabase', 'config.toml')) ? readFileSync(join(root, 'supabase', 'config.toml'), 'utf8') : ''
+    const section = config.split(/^\[/m).find((part) => part.startsWith(`functions.${fn}]`))
+    if (!section || !/^verify_jwt\s*=\s*false\s*$/m.test(section)) problems.push(`supabase/config.toml has no [functions.${fn}] verify_jwt = false`)
+  }
   const numbers = [...seen.keys()].sort((a, b) => a - b)
   const gap = numbers.findIndex((n, i) => n !== i + 1)
   if (gap >= 0) problems.push(`migration numbers are not contiguous from 001: expected ${String(gap + 1).padStart(3, '0')}, found ${seen.get(numbers[gap])}`)
   return [...new Set(problems)].slice(0, 20)
+}
+
+/** The edge functions under supabase/functions (every folder except _shared). */
+export function functionNames(root) {
+  const dir = join(root, 'supabase', 'functions')
+  if (!existsSync(dir)) return []
+  return readdirSync(dir, { withFileTypes: true }).filter((d) => d.isDirectory() && !d.name.startsWith('_')).map((d) => d.name).sort()
 }
 
 function run(cmd, args, cwd) {
@@ -69,7 +82,7 @@ function main() {
   console.log(`
 ✓ predeploy passed. Deploy in this order (R10):
   1. Database: apply every migration not yet on Supabase, in number order (newest here: ${latest})
-  2. Functions: supabase functions deploy api   then   supabase functions deploy cron
+  2. Functions: ${functionNames(root).map((f) => `supabase functions deploy ${f}`).join('   then   ')}
   3. Frontend: merge to main — Cloudflare Pages rebuilds both sites
   Never the frontend first: it sends headers that only the new api function accepts.`)
 }

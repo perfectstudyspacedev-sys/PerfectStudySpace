@@ -40,3 +40,12 @@ export function json(data: unknown, status = 200) {
 export function err(message: string, status = 400) {
   return json({ error: message }, status);
 }
+
+// Compares a secret in time that does not depend on where the strings differ (cron and agent jobs).
+export function sameSecret(given: string, expected: string): boolean {
+  const a = new TextEncoder().encode(given);
+  const b = new TextEncoder().encode(expected);
+  let diff = a.length ^ b.length;
+  for (let i = 0; i < b.length; i++) diff |= (a[i] ?? 0) ^ b[i];
+  return diff === 0;
+}

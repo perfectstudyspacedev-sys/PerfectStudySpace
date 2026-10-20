@@ -2,21 +2,12 @@
 // header and a body { "job": "<name>" }. Jobs are registry actions whose callers include
 // 'system'; they run with the same event log as every other action (actor: system).
 // Server to server only: no CORS, no staff token.
-import { err } from "../_shared/http.ts";
+import { err, sameSecret } from "../_shared/http.ts";
 import { adminClient } from "../_shared/auth.ts";
 import { REGISTRY } from "../api/actions.ts";
 import { runAction } from "../api/run.ts";
 
 Deno.serve(handleCron);
-
-// Compares in time that does not depend on where the strings differ.
-function sameSecret(given: string, expected: string): boolean {
-  const a = new TextEncoder().encode(given);
-  const b = new TextEncoder().encode(expected);
-  let diff = a.length ^ b.length;
-  for (let i = 0; i < b.length; i++) diff |= (a[i] ?? 0) ^ b[i];
-  return diff === 0;
-}
 
 async function handleCron(req: Request): Promise<Response> {
   const secret = Deno.env.get("CRON_SECRET") ?? "";

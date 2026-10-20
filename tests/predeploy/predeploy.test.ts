@@ -7,7 +7,7 @@ import { join, resolve } from 'node:path'
 import { sourceProblems } from '../../scripts/predeploy.mjs'
 
 const dirs: string[] = []
-function fixture({ webDev = false, apiDev = false, readme = '# PSS\nSet strong passwords.', migrations = ['001_initial.sql', '002_features.sql', '003_more.sql'] } = {}) {
+function fixture({ webDev = false, apiDev = false, readme = '# PSS\nSet strong passwords.', migrations = ['001_initial.sql', '002_features.sql', '003_more.sql'], config = '[functions.api]\nverify_jwt = false\n' } = {}) {
   const root = mkdtempSync(join(tmpdir(), 'predeploy-'))
   dirs.push(root)
   mkdirSync(join(root, 'src/lib'), { recursive: true })
@@ -17,6 +17,7 @@ function fixture({ webDev = false, apiDev = false, readme = '# PSS\nSet strong p
   writeFileSync(join(root, 'supabase/functions/api/lib.ts'), `export const DEV_MODE = ${apiDev};\n`)
   writeFileSync(join(root, 'README.md'), readme)
   for (const m of migrations) writeFileSync(join(root, 'supabase/migrations', m), '-- sql\n')
+  writeFileSync(join(root, 'supabase/config.toml'), config)
   return root
 }
 afterEach(() => { for (const d of dirs.splice(0)) rmSync(d, { recursive: true, force: true }) })
@@ -35,6 +36,11 @@ describe('predeploy source checks (P0.10)', () => {
   test('the seeded passwords in the README are refused', () => {
     expect(sourceProblems(fixture({ readme: 'login owner / owner123, staff / staff123' }))).toEqual([
       'README.md still shows the default password owner123', 'README.md still shows the default password staff123'])
+  })
+  test('an edge function without verify_jwt = false in config.toml is refused (P1.8)', () => {
+    expect(sourceProblems(fixture({ config: '' }))).toEqual(['supabase/config.toml has no [functions.api] verify_jwt = false'])
+    expect(sourceProblems(fixture({ config: '[functions.api]\nverify_jwt = true\n' }))).toEqual(['supabase/config.toml has no [functions.api] verify_jwt = false'])
+    expect(sourceProblems(fixture({ config: '[functions.cron]\nverify_jwt = false\n[functions.api]\nverify_jwt = false\n' }))).toEqual([])
   })
   test('a gap, a repeat or a badly named migration is refused', () => {
     expect(sourceProblems(fixture({ migrations: ['001_a.sql', '003_c.sql', '004_d.sql'] }))).toEqual(['migration numbers are not contiguous from 001: expected 002, found 003_c.sql'])

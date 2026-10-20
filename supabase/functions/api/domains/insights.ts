@@ -9,11 +9,12 @@ import { featureOn } from "../../_shared/flags.ts";
 import { isISODate } from "../lib.ts";
 
 // The switches the app needs to know about (R9). Missing rows mean off.
-const FLAGS = { focusPulse: "pssai_focus_pulse", anomaly: "pssai_anomaly" } as const;
+const FLAGS = { focusPulse: "pssai_focus_pulse", anomaly: "pssai_anomaly", analyst: "pssai_analyst" } as const;
 const DISCOUNT_CONFIRM_KEY = "pssai_discount_confirm_over";
 export const DISCOUNT_CONFIRM_DEFAULT = 1000;
 const MAX_LIST = 500;
 const RATE_WITHIN_MS = 48 * 3600e3; // a session can be rated up to two days after it started
+const MAX_BRIEF = 4000;
 
 async function branchNames(db: Ctx["db"], ids: (string | null)[]) {
   const unique = [...new Set(ids.filter((x): x is string => !!x))];
@@ -52,6 +53,7 @@ export function handlers(): Record<string, Handler> {
       return json({
         focusPulse: value.get(FLAGS.focusPulse) === "on",
         anomaly: value.get(FLAGS.anomaly) === "on",
+        analyst: value.get(FLAGS.analyst) === "on",
         discountConfirmOver: Number.isFinite(over) && over > 0 ? over : DISCOUNT_CONFIRM_DEFAULT,
       });
     },
@@ -166,6 +168,21 @@ export function handlers(): Record<string, Handler> {
       q = payload.date ? q.eq("brief_date", payload.date) : q.order("brief_date", { ascending: false }).limit(1);
       const { data } = await q.maybeSingle();
       return json({ brief: data ?? null });
+    },
+
+    // P1.8 — the analyst's 07:00 brief (agent/analyst.ts). Agent runs only; one brief per day, a
+    // re-run replaces it.
+    save_owner_brief: async (ctx: Ctx, payload: any): Promise<Response | undefined> => {
+      if (ctx.actor.type !== "agent") return err("Agents only", 403);
+      if (!isISODate(payload.briefDate)) return err("Invalid date");
+      const body = typeof payload.body === "string" ? payload.body.trim() : "";
+      if (!body || body.length > MAX_BRIEF) return err(`The brief must be 1–${MAX_BRIEF} characters`);
+      const figures = payload.figures && typeof payload.figures === "object" && !Array.isArray(payload.figures) ? payload.figures : null;
+      if (figures && JSON.stringify(figures).length > 8192) return err("Figures too large");
+      const { error } = await ctx.db.from("owner_briefs")
+        .upsert({ brief_date: payload.briefDate, body, figures, created_at: new Date().toISOString() }, { onConflict: "brief_date" });
+      if (error) return err(error.message, 500);
+      return json({ ok: true, briefDate: payload.briefDate });
     },
   };
 }

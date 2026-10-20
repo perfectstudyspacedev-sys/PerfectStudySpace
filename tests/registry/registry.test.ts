@@ -32,6 +32,11 @@ describe('action registry (P0.4)', () => {
       if (a.mutating && a.callers.some((c) => ['staff', 'owner', 'admin'].includes(c))) expect(a.idempotent, a.name).toBe(false)
     }
   })
+  test('agents (P1.8) may call T0 reads, plus save_owner_brief which only agents may call', () => {
+    const agentCalls = ACTION_META.filter((a) => a.callers.includes('agent'))
+    for (const a of agentCalls.filter((x) => x.name !== 'save_owner_brief')) expect([a.tier, a.mutating], a.name).toEqual(['T0', false])
+    expect(ACTION_META.find((a) => a.name === 'save_owner_brief')?.callers).toEqual(['agent'])
+  })
   test('system jobs are callable by the system only, and nothing else is', () => {
     expect(ACTION_META.filter((a) => a.callers.includes('system')).map((a) => a.name).sort()).toEqual(SYSTEM_JOBS)
     for (const a of ACTION_META.filter((x) => SYSTEM_JOBS.includes(x.name))) expect(a.callers, a.name).toEqual(['system'])

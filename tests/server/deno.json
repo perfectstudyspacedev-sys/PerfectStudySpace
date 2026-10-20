@@ -1,7 +1,8 @@
 {
   "imports": {
     "https://esm.sh/@supabase/supabase-js@2.49.1": "./fake-supabase.ts",
-    "https://esm.sh/jose@5": "npm:jose@5"
+    "https://esm.sh/jose@5": "npm:jose@5",
+    "npm:@anthropic-ai/sdk@0.131.0": "./fake-anthropic.ts"
   },
   "nodeModulesDir": "none",
   "lock": false

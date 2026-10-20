@@ -45,15 +45,33 @@ $$;
 -- Only the scheduler (running as postgres) needs it; keep it off the public API.
 REVOKE ALL ON FUNCTION pss_run_cron_job(TEXT) FROM PUBLIC, anon, authenticated;
 
+-- P1.8: the same, for jobs of the agent function (the AI agents). Same secret.
+CREATE OR REPLACE FUNCTION pss_run_agent_job(job TEXT) RETURNS BIGINT
+LANGUAGE sql AS $$
+  SELECT net.http_post(
+    url := (SELECT decrypted_secret FROM vault.decrypted_secrets WHERE name = 'pss_project_url') || '/functions/v1/agent',
+    headers := jsonb_build_object(
+      'Content-Type', 'application/json',
+      'x-cron-secret', (SELECT decrypted_secret FROM vault.decrypted_secrets WHERE name = 'pss_cron_secret')
+    ),
+    body := jsonb_build_object('job', job),
+    timeout_milliseconds := 150000
+  );
+$$;
+REVOKE ALL ON FUNCTION pss_run_agent_job(TEXT) FROM PUBLIC, anon, authenticated;
+
 -- ── 3. Schedules ──
 SELECT cron.schedule('pss_expiry_alerts',     '30 0 * * *',  $$SELECT pss_run_cron_job('cron_expiry_alerts')$$);     -- 06:00 IST
 SELECT cron.schedule('pss_purge_signups',     '35 18 * * *', $$SELECT pss_run_cron_job('cron_purge_signups')$$);     -- 00:05 IST
 SELECT cron.schedule('pss_purge_idempotency', '17 * * * *',  $$SELECT pss_run_cron_job('cron_purge_idempotency')$$); -- hourly
 SELECT cron.schedule('pss_integrity_report',  '30 20 * * *', $$SELECT pss_run_cron_job('cron_integrity_report')$$);  -- 02:00 IST
+-- P1.8 (needs `supabase functions deploy agent`; does nothing while pssai_analyst is off):
+SELECT cron.schedule('pss_owner_brief',       '30 1 * * *',  $$SELECT pss_run_agent_job('owner_brief')$$);           -- 07:00 IST
 
 -- ── 4. Check ──
 -- Run one job now and look at the answer a few seconds later:
 --   SELECT pss_run_cron_job('cron_integrity_report');
+--   SELECT pss_run_agent_job('owner_brief');   -- answers {"skipped": …} when the analyst is off
 --   SELECT status_code, content FROM net._http_response ORDER BY created DESC LIMIT 5;
 -- Schedules and their last runs:
 --   SELECT jobname, schedule, active FROM cron.job WHERE jobname LIKE 'pss_%';

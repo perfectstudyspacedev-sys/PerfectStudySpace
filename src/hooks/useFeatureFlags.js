@@ -1,11 +1,11 @@
 import { useEffect, useState } from 'react'
 import { api } from '../lib/api'
 
-// PSS-AI R9 — which Phase 1 features the owner has switched on (app_settings pssai_* rows).
+// PSS-AI R9 — which features the owner has switched on (app_settings pssai_* rows).
 // Shared by every component and read again when a component mounts more than 10 minutes after the
 // last read, so a desk tab left open picks up a change. Until the first answer arrives, and if the
 // read fails, everything counts as off (the server checks the switches too).
-const OFF = { focusPulse: false, anomaly: false, discountConfirmOver: 1000 }
+const OFF = { focusPulse: false, anomaly: false, analyst: false, discountConfirmOver: 1000 }
 const MAX_AGE_MS = 10 * 60 * 1000
 let cached = null
 let cachedAt = 0

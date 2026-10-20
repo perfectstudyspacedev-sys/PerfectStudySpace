@@ -2,7 +2,7 @@
 
 | | |
 |---|---|
-| **Status** | All work is on the single branch `pss-ai/all-phases`. Phase 0 built (P0.1–P0.10 ✅); its exit gate waits for the owner's deploy. Phase 1 built except P1.8, which waits for D3; every Phase 1 feature is switched off. Phases 2–6 not started. |
+| **Status** | All work is on the single branch `pss-ai/all-phases`. Phase 0 built (P0.1–P0.10 ✅); Phase 1 built (P1.1–P1.8 ✅). On 2026-10-20 the owner asked for every phase to be built now, ahead of the exit gates, with the decisions below; every new feature ships switched off, so each exit gate is still ticked by the owner before its switches go on. Phases 2–6 in progress. |
 | **Agreed on** | 2026-10-13 |
 | **Execution order** | P0 → P1 → P2 → P3 → P4 → P5 → P6. A phase starts only after the owner ticks the previous phase's exit gate. |
 | **Verified against** | `main` at commit `cb7beeb` (RSP + SSP merged, PR #2) |
@@ -503,7 +503,7 @@ Acceptance:
 - Engagement score: new T0 action `get_engagement_ranking` built from fingerprints and churn scores. Keep `get_top_students` until the UI switches over.
 - *As built:* `ml/pss_ml/forecast.py`. Members without a churn score count at 30% risk; members already in their grace period (not renewed yet) count in the current week at 50%; dues are spread over the next two weeks at the dues collection rate (of what was still owed after a membership's first payment day, the share paid later, over memberships that ended 30–180 days ago); other income is the average of the last 8 weeks. 90% band from the variance of each renewal (and of the weekly other income). Engagement = 0.3 use of booked hours + 0.3 visit days (6 a week = 1) + 0.15 focus + 0.25 (1 − churn score), with a short reason when under 0.5; published as `student_scores` model `engagement`, read by `get_engagement_ranking` (owner/admin, with the cluster). No screen shows the forecast or the ranking yet — the owner analyst (P1.8) and a later UI read them.
 
-## P1.8 Owner analyst (A6, closes G34) — new `agent` edge function
+## P1.8 Owner analyst (A6, closes G34) — new `agent` edge function ✅
 
 - New `supabase/functions/agent/index.ts` with `[functions.agent] verify_jwt = false` in `supabase/config.toml`. Secrets: `AI_API_KEY`, `AI_MODEL` (from D3).
 - Auth: an owner or admin staff token, checked with `authStaff` from `_shared/auth.ts`.
@@ -514,9 +514,11 @@ Acceptance:
 - UI: an `/analyst` chat page behind `OwnerRoute`.
 - Evaluation: `tests/agents/analyst-eval.md` with 20 owner questions and expected figures computed by SQL.
 
+- *As built:* `supabase/functions/agent/index.ts` (router) and `agent/analyst.ts`, with the shared AI layer in `_shared/ai.ts` (Claude client from `npm:@anthropic-ai/sdk@0.131.0`, model choice, cost estimate, monthly budget, run log, tool loop) for every later agent. Switch `pssai_analyst`; monthly cap `pssai_ai_budget_usd` (US dollars, default 10 — checked before each run against `agent_runs.cost_usd` of this IST month). Models (D3): questions go to `claude-haiku-5-5`; the page's "Deep answer" box uses `claude-sonnet-5-5`; secrets `AI_MODEL` / `AI_MODEL_HARD` replace them (the plan's single `AI_MODEL` became two). Migration `057_agent_runs` (moved up from the old 059): one row per run with model, who asked, token counts, model and tool calls and the estimated cost; no prompts or answers are stored. Tools: the allow-list above plus `list_branches` and `search_students_by_name` (T0 reads, so the analyst can name branches and find a student); each is declared with `agent` in its registry callers, and the analyst refuses any tool that is not a T0 read declared for agents. Tool input keys not in the tool's schema are dropped; a name search may contain only letters, digits, spaces, dots and hyphens (it goes into a PostgREST filter). The `events.actor_id` column is a UUID, so agent events carry `actor_type = 'agent'`, `actor_id = null` and the run's id as `run_id`; `agent_runs.agent` names the agent (`owner-analyst`, `owner-analyst:brief`). Phone numbers, emails, addresses and ID or secret fields are removed from every tool result before it reaches the model (R11), and long lists are shortened (about 12,000 characters per result). Branch names and ids are given in the system prompt. Loop: at most 8 model calls (10 for the brief) and about 100 seconds; parallel tool calls are answered together; a refusal, an AI outage or a cut-short answer is said plainly, never shown as an answer. The brief: pg_cron calls the `agent` function with the cron secret (`pss_run_agent_job('owner_brief')`, 07:00 IST in `docs/ops/cron.sql`); it is skipped when the switch is off, the key is missing, today's brief exists or the budget is used up, and is saved through the new agent-only action `save_owner_brief` (T1, callers `['agent']`; the api router now refuses actions with no human caller). UI: `src/pages/AnalystPage.jsx` at `/analyst` (OwnerRoute, nav link when the switch is on; the chat stays in the tab and the last 5 turns go back as plain text), `src/components/OwnerBriefCard.jsx` on both Dashboards. `src/lib/api.js` gained `agentApi()` (same token and error handling as `api()`). The pre-deploy check now also requires a `verify_jwt = false` entry for every function. Tests: `tests/server/agent_test.ts` (scripted Claude through `tests/server/fake-anthropic.ts`): access, switch, key, budget, the loop, errors, refusals and limits, no contact details in any request, the run log and events, and a run that calls every tool writes nothing but event and run rows. Evaluation: `tests/agents/analyst-eval.md`.
+
 Acceptance:
-- [ ] At least 18 of 20 eval answers match the SQL figures
-- [ ] No analyst run writes anything except event rows (checked in the event log)
+- [ ] At least 18 of 20 eval answers match the SQL figures — the set is written; running it needs the owner's key and real data
+- [x] No analyst run writes anything except event rows — checked by the server test that calls every tool (the eval sheet repeats the check on live data)
 
 ## Phase 1 exit gate
 
@@ -539,7 +541,7 @@ The student portal arrives, payments move into it, and the first agents start. W
 - Keep `/:code` and `/join/:code` for sign-up. Put the `/me/*` routes before `/:code` (sign-up codes are 12 characters, so `me` never collides).
 - Make it installable: a web app manifest and a small service worker served from the same site.
 
-**Login (SP1), migration `063_student_auth`:**
+**Login (SP1), migration `058_student_auth`:**
 - `student_credentials (student_id UUID PRIMARY KEY REFERENCES students(id) ON DELETE CASCADE, pin_hash TEXT NOT NULL, failed_attempts INT NOT NULL DEFAULT 0, locked_until TIMESTAMPTZ, pin_set_at TIMESTAMPTZ NOT NULL DEFAULT now())`
 - `student_setup_codes (student_id UUID PRIMARY KEY REFERENCES students(id) ON DELETE CASCADE, code_hash TEXT NOT NULL, expires_at TIMESTAMPTZ NOT NULL)`
 - `student_sessions (id UUID PRIMARY KEY DEFAULT gen_random_uuid(), student_id UUID NOT NULL REFERENCES students(id) ON DELETE CASCADE, created_at TIMESTAMPTZ NOT NULL DEFAULT now(), expires_at TIMESTAMPTZ NOT NULL, revoked_at TIMESTAMPTZ)`
@@ -561,20 +563,20 @@ The student portal arrives, payments move into it, and the first agents start. W
 | `me_request_hold`, `me_resume` | T1 | SP6: within policy runs `pause_membership` / `resume_membership`; outside policy creates an approval |
 | `me_chat` | T1 | SP7: messages to the A1 concierge |
 | `me_privacy`, `me_privacy_request` | T0 / T1 | SP8: consents, data download or deletion request (handled by the owner) |
-| `me_notifications`, `me_mark_read` | T0 / T1 | Inbox from `058_portal_notifications` |
+| `me_notifications`, `me_mark_read` | T0 / T1 | Inbox from `060_portal_notifications` |
 
 ## P2.2 UPI pay links and payment proof check (closes G11, G13, G17, G18)
 
 - The owner sets `app_settings` rows `upi_vpa` and `upi_payee_name`.
 - `me_payment_request` returns `upi://pay?pa=<vpa>&pn=<name>&am=<amount>&tn=<reference>&cu=INR` for renewal, dues, Food Pass top-up or locker renewal. The amount comes from the existing code, never from the client. On a computer, show the same link as a QR code (an npm QR package is fine).
-- `057_payment_proofs`: `payment_proofs (id UUID PRIMARY KEY DEFAULT gen_random_uuid(), student_id UUID NOT NULL REFERENCES students(id), purpose TEXT NOT NULL CHECK (purpose IN ('renewal','dues','food_pass','locker')), amount_expected NUMERIC NOT NULL, reference TEXT NOT NULL UNIQUE, utr TEXT, image_path TEXT, ai_reading JSONB, status TEXT NOT NULL DEFAULT 'submitted' CHECK (status IN ('submitted','confirmed','rejected')), decided_by_staff_id UUID REFERENCES staff(id), decided_at TIMESTAMPTZ, reject_reason TEXT, transaction_ids UUID[], created_at TIMESTAMPTZ NOT NULL DEFAULT now())`. Screenshots go in a private Storage bucket `payment-proofs`.
+- `059_payment_proofs`: `payment_proofs (id UUID PRIMARY KEY DEFAULT gen_random_uuid(), student_id UUID NOT NULL REFERENCES students(id), purpose TEXT NOT NULL CHECK (purpose IN ('renewal','dues','food_pass','locker')), amount_expected NUMERIC NOT NULL, reference TEXT NOT NULL UNIQUE, utr TEXT, image_path TEXT, ai_reading JSONB, status TEXT NOT NULL DEFAULT 'submitted' CHECK (status IN ('submitted','confirmed','rejected')), decided_by_staff_id UUID REFERENCES staff(id), decided_at TIMESTAMPTZ, reject_reason TEXT, transaction_ids UUID[], created_at TIMESTAMPTZ NOT NULL DEFAULT now())`. Screenshots go in a private Storage bucket `payment-proofs`.
 - After upload, the `agent` function reads the screenshot with the AI model and stores `{ amount, utr, paid_at, payee_vpa, confidence }` in `ai_reading`. It flags mismatches with the expected amount or VPA. **It never confirms anything.**
 - The owner's approval queue shows each proof next to the AI reading. **Confirm** runs the existing action (`renew_membership`, `record_payment`, `topup_food_pass` or `renew_locker`) with payment mode `upi` and the owner as actor, then stores the resulting transaction ids. **Reject** needs a reason, which the student sees.
 - Cash stays a staff/owner entry if D1 allows it.
 
-## P2.3 Permission gate and approval queue (A8, part 2) — migration `059_agent_runs_approvals`
+## P2.3 Permission gate and approval queue (A8, part 2) — migration `061_approvals`
 
-- `agent_runs (id UUID PRIMARY KEY DEFAULT gen_random_uuid(), agent TEXT NOT NULL, started_at TIMESTAMPTZ NOT NULL DEFAULT now(), finished_at TIMESTAMPTZ, status TEXT, tokens_in INT, tokens_out INT)`
+- `agent_runs` — built early, in `057_agent_runs` for P1.8 (see there).
 - `approvals (id UUID PRIMARY KEY DEFAULT gen_random_uuid(), kind TEXT NOT NULL CHECK (kind IN ('t3_action','payment','student_request')), action TEXT, payload JSONB NOT NULL, requested_by_type TEXT NOT NULL, requested_by_id UUID, run_id UUID, status TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending','approved','denied')), decided_by_staff_id UUID REFERENCES staff(id), decided_at TIMESTAMPTZ, reason TEXT, created_at TIMESTAMPTZ NOT NULL DEFAULT now())`
 - Router rule: when the caller is `agent` or `student` and the action is T3, do not run it. Create an `approvals` row and return `{ pending_approval: <id> }`. On approval, the owner's click runs the action with the owner as actor and the original request recorded as `reason`.
 - Owner page "Approvals" (OwnerRoute): pending items, with Approve and Deny (a reason is required to deny).
@@ -598,8 +600,8 @@ All agents follow **Appendix F**.
 | Waitlist offers | When a permanent seat frees, the next person on `permanent_waitlist` gets a portal offer with an accept deadline | G10 |
 | Live updates | Replace the four polling hooks with Supabase Realtime **Broadcast**. The edge function sends a tiny "changed" signal on channel `branch:<id>` with no row data; the client re-fetches through `api()`. (Table-change subscriptions would need RLS policies, which this repo does not use.) | G28 |
 | I27 Usage-fit plans | The concierge can suggest a better-fitting plan; the change itself stays T3 | — |
-| Migration `058_portal_notifications` | `portal_notifications (id UUID PRIMARY KEY DEFAULT gen_random_uuid(), student_id UUID NOT NULL REFERENCES students(id) ON DELETE CASCADE, kind TEXT NOT NULL, title TEXT NOT NULL, body TEXT, action_url TEXT, read_at TIMESTAMPTZ, created_at TIMESTAMPTZ NOT NULL DEFAULT now())` | — |
-| Migration `064_student_requests` | Holds, plan changes and refunds asked for by students are stored here and linked to `approvals` | — |
+| Migration `060_portal_notifications` | `portal_notifications (id UUID PRIMARY KEY DEFAULT gen_random_uuid(), student_id UUID NOT NULL REFERENCES students(id) ON DELETE CASCADE, kind TEXT NOT NULL, title TEXT NOT NULL, body TEXT, action_url TEXT, read_at TIMESTAMPTZ, created_at TIMESTAMPTZ NOT NULL DEFAULT now())` | — |
+| Migration `062_student_requests` | Holds, plan changes and refunds asked for by students are stored here and linked to `approvals` | — |
 
 **Removed in Phase 2:** the browser polling hooks (after Realtime is verified); the sign-up claim lock (`claimSignup`, `release_signup_request`, `SIGNUP_CLAIM_MINUTES`) once auto-approval is on; the owner repair buttons for `fix_membership_dates` and `fix_negative_food_pass_balances`, once the nightly report has run clean for a few weeks. **`openWhatsApp()` stays.**
 
@@ -620,18 +622,18 @@ All agents follow **Appendix F**.
 
 | Item | What to build | Data and actions | Closes |
 |---|---|---|---|
-| O1 Seat-hour overbooking | Predict, per permanent member and hour, the chance they won't use their desk, from check-in history and declared absences (SP10). Offer the expected free hours minus a safety buffer to walk-ins. A member who arrives anyway gets a fallback seat or a credit. | Migration `060_overbooking` (resold hours, fallback credits). Walk-in sales go through the existing `create_walkin`. | — |
+| O1 Seat-hour overbooking | Predict, per permanent member and hour, the chance they won't use their desk, from check-in history and declared absences (SP10). Offer the expected free hours minus a safety buffer to walk-ins. A member who arrives anyway gets a fallback seat or a credit. | Migration `063_overbooking` (resold hours, fallback credits). Walk-in sales go through the existing `create_walkin`. | — |
 | I3 Yield pricing | Walk-in prices follow forecast occupancy and the exam calendar, within an owner floor and ceiling | Reads `fee_config`; never writes outside owner limits; price changes are T3 unless inside D5 limits | G33 |
 | A2 Enquiry and sales agent | A chat on the public enquiry page (new public action `public_enquiry_chat`, rate-limited by IP and phone) that creates or updates the enquiry. Drafts follow-ups that the owner sends in one tap. | `create_enquiry`, `update_enquiry`, `add_enquiry_activity`, `add_enquiry_followup` | G22 |
 | I24 Lead scorer | Ranks enquiries by chance of converting | `student_scores`-style table for enquiries, or a `score` column added in `060` | G25 |
 | AI enquiry dedupe | The AI judges whether two enquiries are the same person; merges go through the existing merge flow | Existing merge logic in `EnquiriesPage` and its actions | G23 |
-| Referral attribution | A tracked link per channel replaces the referral dropdown | Migration `066_referral_links` | G24 |
-| I25 Exam-notification radar | The `cron` function fetches the exam pages chosen in D8, the AI extracts exam names and dates, and demand surges are predicted. If a site can't be read, the owner enters dates by hand. Respect each site's terms. | Migration `067_exam_notices` | — |
+| Referral attribution | A tracked link per channel replaces the referral dropdown | Migration `065_referral_links` | G24 |
+| I25 Exam-notification radar | The `cron` function fetches the exam pages chosen in D8, the AI extracts exam names and dates, and demand surges are predicted. If a site can't be read, the owner enters dates by hand. Respect each site's terms. | Migration `066_exam_notices` | — |
 | I26 Win-back | Finds past members at the right point in their exam cycle and drafts a return offer for the owner to send | Portal notifications and the "Send list" page | — |
 | O9 Next-exam plans | Suggests a ready plan for the next exam in the student's path, using an owner-maintained `exam_ladder` setting in `app_settings` | Portal notification (SP12) | — |
 | O3 Pay-later advice | A risk score tells the owner whether to allow pay-later. No lending partner; the owner decides. | `student_scores` with model `paylater` | G16 |
 | A7 Exception desk | Drafts a recommended decision, with reasons, for each pending approval | Reads `approvals`; writes only a draft note | — |
-| Portal R2 | SP9 waitlist, SP10 Release my hours (migration `065_hour_release`, credit share from D7), SP11 referral and cashback, SP12 next-exam plans | `me_*` actions | — |
+| Portal R2 | SP9 waitlist, SP10 Release my hours (migration `064_hour_release`, credit share from D7), SP11 referral and cashback, SP12 next-exam plans | `me_*` actions | — |
 
 ## Phase 3 exit gate
 
@@ -647,7 +649,7 @@ All agents follow **Appendix F**.
 
 | Item | What to build | Closes |
 |---|---|---|
-| Self check-in (SP13) | Migration `061_checkin_location`: add `latitude`, `longitude`, `checkin_key` to `branches`; a `checkin_records` table with the location result and consent. A printed QR poster encodes `https://join.perfectstudyspace.in/me/checkin?b=<branch>&k=<checkin_key>`. New action `me_check_in` (T1) checks the key and the phone's location against the D9 radius, then runs the same logic as `check_in_member` with the student as actor. Desk choice: permanent members get their own desk; others get one from seat matching. The owner can reprint with a new key. | G1 |
+| Self check-in (SP13) | Migration `067_checkin_location`: add `latitude`, `longitude`, `checkin_key` to `branches`; a `checkin_records` table with the location result and consent. A printed QR poster encodes `https://join.perfectstudyspace.in/me/checkin?b=<branch>&k=<checkin_key>`. New action `me_check_in` (T1) checks the key and the phone's location against the D9 radius, then runs the same logic as `check_in_member` with the student as actor. Desk choice: permanent members get their own desk; others get one from seat matching. The owner can reprint with a new key. | G1 |
 | Self checkout | New action `me_check_out` runs the same logic as `checkout_booking`, so overtime and Food Pass rules are unchanged | — |
 | A5 Session watch | Reminds students in the portal before quota end, closes forgotten sessions, applies overtime by rule and flags manual edits. The "Correct checkout time" control becomes an exception path. Without sensors an early exit cannot be verified. | G4; G2 and G5 partly |
 | I4 Seat matching | Replaces the first-free-desk choice in `create_walkin` with placement based on study profiles | G6 |
@@ -684,7 +686,7 @@ All agents follow **Appendix F**.
 | O7 Space-yield optimiser | Occupancy heat-maps suggest which zones become premium cabins, group rooms or extra seats |
 | I13, I10 | Study Wrapped card and exam coach in the portal |
 | Portal R4 | SP18 focus profile, SP19 exam coach, SP20 Study Wrapped, SP21 study buddy (opt-in) |
-| S1 Retire desk-staff modules | Migration `062_deprecate_staff_ops` marks tables deprecated; a later migration drops them after the data is archived. Remove: `markAttendanceIfNeeded` on every request; `staff_attendance` reads, `list_staff_attendance`, `end_staff_session` and the logout cut-off in `authStaff`; `assign_staff_override`, `clear_staff_override`; `list_branch_staff`, `get_staff_grid`; staff-to-staff `list_messages`, `send_message`, `MessagesPage`; `StaffPage`; `TasksPage` unless housekeeping still uses it. `create_staff` and `update_staff` shrink to owner, admin and kitchen/housekeeping accounts. Do this only after the staff modules sit unused for a full month. |
+| S1 Retire desk-staff modules | Migration `068_deprecate_staff_ops` marks tables deprecated; a later migration drops them after the data is archived. Remove: `markAttendanceIfNeeded` on every request; `staff_attendance` reads, `list_staff_attendance`, `end_staff_session` and the logout cut-off in `authStaff`; `assign_staff_override`, `clear_staff_override`; `list_branch_staff`, `get_staff_grid`; staff-to-staff `list_messages`, `send_message`, `MessagesPage`; `StaffPage`; `TasksPage` unless housekeeping still uses it. `create_staff` and `update_staff` shrink to owner, admin and kitchen/housekeeping accounts. Do this only after the staff modules sit unused for a full month. |
 
 ## Phase 5 exit gate
 
@@ -778,19 +780,20 @@ Values marked "pinned" record what the code returns today. If one looks wrong, r
 | 054 | `054_idempotency_keys.sql` | P0 | Idempotency key store |
 | 055 | `055_focus_pulse.sql` | P1 | Focus ratings |
 | 056 | `056_model_outputs.sql` | P1 | Scores, fingerprints, anomaly flags, forecasts, owner briefs |
-| 057 | `057_payment_proofs.sql` | P2 | UPI payment proofs and owner decisions |
-| 058 | `058_portal_notifications.sql` | P2 | Portal inbox |
-| 059 | `059_agent_runs_approvals.sql` | P2 | Agent runs and approval queue |
-| 060 | `060_overbooking.sql` | P3 | Resold hours and fallback credits |
-| 061 | `061_checkin_location.sql` | P4 | Branch location, check-in key, check-in records |
-| 062 | `062_deprecate_staff_ops.sql` | P5 | Marks desk-staff tables deprecated |
-| 063 | `063_student_auth.sql` | P2 | Student PINs, setup codes, sessions |
-| 064 | `064_student_requests.sql` | P2 | Holds, plan changes, refunds asked for by students |
-| 065 | `065_hour_release.sql` | P3 | Released hours and member credits |
-| 066 | `066_referral_links.sql` | P3 | Tracked referral links |
-| 067 | `067_exam_notices.sql` | P3 | Exam notices read from public pages |
+| 057 | `057_agent_runs.sql` | P1 | Agent runs: tokens and estimated cost per run (moved here from the old 059 for P1.8) |
+| 058 | `058_student_auth.sql` | P2 | Student PINs, setup codes, sessions |
+| 059 | `059_payment_proofs.sql` | P2 | UPI payment proofs and owner decisions |
+| 060 | `060_portal_notifications.sql` | P2 | Portal inbox |
+| 061 | `061_approvals.sql` | P2 | Approval queue |
+| 062 | `062_student_requests.sql` | P2 | Holds, plan changes, refunds asked for by students |
+| 063 | `063_overbooking.sql` | P3 | Resold hours and fallback credits |
+| 064 | `064_hour_release.sql` | P3 | Released hours and member credits |
+| 065 | `065_referral_links.sql` | P3 | Tracked referral links |
+| 066 | `066_exam_notices.sql` | P3 | Exam notices read from public pages |
+| 067 | `067_checkin_location.sql` | P4 | Branch location, check-in key, check-in records |
+| 068 | `068_deprecate_staff_ops.sql` | P5 | Marks desk-staff tables deprecated |
 
-Numbers are indicative. Because phases ship in order, the migration owner may renumber unbuilt ones so files are applied in the order they ship; update this table in the same commit.
+Numbers are indicative. Because phases ship in order, the migration owner may renumber unbuilt ones so files are applied in the order they ship; update this table in the same commit. *Renumbered on 2026-10-20 (P1.8) into build order; later phases may add rows after 068.*
 
 ---
 

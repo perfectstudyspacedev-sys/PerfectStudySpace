@@ -16,6 +16,7 @@ import ReportsPage from './pages/ReportsPage'
 import BookingsPage from './pages/BookingsPage'
 import TasksPage from './pages/TasksPage'
 import FlagsPage from './pages/FlagsPage'
+import AnalystPage from './pages/AnalystPage'
 import JoinPage from './pages/JoinPage'
 import { signupSiteUrl } from './lib/signupLink'
 
@@ -62,6 +63,7 @@ export default function App() {
             <Route path="food-menu" element={<FoodMenuPage />} />
             <Route path="revenue" element={<OwnerRoute><RevenuePage /></OwnerRoute>} />
             <Route path="flags" element={<OwnerRoute><FlagsPage /></OwnerRoute>} />
+            <Route path="analyst" element={<OwnerRoute><AnalystPage /></OwnerRoute>} />
             <Route path="messages" element={<MessagesPage />} />
             <Route path="reports" element={<ReportsPage />} />
             <Route path="actions" element={<TasksPage />} />

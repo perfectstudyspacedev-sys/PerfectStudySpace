@@ -30,13 +30,22 @@ export function newIdempotencyKey() {
 // Thrown errors carry the HTTP status when the server answered (err.status); a network failure
 // has none.
 export async function api(action, payload = {}, { idempotencyKey } = {}) {
+  return await invoke('api', action, { action, ...payload }, idempotencyKey ? { 'Idempotency-Key': idempotencyKey } : {})
+}
+
+// PSS-AI P1.8 — the AI agents' edge function (owner analyst). Same token, same error handling.
+export async function agentApi(payload) {
+  return await invoke('agent', null, payload, {})
+}
+
+async function invoke(fn, action, body, extraHeaders) {
   const token = getToken()
 
-  const { data, error } = await supabase.functions.invoke('api', {
-    body: { action, ...payload },
+  const { data, error } = await supabase.functions.invoke(fn, {
+    body,
     headers: {
       ...(token ? { Authorization: `Bearer ${token}` } : {}),
-      ...(idempotencyKey ? { 'Idempotency-Key': idempotencyKey } : {}),
+      ...extraHeaders,
     },
   })
 
