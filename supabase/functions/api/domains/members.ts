@@ -6,7 +6,7 @@ import { addDays, addMonths, daysBetween, endDateForMonths, toISTDateStr, todayI
 import { computeStudentStatus, multiMonthDiscount, notStartedYetMessage, renewalKind, unusedDaysRefund } from "../../_shared/membership.ts";
 import { err, json } from "../../_shared/http.ts";
 import { isOwnerOrAdmin, requireBranch } from "../../_shared/auth.ts";
-import { DEV_MODE, claimDesk, claimSignup, computeOverstay, fetchAllRows, getMembershipPackage, hasOpenSession, insertPaymentTransactions, isISODate, lockerNumberSequence, recordPayout, recordSettlementIncome, recordTransaction, recordWaiver, refreshStudentStatus, remindExpiringMembers, settlePendingCashbacks, signupBusyMessage, storedPaymentMode, unpaidFoodBillsFor, upsertStudent } from "../lib.ts";
+import { DEV_MODE, claimDesk, claimSignup, computeOverstay, fetchAllRows, getMembershipPackage, hasOpenSession, insertPaymentTransactions, isISODate, lockerNumberSequence, recordPayout, recordSettlementIncome, recordTransaction, recordWaiver, membershipDateDrift, refreshStudentStatus, remindExpiringMembers, settlePendingCashbacks, splitPaymentError, signupBusyMessage, storedPaymentMode, unpaidFoodBillsFor, upsertStudent } from "../lib.ts";
 import { featureOn } from "../../_shared/flags.ts";
 
 // Used to be declared inside the request handler, reading its db and staff. This factory gives it
@@ -465,6 +465,8 @@ export function handlers(): Record<string, Handler> {
       // collected or recorded as a transaction at assignment time in that case.
       const amountPaid = payLater ? 0 : totalDue;
       const feeDue = payLater ? totalDue : 0;
+      const splitErr = splitPaymentError(paymentMode, amountPaid, cashAmount, upiAmount);
+      if (splitErr) return err(splitErr);
 
       const { data: locker, error: lErr } = await db.from("lockers").insert({
         branch_id: branchId, student_id: studentId, locker_no: lockerNo,
@@ -517,6 +519,8 @@ export function handlers(): Record<string, Handler> {
       if (netAmount > 0 && !paymentMode) {
         return err(`₹${netAmount} still needs to be collected before returning the locker — choose a payment mode.`);
       }
+      const splitErr = splitPaymentError(paymentMode, netAmount, cashAmount, upiAmount);
+      if (splitErr) return err(splitErr);
 
       // Claim the locker first, conditional on it still being active: two Remove clicks
       // landing together both read deposit_returned=false above, and without this guard both
@@ -918,18 +922,14 @@ export function handlers(): Record<string, Handler> {
       const { db } = ctx;
       const staff = ctx.staff!;
       if (!isOwnerOrAdmin(staff)) return err("Owner only", 403);
-      const { data: memberships } = await db.from("memberships")
-        .select("id, start_date, months_paid, hold_days, end_date, due_date");
-      let fixed = 0;
-      for (const m of memberships ?? []) {
-        const correctEndDate = addDays(endDateForMonths(m.start_date, m.months_paid), m.hold_days ?? 0);
-        const correctDueDate = addDays(endDateForMonths(m.start_date, 1), 1);
-        if (correctEndDate !== m.end_date || correctDueDate !== m.due_date) {
-          await db.from("memberships").update({ end_date: correctEndDate, due_date: correctDueDate }).eq("id", m.id);
-          fixed++;
-        }
+      // F-2/F-3: every membership is read, and only end dates that match neither the months
+      // rule nor the custom-days rule are changed; due dates are never touched (payments and plan
+      // changes move them on purpose), and hand-set end dates are left alone.
+      const { checked, drift } = await membershipDateDrift(db);
+      for (const d of drift) {
+        await db.from("memberships").update({ end_date: d.expected_end_date }).eq("id", d.membership_id);
       }
-      return json({ ok: true, checked: (memberships ?? []).length, fixed });
+      return json({ ok: true, checked, fixed: drift.length });
     },
     // ─── ACTIVE MEMBERSHIPS ───
     list_active_memberships: async (ctx: Ctx, payload: any): Promise<Response | undefined> => {

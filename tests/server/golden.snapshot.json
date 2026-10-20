@@ -5820,7 +5820,7 @@
    "label": "fix dates",
    "res": {
     "checked": 12,
-    "fixed": 8,
+    "fixed": 3,
     "ok": true,
     "status": 200
    }
@@ -5848,11 +5848,11 @@
    "action": "add_locker",
    "label": "add locker",
    "res": {
-    "amountCharged": 163,
-    "daysRemaining": 19,
+    "amountCharged": 160,
+    "daysRemaining": 18,
     "deposit": 100,
     "locker": {
-     "amount_paid": 163,
+     "amount_paid": 160,
      "branch_id": "00000000-0000-4000-8000-000000000001",
      "created_at": "2026-10-17T06:40:00.000Z",
      "deposit_amount": 100,
@@ -5860,16 +5860,16 @@
      "fee_due": 0,
      "id": "00000000-0000-4000-8000-000000000076",
      "is_active": true,
-     "locker_due_date": "2026-11-05",
+     "locker_due_date": "2026-11-04",
      "locker_no": "7",
      "monthly_fee": 100,
      "student_id": "00000000-0000-4000-8000-000000000017"
     },
     "ok": true,
     "payLater": false,
-    "proratedFee": 63,
+    "proratedFee": 60,
     "status": 200,
-    "totalDue": 163
+    "totalDue": 160
    }
   },
   {
@@ -5959,14 +5959,14 @@
     "collectedAmount": 0,
     "foodPassRefund": 0,
     "lockerDepositRefund": 0,
-    "netAmount": -3000,
+    "netAmount": -2925,
     "ok": true,
     "overstayCharge": 0,
     "overstayDays": 0,
     "overtimeDue": 0,
-    "proratedRefund": 3000,
-    "refundAmount": 3000,
-    "remainingDays": 80,
+    "proratedRefund": 2925,
+    "refundAmount": 2925,
+    "remainingDays": 78,
     "status": 200,
     "totalDays": 90
    }
@@ -8798,7 +8798,7 @@
     "student_id": "00000000-0000-4000-8000-00000000005b"
    },
    {
-    "amount_paid": 163,
+    "amount_paid": 160,
     "branch_id": "00000000-0000-4000-8000-000000000001",
     "created_at": "2026-10-17T06:40:00.000Z",
     "deposit_amount": 100,
@@ -8806,7 +8806,7 @@
     "fee_due": 0,
     "id": "00000000-0000-4000-8000-000000000076",
     "is_active": false,
-    "locker_due_date": "2026-11-05",
+    "locker_due_date": "2026-11-04",
     "locker_no": "7",
     "monthly_fee": 100,
     "student_id": "00000000-0000-4000-8000-000000000017"
@@ -8908,8 +8908,8 @@
     "created_at": "2026-10-16T05:30:00.000Z",
     "created_by_staff_id": "00000000-0000-4000-8000-000000000003",
     "discount_percent": 0,
-    "due_date": "2026-11-06",
-    "end_date": "2026-11-05",
+    "due_date": "2026-11-04",
+    "end_date": "2026-11-04",
     "fee_due": 0,
     "hold_days": 0,
     "hours_per_day": 6,
@@ -8935,7 +8935,7 @@
     "created_by_staff_id": "00000000-0000-4000-8000-000000000003",
     "desk_id": "00000000-0000-4000-8000-00000000000a",
     "discount_percent": 0,
-    "due_date": "2026-10-21",
+    "due_date": "2026-10-20",
     "end_date": "2026-10-20",
     "fee_due": 0,
     "hold_days": 0,
@@ -9035,8 +9035,8 @@
     "created_at": "2026-10-16T05:30:00.000Z",
     "created_by_staff_id": "00000000-0000-4000-8000-000000000003",
     "discount_percent": 0,
-    "due_date": "2026-11-11",
-    "end_date": "2026-11-10",
+    "due_date": "2026-12-09",
+    "end_date": "2026-11-09",
     "fee_due": 0,
     "hold_days": 0,
     "hours_per_day": 6,
@@ -9060,8 +9060,8 @@
     "created_at": "2026-10-16T05:30:00.000Z",
     "created_by_staff_id": "00000000-0000-4000-8000-000000000003",
     "discount_percent": 10,
-    "due_date": "2026-11-06",
-    "end_date": "2027-01-05",
+    "due_date": "2027-01-03",
+    "end_date": "2027-01-03",
     "fee_due": 0,
     "hold_days": 0,
     "hours_per_day": 6,
@@ -9087,8 +9087,8 @@
     "created_by_staff_id": "00000000-0000-4000-8000-000000000003",
     "desk_id": null,
     "discount_percent": 0,
-    "due_date": "2026-11-08",
-    "end_date": "2026-11-08",
+    "due_date": "2026-11-06",
+    "end_date": "2026-11-07",
     "fee_due": 175,
     "hold_days": 1,
     "hours_per_day": 8,
@@ -9349,12 +9349,12 @@
    {
     "actor_id": "00000000-0000-4000-8000-000000000003",
     "actor_type": "owner",
-    "amount": 3000,
+    "amount": 2925,
     "branch_id": "00000000-0000-4000-8000-000000000001",
     "created_at": "2026-10-17T06:40:00.000Z",
     "created_by_staff_id": "00000000-0000-4000-8000-000000000003",
     "id": "00000000-0000-4000-8000-00000000007c",
-    "notes": "Refund for 80 unused day(s) × ₹37.5 (plan ₹3375 ÷ 90 days) — membership deleted",
+    "notes": "Refund for 78 unused day(s) × ₹37.5 (plan ₹3375 ÷ 90 days) — membership deleted",
     "payout_type": "membership_refund",
     "run_id": null,
     "student_id": "00000000-0000-4000-8000-000000000023"
@@ -9963,7 +9963,7 @@
    {
     "actor_id": "00000000-0000-4000-8000-000000000005",
     "actor_type": "staff",
-    "amount": 163,
+    "amount": 160,
     "booking_id": null,
     "branch_id": "00000000-0000-4000-8000-000000000001",
     "category": "locker",
@@ -9973,7 +9973,7 @@
     "id": "00000000-0000-4000-8000-000000000077",
     "locker_id": null,
     "membership_id": null,
-    "notes": "Locker — prorated 19d rent (₹63) + deposit (₹100)",
+    "notes": "Locker — prorated 18d rent (₹60) + deposit (₹100)",
     "payment_mode": "cash",
     "run_id": null,
     "student_id": "00000000-0000-4000-8000-000000000017"

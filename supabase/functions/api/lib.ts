@@ -1,7 +1,7 @@
 // Database helpers and constants used by the api actions (ledger writes, student status, sign-up
 // codes, sessions, alerts…). Moved unchanged from api/index.ts in PSS-AI P0.4.
 // deno-lint-ignore-file no-explicit-any
-import { IST_OFFSET_MS, addDays, istDayStart, toISTDateStr, todayISO } from "../_shared/dates.ts";
+import { IST_OFFSET_MS, addDays, daysBetween, endDateForMonths, istDayStart, toISTDateStr, todayISO } from "../_shared/dates.ts";
 import { computeStudentStatus } from "../_shared/membership.ts";
 import { type SettlementOwed, settlementIncomeRows } from "../_shared/settlement.ts";
 import { overstayFromLastVisit } from "../_shared/overstay.ts";
@@ -361,6 +361,44 @@ export async function unpaidFoodBillsFor(db: ReturnType<typeof adminClient>, stu
   if (error) throw new Error(error.message);
   const bills = (data ?? []) as { id: string; total: number }[];
   return { bills, total: Math.round(bills.reduce((sum, b) => sum + Number(b.total), 0) * 100) / 100 };
+}
+
+// F-1 (PSS-AI): the split rule insertPaymentTransactions enforces, checked before a handler writes
+// anything, so a cash + UPI split that doesn't add up is refused with nothing changed instead of
+// failing half-way. Same rounding and message as insertPaymentTransactions, which is unchanged.
+export function splitPaymentError(paymentMode: string | undefined, amount: number, cashAmount?: number | string, upiAmount?: number | string): string | null {
+  if (!(Number(amount) > 0) || paymentMode !== "split") return null;
+  const cash = Math.round((Number(cashAmount) || 0) * 100) / 100;
+  const upi = Math.round((Number(upiAmount) || 0) * 100) / 100;
+  return Math.round((cash + upi) * 100) !== Math.round(Number(amount) * 100) ? "Cash + UPI amounts must add up to the total" : null;
+}
+
+// F-2/F-3 (PSS-AI): memberships whose end date matches neither way a plan is sold — by months
+// (endDateForMonths) or by a custom number of days (start + plan_days − 1) — each plus hold days.
+// Reads every row (paged past the 1,000-row default). Memberships whose end date was set by hand
+// (a successful change_membership_plan event with newEndDate) are left out. The expected date
+// follows the rule the plan was sold under: its own length (plan_days) decides.
+export async function membershipDateDrift(db: ReturnType<typeof adminClient>) {
+  const memberships = await fetchAllRows<any>(() => db.from("memberships")
+    .select("id, branch_id, start_date, months_paid, plan_days, hold_days, end_date").order("id"));
+  let edited = new Set<string>();
+  try {
+    const changes = await fetchAllRows<any>(() => db.from("events").select("id, payload")
+      .eq("action", "change_membership_plan").eq("ok", true).order("id"));
+    edited = new Set(changes.filter((e) => e.payload?.newEndDate).map((e) => e.payload?.membershipId).filter(Boolean));
+  } catch { /* no event log yet (migration 052): nothing is known to be hand-edited */ }
+  const drift: { membership_id: string; branch_id: string; end_date: string; expected_end_date: string }[] = [];
+  for (const m of memberships) {
+    if (edited.has(m.id)) continue;
+    const holds = Number(m.hold_days ?? 0);
+    const monthsEnd = endDateForMonths(m.start_date, m.months_paid);
+    const byMonths = addDays(monthsEnd, holds);
+    const byDays = m.plan_days ? addDays(m.start_date, Number(m.plan_days) - 1 + holds) : null;
+    if (m.end_date === byMonths || m.end_date === byDays) continue;
+    const soldByDays = byDays !== null && Number(m.plan_days) !== daysBetween(m.start_date, monthsEnd) + 1;
+    drift.push({ membership_id: m.id, branch_id: m.branch_id, end_date: m.end_date, expected_end_date: soldByDays ? byDays! : byMonths });
+  }
+  return { checked: memberships.length, drift };
 }
 
 export async function insertPaymentTransactions(

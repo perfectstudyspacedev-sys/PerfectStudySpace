@@ -5,7 +5,7 @@ import type { Ctx, Handler } from "../registry.ts";
 import { addMonths, istDayEnd, istDayStart, toISTDateStr, todayISO } from "../../_shared/dates.ts";
 import { err, json } from "../../_shared/http.ts";
 import { isOwnerOrAdmin, requireBranch } from "../../_shared/auth.ts";
-import { buildDateBuckets, fetchAllRows, insertPaymentTransactions, isISODate, recordPayout, recordTransaction, recordWaiver, refreshStudentStatus, requestedRange, settlePendingCashbacks } from "../lib.ts";
+import { buildDateBuckets, fetchAllRows, insertPaymentTransactions, splitPaymentError, isISODate, recordPayout, recordTransaction, recordWaiver, refreshStudentStatus, requestedRange, settlePendingCashbacks } from "../lib.ts";
 
 export function handlers(): Record<string, Handler> {
   const h: Record<string, Handler> = {
@@ -54,6 +54,8 @@ export function handlers(): Record<string, Handler> {
       if (payAmount > currentDue) {
         return err(`Payment exceeds the pending due of ₹${currentDue} — collect at most that amount.`);
       }
+      const splitErr = splitPaymentError(paymentMode, payAmount, cashAmount, upiAmount);
+      if (splitErr) return err(splitErr);
 
       const newDue = Math.max(currentDue - payAmount, 0);
       // Only push the due date forward once the balance is fully cleared — otherwise a
@@ -260,6 +262,8 @@ export function handlers(): Record<string, Handler> {
       if (payAmount > currentDue) {
         return err(`Payment exceeds the pending due of ₹${currentDue} — collect at most that amount.`);
       }
+      const splitErr = splitPaymentError(paymentMode, payAmount, cashAmount, upiAmount);
+      if (splitErr) return err(splitErr);
 
       const newDue = Math.max(currentDue - payAmount, 0);
       await db.from("lockers").update({
@@ -296,6 +300,8 @@ export function handlers(): Record<string, Handler> {
       // week), but a future-dated payment would mean money that hasn't been received yet.
       const entryDate = date || todayISO();
       if (entryDate > todayISO()) return err("Payment date cannot be in the future");
+      const splitErr = splitPaymentError(paymentMode, payAmount, cashAmount, upiAmount);
+      if (splitErr) return err(splitErr);
 
       // Stamped at noon IST on the chosen day so the row lands on that IST calendar date in
       // every report — istDayStart/istDayEnd bucket by IST, and a raw midnight would sit on
@@ -344,6 +350,8 @@ export function handlers(): Record<string, Handler> {
 
       const feeDue = payLater ? monthlyFee : 0;
       const amountPaidNow = payLater ? 0 : monthlyFee;
+      const splitErr = splitPaymentError(paymentMode, amountPaidNow, cashAmount, upiAmount);
+      if (splitErr) return err(splitErr);
 
       await db.from("lockers").update({
         locker_due_date: newDueDate,

@@ -3,11 +3,11 @@
 // integrity report.
 // deno-lint-ignore-file no-explicit-any
 import type { Ctx, Handler } from "../registry.ts";
-import { addDays, endDateForMonths, todayISO } from "../../_shared/dates.ts";
+import { addDays, todayISO } from "../../_shared/dates.ts";
 import { err, json } from "../../_shared/http.ts";
 import { isOwnerOrAdmin } from "../../_shared/auth.ts";
 import { writeEvent } from "../../_shared/audit.ts";
-import { fetchAllRows, purgeExpiredSignups, remindExpiringMembers } from "../lib.ts";
+import { fetchAllRows, membershipDateDrift, purgeExpiredSignups, remindExpiringMembers } from "../lib.ts";
 
 export const IDEMPOTENCY_KEY_HOURS = 48;
 export const STALE_SESSION_HOURS = 24;
@@ -15,21 +15,9 @@ const LIST_LIMIT = 100; // rows listed per finding; the counts are always comple
 
 /** Read-only checks for the nightly integrity report (P0.8). Writes nothing. */
 export async function integrityFindings(db: Ctx["db"]) {
-  // 1. End dates that match neither way a plan is sold: months (as fix_membership_dates computes
-  //    it) or a custom number of days (start + plan_days − 1), each plus hold days. Due dates are
-  //    not compared: paying off a due and plan changes move them on purpose. A manual end-date
-  //    change (change_membership_plan) also shows here, so these are rows to review, not to fix
-  //    blindly — see F-3 in the plan.
-  const memberships = await fetchAllRows<any>(() => db.from("memberships")
-    .select("id, branch_id, start_date, months_paid, plan_days, hold_days, end_date").order("id"));
-  const membershipDates = memberships.flatMap((m) => {
-    const holds = Number(m.hold_days ?? 0);
-    const byMonths = addDays(endDateForMonths(m.start_date, m.months_paid), holds);
-    const byDays = m.plan_days ? addDays(m.start_date, Number(m.plan_days) - 1 + holds) : null;
-    return m.end_date === byMonths || m.end_date === byDays
-      ? []
-      : [{ membership_id: m.id, branch_id: m.branch_id, end_date: m.end_date, months_end_date: byMonths, days_end_date: byDays }];
-  });
+  // 1. End dates that match neither the months rule nor the custom-days rule (plus holds); hand-set
+  //    end dates and due dates are left out. The same check fix_membership_dates now uses (F-2/F-3).
+  const { checked, drift: membershipDates } = await membershipDateDrift(db);
   // 2. Same selection as fix_negative_food_pass_balances (money.ts).
   const passes = await fetchAllRows<any>(() => db.from("food_passes").select("id, student_id, branch_id, balance").lt("balance", 0).order("id"));
   // 3. Sessions still open more than a day after they started.
@@ -38,7 +26,7 @@ export async function integrityFindings(db: Ctx["db"]) {
     .eq("status", "active").lt("start_time", cutoff).order("start_time").order("id"));
   return {
     counts: { membership_dates: membershipDates.length, negative_food_pass: passes.length, stale_active_bookings: stale.length },
-    checked: { memberships: memberships.length },
+    checked: { memberships: checked },
     membership_dates: membershipDates.slice(0, LIST_LIMIT),
     negative_food_pass: passes.slice(0, LIST_LIMIT).map((p) => ({ food_pass_id: p.id, student_id: p.student_id, branch_id: p.branch_id, balance: p.balance })),
     stale_active_bookings: stale.slice(0, LIST_LIMIT).map((b) => ({ booking_id: b.id, student_id: b.student_id, branch_id: b.branch_id, booking_type: b.booking_type, start_time: b.start_time })),

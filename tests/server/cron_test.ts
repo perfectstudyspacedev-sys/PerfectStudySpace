@@ -141,6 +141,9 @@ await setup();
   m({ start_date: "2026-09-10", end_date: "2026-10-09", due_date: "2026-11-10", months_paid: 1, plan_days: 30 });
   // three hold days pushed the end date — correct as it is
   m({ start_date: "2026-08-01", end_date: "2026-09-03", due_date: "2026-09-01", months_paid: 1, plan_days: 31, hold_days: 3 });
+  // end date set by hand through change_membership_plan — left alone
+  const manual = m({ start_date: "2026-07-01", end_date: "2026-08-20", due_date: "2026-08-21", months_paid: 1, plan_days: 31 });
+  rows("events").push({ id: 900, occurred_at: new Date().toISOString(), action: "change_membership_plan", tier: "T3", actor_type: "owner", actor_id: owner.id, ok: true, payload: { membershipId: manual.id, newEndDate: "2026-08-20" } });
   insert("food_passes", { student_id: st.id, branch_id: b1.id, balance: -40 });
   insert("food_passes", { student_id: st.id, branch_id: b2.id, balance: 25 });
   insert("bookings", { student_id: st.id, branch_id: b1.id, booking_type: "temporary", status: "active", start_time: new Date(Date.now() - 30 * 3600e3).toISOString(), hours: 6, amount: 0 });
@@ -156,8 +159,8 @@ await setup();
   const ev = rows("events").filter((e) => e.action === "integrity_report");
   check(ev.length === 1 && ev[0].actor_type === "system" && ev[0].tier === "T0", "I1: one events row with action 'integrity_report'", ev);
   const rep = await call("get_integrity_report", {}, tO);
-  check(rep.report.counts.membership_dates === 1 && rep.report.membership_dates[0].membership_id === drifted.id && rep.report.membership_dates[0].months_end_date === "2026-09-30",
-    "I1: only the drifted end date is reported — not custom-day plans, due dates moved by a payment, or hold days", rep.report.membership_dates);
+  check(rep.report.counts.membership_dates === 1 && rep.report.membership_dates[0].membership_id === drifted.id && rep.report.membership_dates[0].expected_end_date === "2026-09-30",
+    "I1: only the drifted end date is reported — not custom-day plans, due dates moved by a payment, hold days or hand-set end dates", rep.report.membership_dates);
   check(rep.report && rep.report.occurredAt === ev[0].occurred_at && rep.report.counts.negative_food_pass === 1 && rep.report.counts.stale_active_bookings === 1
     && rep.report.stale_active_bookings[0].booking_type === "temporary" && rep.report.negative_food_pass[0].balance === -40,
     "I1: the owner reads it back — one negative Food Pass, one session open over 24 hours", rep.report);
@@ -165,13 +168,16 @@ await setup();
   const staffRead = await call("get_integrity_report", {}, tP);
   check(staffRead.status === 403, "I1: staff cannot read the report", staffRead);
 
-  // Food Pass count matches the fix action; fix_membership_dates rewrites far more than the drift (F-3)
+  // the counts match what the fix_* actions then change (F-3 fixed: only the real drift)
+  const dueBefore = rows("memberships").map((x) => `${x.id}:${x.due_date}`).join();
   const fixDates = await call("fix_membership_dates", {}, tO);
   const fixPasses = await call("fix_negative_food_pass_balances", {}, tO);
-  check(fixPasses.fixed === r.counts.negative_food_pass && fixDates.checked === rep.report.checked.memberships,
-    "I2: the Food Pass count matches what fix_negative_food_pass_balances changes", { counts: r.counts, fixPasses });
-  check(fixDates.fixed > r.counts.membership_dates && rows("memberships").find((x) => x.id === custom.id).end_date === "2026-09-30",
-    "F-3 (reported, not changed): fix_membership_dates also rewrites correct rows — here it moved the 45-day plan's end from 14 Sep to 30 Sep (16 unpaid days)", { fixed: fixDates.fixed, reported: r.counts.membership_dates });
+  check(fixDates.fixed === r.counts.membership_dates && fixDates.checked === rep.report.checked.memberships && fixPasses.fixed === r.counts.negative_food_pass,
+    "I2: the counts match what fix_membership_dates and fix_negative_food_pass_balances change", { counts: r.counts, fixDates, fixPasses });
+  const row = (id: string) => rows("memberships").find((x) => x.id === id);
+  check(row(drifted.id).end_date === "2026-09-30" && row(custom.id).end_date === "2026-09-14" && row(manual.id).end_date === "2026-08-20"
+    && rows("memberships").map((x) => `${x.id}:${x.due_date}`).join() === dueBefore,
+    "F-3: fix_membership_dates corrects only the drifted end date — the 45-day plan, the hand-set date and every due date stay as they were", { drifted: row(drifted.id), custom: row(custom.id) });
   await cron("cron_integrity_report");
   const latest = await call("get_integrity_report", {}, tO);
   check(latest.report.counts.membership_dates === 0 && latest.report.counts.negative_food_pass === 0 && rows("events").filter((e) => e.action === "integrity_report").length === 2,

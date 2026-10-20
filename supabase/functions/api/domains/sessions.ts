@@ -7,7 +7,7 @@ import { MEMBERSHIP_GRACE_DAYS } from "../../_shared/membership.ts";
 import { OVERTIME_GRACE_MINUTES, computeOvertimeCharge } from "../../_shared/overtime.ts";
 import { err, json } from "../../_shared/http.ts";
 import { isOwnerOrAdmin, requireBranch } from "../../_shared/auth.ts";
-import { STUDY_REPORT_MAX_DAYS, fetchAllRows, findOverlappingSession, formatISTSession, getWalkinFee, insertPaymentTransactions, isISODate, recordTransaction, storedPaymentMode, upsertStudent } from "../lib.ts";
+import { STUDY_REPORT_MAX_DAYS, fetchAllRows, findOverlappingSession, formatISTSession, getWalkinFee, insertPaymentTransactions, isISODate, recordTransaction, splitPaymentError, storedPaymentMode, upsertStudent } from "../lib.ts";
 
 export function handlers(): Record<string, Handler> {
   const h: Record<string, Handler> = {
@@ -25,6 +25,11 @@ export function handlers(): Record<string, Handler> {
       // day got moved there: their own cabin then read as a cross-branch visit (no cabin at
       // check-in) and their home branch lost access to their profile. Walk-in-only students
       // still follow the branch they visit, as before.
+      // Fee first (a read), so a split that doesn't add up is refused before anything is written.
+      const amount = await getWalkinFee(db, Number(hours));
+      const splitErr = splitPaymentError(paymentMode, amount, cashAmount, upiAmount);
+      if (splitErr) return err(splitErr);
+
       const { data: phoneOwner } = await db.from("students").select("id").eq("phone", phone).maybeSingle();
       const { count: ownerActiveMemberships } = phoneOwner
         ? await db.from("memberships").select("*", { count: "exact", head: true }).eq("student_id", phoneOwner.id).eq("is_active", true)
@@ -42,7 +47,6 @@ export function handlers(): Record<string, Handler> {
         desk = d;
       }
 
-      const amount = await getWalkinFee(db, Number(hours));
       // startTimeStr is a full UTC ISO string sent by the frontend after local→UTC conversion
       const startTime = startTimeStr ? new Date(startTimeStr).toISOString() : new Date().toISOString();
       const endTime = new Date(new Date(startTime).getTime() + Number(hours) * 3600000).toISOString();
