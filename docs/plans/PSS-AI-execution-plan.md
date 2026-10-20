@@ -46,11 +46,11 @@ Checked and found sound by the reviewer: the router behaves as before, money hel
 
 - Say **"Build Phase 0"**, **"Build P0.4"**, or **"Build P2 portal R1"**. Refer to items by label, for example *"In P2 skip I27"*.
 - Before writing any code, read this whole file, `CLAUDE.md` and everything in `.claude/rules/`.
-- **Settled decisions** must not be re-decided. **Open decisions** (D0 to D10): if the phase you are building needs one that is still open, stop and ask the owner. Never guess.
+- **Settled decisions** must not be re-decided. Decisions D0 to D10 and the owner answers A1–A5, C1–C24 are settled (2026-10-20); build with them.
 - **One branch for every phase: `pss-ai/all-phases`** (owner decision, 2026-10-18). Build each remaining phase on it, one commit per item; never create a branch per phase, and do not touch `main` or any other branch. Phases 0 and 1 were first built on `pss-ai/p0-foundation` and `pss-ai/p1-data-brain`; those two are left as they are (historical), and `pss-ai/all-phases` contains everything in them.
 - When an item is done, mark it ✅ in this file in the same commit as the code.
 - Tick an exit-gate box only with evidence: test output, build output or browser-QA notes. Never by assertion.
-- **Phases 0 and 1 are written at build level.** Phases 2 to 6 are written at spec level. Before building one of them, re-read the repo, rewrite that phase's items here in the same detail as Phase 0, and get the owner's approval on the rewrite.
+- **Phases 0 and 1 are written at build level.** Phases 2 to 6 are written at spec level. Before building one of them, re-read the repo and write the build-level detail here (as-built notes per item); by A1 no separate approval is needed.
 
 ---
 
@@ -90,21 +90,57 @@ Checked and found sound by the reviewer: the router behaves as before, money hel
 | S11 | Behaviour models train on the developer's own machine from a Supabase export. Their scores are written back to Supabase. |
 | S12 | Students never call staff actions. The portal uses new `me_*` actions that take the student from the login token, never from the request body. |
 
-## Open decisions (stop and ask if the phase needs one)
+## Decisions (all settled by the owner on 2026-10-20)
 
-| # | Decision | Options | Needed by | Status |
-|---|---|---|---|---|
-| D0 | Test runner | Proposed: Vitest for pure TypeScript modules in `supabase/functions/_shared/` | P0.3 | Open |
-| D1 | Cash handling | Allow cash at the hall, or UPI only | P2 | Open |
-| D2 | Payment confirmation | Who confirms UPI payments (owner or one trusted person), and how quickly | P2 | Open |
-| D3 | AI models | Which model the agents use (routine and hard cases); which small open model to distil later | P1.8 | Open |
-| D4 | Agent language | Tamil, English, or mirror the student's mix | P2 | Open |
-| D5 | T3 auto-approve limits | For example, waivers under a set rupee amount | P3 | Open |
-| D6 | Portal PIN rules | PIN length, lockout after failed tries, how the owner resets a PIN | P2 | Open |
-| D7 | Released-hours credit | Share of the resale price credited to a member who releases hours (SP10) | P3 | Open |
-| D8 | Exam sources | Which exam bodies to track; read from their sites or enter dates by hand | P3 | Open |
-| D9 | Location check | How close to the branch a student must be to check in; consent wording under the DPDP Act, 2023 | P4 | Open |
-| D10 | Food | Keep a kitchen person, an outside vendor, or vending | P4 | Open |
+The owner accepted every suggestion in the 2026-10-20 question list ("all suggestions, build all the phases"). Nothing below needs asking again; change a value only if the owner says so.
+
+| # | Decision | Settled |
+|---|---|---|
+| D0 | Test runner | Vitest for TypeScript modules; Deno for the server suites; pytest for `ml/` |
+| D1 | Cash handling | Cash at the desk stays allowed (staff/owner entry); students pay by UPI in the portal |
+| D2 | Payment confirmation | The owner confirms each UPI payment, target within 2 hours between 08:00 and 22:00 IST |
+| D3 | AI models | Claude Haiku 5.5 for routine chats; Claude Sonnet 5.5 for hard cases and reading payment screenshots. Monthly AI spend capped by an owner setting. I7 (training our own small model) is skipped. |
+| D4 | Agent language | Reply in the student's own language: English, or Tamil (Tamil script or Tanglish) |
+| D5 | Auto-approve limits | Waivers up to ₹200 and holds up to 7 days run without the owner; refunds, plan changes and price changes always go to the approval queue |
+| D6 | Portal PIN | 6 digits; locked for 15 minutes after 5 wrong tries; the owner resets by sending a new setup code |
+| D7 | Released-hours credit | 50% of the resale price, as portal credit |
+| D8 | Exam sources | TNPSC, UPSC, SSC, IBPS/SBI, TNUSRB, RRB — read from their public pages, with manual entry when a page can't be read |
+| D9 | Location check | Within 100 m of the branch; consent text drafted in the build, shown before the first check-in |
+| D10 | Food | Not chosen. Build food ordering so it works for a kitchen person, an outside vendor or vending (a fulfilment queue any of them can work from) |
+
+### Owner answers to the build questions (2026-10-20)
+
+| # | Answer |
+|---|---|
+| A1 | Write each phase's build-level rewrite into this file and build it without a separate approval |
+| A2 | Build all phases back to back; every new feature stays switched off until the owner deploys and switches it on. Exit gates are measured later, in operation |
+| A3 | Fix F-1, F-2 and F-3, with tests |
+| A4 | One independent review after each phase |
+| A5 | Pilot branch: Hopes. Control branch (Phase 3): Ram Nagar |
+| C1 | Student self-hold without approval: up to 7 days, once a calendar month; anything longer goes to approval |
+| C2 | Waitlist seat offer: 24 hours to accept |
+| C3 | ID photo at self sign-up: optional; Aadhaar or college ID; the AI only checks it is readable and the name matches |
+| C4 | Agent pass bar: 18 of 20 test cases |
+| C5 | Business legal name and grievance contact: owner fills `app_settings` keys `business_legal_name`, `grievance_contact_name`, `grievance_contact_phone`, `grievance_contact_email`; the privacy page shows them |
+| C6 | Sign-off on drafted WhatsApp messages: "Team Perfect Study Space" |
+| C7 | Overbooking allowed: 20% safety margin; a member who arrives anyway gets another desk, else 1 free day |
+| C8 | Walk-in automatic prices within 20% of today's `fee_config` prices |
+| C9 | Enquiry chat lives on the join site (this repo); the public website links to it |
+| C10 | Referral channels: Instagram, Google, flex banner, friend, WhatsApp, other |
+| C11 | Exam ladder: drafted in the build (e.g. TNPSC Group 4 → Group 2 → Group 1); the owner edits it in settings |
+| C12 | Largest discount in win-back or next-exam offers: 10% |
+| C13 | Pay-later: allowed up to 50% of the fee, for 15 days, with owner approval |
+| C14 | Self checkout with a Food Pass shortfall: allow it and add the amount as dues |
+| C15 | Forgotten sessions: closed at 23:30 IST at the booked end time, no overtime charged |
+| C16 | Complaint categories: cleanliness, noise, Wi-Fi, seat, food, other |
+| C17 | Housekeeping tasks that need a photo: all daily cleaning tasks |
+| C18 | Retire the desk-staff screens after a month unused; keep owner, admin, kitchen and housekeeping accounts |
+| C19 | Portal target: 70% of active members use it each month |
+| C20 | Study buddy (opt-in) and weekly experiments on offers, hours and menu: yes |
+| C21 | Study certificate shows the hall name, hours studied, date range and a check link |
+| C22 | Parent weekly summary: Sunday 19:00 IST |
+| C23 | Event log kept 400 days |
+| C24 | The large discount/cashback confirm stays always on |
 
 ## Labels at a glance
 
