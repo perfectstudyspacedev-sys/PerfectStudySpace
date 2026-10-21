@@ -1716,3 +1716,42 @@ input[type="week"]::-webkit-calendar-picker-indicator {
 @media (max-width: 900px) {
   .drw-info-grid, .snap-info-grid { grid-template-columns: 1fr; }
 }
+/* ── PSS-AI P2.1 — student portal (/me on the student site) ── */
+.portal { max-width: 560px; margin: 0 auto; padding: 1rem 1rem calc(5.5rem + env(safe-area-inset-bottom)); }
+.portal-header { display: flex; align-items: center; justify-content: space-between; gap: 0.75rem; margin-bottom: 1rem; }
+.portal-header img { height: 40px; width: 40px; }
+.portal-header .btn { padding: 0.45rem 0.7rem; }
+.portal .card { margin-bottom: 1rem; }
+.portal h2 { font-family: var(--font-display); font-size: 1.5rem; }
+.portal-big { font-family: var(--font-display); font-size: 2rem; font-weight: 800; color: var(--accent); line-height: 1.1; }
+.portal-kv { display: grid; grid-template-columns: auto 1fr; gap: 0.35rem 0.8rem; font-size: 0.9rem; }
+.portal-kv dt { color: var(--text-muted); }
+.portal-kv dd { text-align: right; }
+.portal-dot { position: absolute; top: -4px; right: -4px; min-width: 18px; height: 18px; border-radius: 9px; background: var(--accent); color: #000; font-size: 0.7rem; font-weight: 700; display: flex; align-items: center; justify-content: center; padding: 0 4px; }
+.portal-nav { position: fixed; bottom: 0; left: 0; right: 0; display: flex; background: rgba(10, 10, 10, 0.97); border-top: 1px solid var(--border); padding: 0.35rem 0 calc(0.35rem + env(safe-area-inset-bottom)); z-index: 50; }
+.portal-nav a { flex: 1; text-align: center; color: var(--text-muted); text-decoration: none; font-size: 0.72rem; padding: 0.3rem 0; }
+.portal-nav a.active { color: var(--accent); }
+.portal-nav .icon { display: block; font-size: 1.2rem; line-height: 1.3; }
+.portal-radio { display: flex; align-items: center; gap: 0.6rem; padding: 0.55rem 0; font-size: 0.95rem; cursor: pointer; }
+.chip-row { display: flex; flex-wrap: wrap; gap: 0.5rem; }
+.chip { border: 1px solid var(--border); border-radius: 999px; padding: 0.45rem 0.85rem; background: transparent; color: var(--text); font-size: 0.85rem; cursor: pointer; }
+.chip.on { background: var(--accent); border-color: var(--accent); color: #000; font-weight: 700; }
+.portal-qr-box { display: none; text-align: center; margin-top: 1rem; }
+.portal-qr { width: 200px; height: 200px; image-rendering: pixelated; background: #fff; padding: 6px; border-radius: 8px; margin-top: 0.5rem; }
+@media (min-width: 700px) { .portal-qr-box { display: block; } }
+.portal-list { list-style: none; }
+.portal-list li { display: flex; justify-content: space-between; gap: 0.75rem; padding: 0.55rem 0; border-bottom: 1px solid rgba(255, 255, 255, 0.06); font-size: 0.9rem; }
+.portal-list li:last-child { border-bottom: 0; }
+.portal-list a { color: var(--text); text-decoration: none; }
+.portal-bars { list-style: none; }
+.portal-bars li { display: grid; grid-template-columns: 4.2rem 1fr 4.2rem; align-items: center; gap: 0.5rem; padding: 0.25rem 0; font-size: 0.8rem; }
+.portal-bar-track { height: 10px; background: rgba(255, 255, 255, 0.06); border-radius: 5px; overflow: hidden; }
+.portal-bar { display: block; height: 100%; background: var(--accent); border-radius: 5px; }
+.portal-bar-value { text-align: right; color: var(--text-muted); }
+.portal-bar-date { color: var(--text-muted); }
+.success-msg { color: #4ade80; font-size: 0.9rem; }
+.portal-chat { display: flex; flex-direction: column; gap: 0.5rem; }
+.portal-msg { max-width: 85%; padding: 0.55rem 0.8rem; border-radius: 14px; font-size: 0.92rem; line-height: 1.45; white-space: pre-wrap; }
+.portal-msg.me { align-self: flex-end; background: var(--accent); color: #000; border-bottom-right-radius: 4px; }
+.portal-msg.them { align-self: flex-start; background: rgba(255, 255, 255, 0.08); border-bottom-left-radius: 4px; }
+.portal main a:not(.btn), .login-card a { color: var(--accent); }

@@ -5,7 +5,10 @@ import { api } from '../lib/api'
 // Shared by every component and read again when a component mounts more than 10 minutes after the
 // last read, so a desk tab left open picks up a change. Until the first answer arrives, and if the
 // read fails, everything counts as off (the server checks the switches too).
-const OFF = { focusPulse: false, anomaly: false, analyst: false, discountConfirmOver: 1000 }
+const OFF = {
+  focusPulse: false, anomaly: false, analyst: false, portal: false, upiPay: false, concierge: false,
+  collections: false, autoApprove: false, aiMessages: false, realtime: false, discountConfirmOver: 1000,
+}
 const MAX_AGE_MS = 10 * 60 * 1000
 let cached = null
 let cachedAt = 0

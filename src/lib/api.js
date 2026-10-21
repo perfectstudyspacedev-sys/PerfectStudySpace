@@ -38,8 +38,27 @@ export async function agentApi(payload) {
   return await invoke('agent', null, payload, {})
 }
 
-async function invoke(fn, action, body, extraHeaders) {
-  const token = getToken()
+// PSS-AI P2.1 — the student portal. Its token is separate from the staff token (localStorage, so a
+// student stays logged in on their phone) and is the only one sent; a 401 sends the portal back to
+// its login page.
+const STUDENT_TOKEN_KEY = 'pss_student_token'
+export function getStudentToken() {
+  try { return localStorage.getItem(STUDENT_TOKEN_KEY) } catch { return null }
+}
+export function setStudentToken(token) {
+  try {
+    if (token) localStorage.setItem(STUDENT_TOKEN_KEY, token)
+    else localStorage.removeItem(STUDENT_TOKEN_KEY)
+  } catch { /* private mode: the student logs in again next time */ }
+}
+export async function portalApi(action, payload = {}, { idempotencyKey } = {}) {
+  return await invoke('api', action, { action, ...payload }, idempotencyKey ? { 'Idempotency-Key': idempotencyKey } : {}, getStudentToken(), 'pss:portal-unauthorized')
+}
+export async function portalAgent(payload) {
+  return await invoke('agent', null, payload, {}, getStudentToken(), 'pss:portal-unauthorized')
+}
+
+async function invoke(fn, action, body, extraHeaders, token = getToken(), unauthorizedEvent = 'pss:unauthorized') {
 
   const { data, error } = await supabase.functions.invoke(fn, {
     body,
@@ -76,7 +95,7 @@ async function invoke(fn, action, body, extraHeaders) {
     // logged in — force it back to the login screen immediately instead of leaving the
     // page silently broken. Not raised for the login action itself (wrong credentials).
     if (action !== 'login' && lower === 'unauthorized') {
-      window.dispatchEvent(new Event('pss:unauthorized'))
+      window.dispatchEvent(new Event(unauthorizedEvent))
       throw fail('Your session has ended — please log in again')
     }
     if (lower.includes('non-2xx')) {

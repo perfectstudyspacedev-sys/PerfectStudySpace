@@ -1,0 +1,13 @@
+{
+  "name": "Perfect Study Space — My Study Space",
+  "short_name": "My PSS",
+  "description": "Your plan, payments and study report at Perfect Study Space",
+  "start_url": "/me",
+  "scope": "/me",
+  "display": "standalone",
+  "background_color": "#0a0a0a",
+  "theme_color": "#0a0a0a",
+  "icons": [
+    { "src": "/pss-logo.png", "sizes": "any", "type": "image/png", "purpose": "any" }
+  ]
+}

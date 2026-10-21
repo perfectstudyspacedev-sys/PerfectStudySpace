@@ -3,6 +3,7 @@ import { useParams, Link, useSearchParams } from 'react-router-dom'
 import { api } from '../lib/api'
 import { useRetryKey } from '../hooks/useRetryKey'
 import { useFeatureFlags } from '../hooks/useFeatureFlags'
+import PortalSetupButton from '../components/PortalSetupButton'
 import { useAuth } from '../context/AuthContext'
 import { formatCurrency, formatDate, paymentModeLabel, getMultiMonthDiscount, pendingCashbackTotal, todayISO, shiftDate, REFERRAL_OPTIONS, renewalInfo, isNotStartedYet } from '../lib/utils'
 import PaymentModeSelector, { isSplitValid } from '../components/PaymentModeSelector'
@@ -1143,6 +1144,7 @@ export default function StudentProfilePage() {
               🔀 Transfer Branch
             </button>
           )}
+          <PortalSetupButton studentId={student.id} />
           <Link to="/students" className="btn btn-ghost">← Students</Link>
         </div>
       </div>
