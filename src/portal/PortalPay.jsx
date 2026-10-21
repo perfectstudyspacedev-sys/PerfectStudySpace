@@ -1,22 +1,12 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useState } from 'react'
 import { Link, useSearchParams } from 'react-router-dom'
-import qrcode from 'qrcode-generator'
 import { portalApi } from '../lib/api'
+import QrCode from '../components/UpiQr'
 import { PURPOSE_LABEL, rupees, shrinkImage } from './portalUtils'
 
 // PSS-AI P2.2 — pay by UPI and send the proof. The amount always comes from the server; the
 // owner confirms each payment (D2: 08:00–22:00 IST, usually within 2 hours).
 const FOOD_PASS_CHIPS = [200, 500, 1000]
-
-function QrCode({ link }) {
-  const src = useMemo(() => {
-    const qr = qrcode(0, 'M')
-    qr.addData(link)
-    qr.make()
-    return qr.createDataURL(5, 2)
-  }, [link])
-  return <img src={src} alt="UPI payment QR code" className="portal-qr" />
-}
 
 export default function PortalPay() {
   const [params] = useSearchParams()

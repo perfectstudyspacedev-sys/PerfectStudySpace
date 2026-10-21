@@ -386,6 +386,8 @@ export default function Shell() {
           {isOwner && flags.anomaly && <NavLink to="/flags">Flags</NavLink>}
           {isOwner && flags.analyst && <NavLink to="/analyst">Analyst</NavLink>}
           {isOwner && (flags.portal || flags.upiPay) && <NavLink to="/approvals">Approvals</NavLink>}
+          {flags.portal && <NavLink to="/chat-replies">Chat replies</NavLink>}
+          {isOwner && flags.collections && <NavLink to="/send-list">Send list</NavLink>}
           {isOwner && (
             <>
               <NavLink to="/settings/branches">Branches</NavLink>

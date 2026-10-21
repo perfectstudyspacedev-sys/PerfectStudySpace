@@ -8,6 +8,7 @@ import PaymentModeSelector, { isSplitValid } from '../components/PaymentModeSele
 import RenewalKindBanner from '../components/RenewalKindBanner'
 import PendingSignupsPanel from '../components/PendingSignupsPanel'
 import ConfirmDialog from '../components/ConfirmDialog'
+import AiDraftButton from '../components/AiDraftButton'
 import { buildStudyReportMessage, validateStudyReportRange, STUDY_REPORT_MAX_DAYS, STUDY_REPORT_DEFAULT_DAYS } from '../lib/studyReport'
 import { DEV_MODE } from '../lib/devMode'
 
@@ -801,6 +802,8 @@ function ActiveMembersTab({ branchId, tempPackages, permPackages }) {
             </div>
           </div>
           {reportDialog.error && <p className="error-msg" data-testid="study-report-error">{reportDialog.error}</p>}
+          {/* PSS-AI P2.5: an AI-written summary instead of the day-by-day list (pssai_ai_messages). */}
+          <AiDraftButton kind="study_report" studentId={reportDialog.m.student_id} dateFrom={reportDialog.from} dateTo={reportDialog.to} phone={reportDialog.m.student_phone} />
         </ConfirmDialog>
       )}
 
@@ -1205,6 +1208,7 @@ function NewMembershipForm({ branchId, onCreated, tempPackages, permPackages, si
             >
               💬 Resend WhatsApp Message
             </button>
+            {receipt.membership?.id && <div style={{ marginTop: '0.5rem', textAlign: 'center' }}><AiDraftButton kind="welcome" membershipId={receipt.membership.id} phone={receipt.phone} /></div>}
           </div>
         )}
 

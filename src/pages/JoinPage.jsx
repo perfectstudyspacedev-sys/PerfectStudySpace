@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react'
 import { useParams } from 'react-router-dom'
 import { api } from '../lib/api'
 import { REFERRAL_OPTIONS } from '../lib/utils'
+import SignupPayment from '../components/SignupPayment'
 
 // SSP — the public self sign-up page (/join/<branch code>). Reached only by the branch's link,
 // outside the login. It can only submit details; staff approve and finish the registration.
@@ -44,7 +45,7 @@ export default function JoinPage() {
     setError('')
     try {
       const res = await api('public_signup_submit', { code, ...form, name })
-      setDone({ ref: res.ref, firstName: name.split(' ')[0], updated: !!res.updated })
+      setDone({ ref: res.ref, firstName: name.split(' ')[0], updated: !!res.updated, phone: form.phone })
     } catch (err) {
       setError(err.message)
     } finally {
@@ -77,6 +78,8 @@ export default function JoinPage() {
             <p style={{ fontSize: '0.8rem', color: 'var(--text-muted)', marginTop: '0.75rem' }}>
               The desk will choose your plan and take the payment to finish your registration today.
             </p>
+            {/* PSS-AI A3: shown only when the owner has switched self-pay on. */}
+            <SignupPayment code={code} refCode={done.ref} phone={done.phone} />
           </div>
         ) : (
           <form onSubmit={submit} noValidate>

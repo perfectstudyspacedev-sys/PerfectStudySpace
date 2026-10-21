@@ -29,8 +29,13 @@ const fmt = (iso: string) => new Date(`${iso}T00:00:00Z`).toLocaleDateString("en
 const hm = (min: number) => `${Math.floor(min / 60)}h ${String(min % 60).padStart(2, "0")}m`;
 
 export async function draftMessage(db: Ctx["db"], staff: StaffRow, payload: any): Promise<{ text: string } | { error: string; status?: number }> {
-  const { data: student } = typeof payload.studentId === "string"
-    ? await db.from("students").select("id, name, branch_id, branches(name)").eq("id", payload.studentId).maybeSingle() : { data: null };
+  let studentId = typeof payload.studentId === "string" ? payload.studentId : null;
+  if (!studentId && typeof payload.membershipId === "string") {
+    const { data: m } = await db.from("memberships").select("student_id").eq("id", payload.membershipId).maybeSingle();
+    studentId = m?.student_id ?? null;
+  }
+  const { data: student } = studentId
+    ? await db.from("students").select("id, name, branch_id, branches(name)").eq("id", studentId).maybeSingle() : { data: null };
   if (!student) return { error: "Student not found", status: 404 };
   if (!requireBranch(staff, student.branch_id)) return { error: "Branch access denied", status: 403 };
   const first = String(student.name).split(" ")[0];

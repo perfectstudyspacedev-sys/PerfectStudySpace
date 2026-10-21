@@ -7,6 +7,7 @@ import type { Ctx, Handler } from "../registry.ts";
 import { err, json } from "../../_shared/http.ts";
 import { isOwnerOrAdmin, requireBranch } from "../../_shared/auth.ts";
 import { notifyStudent } from "../../_shared/notify.ts";
+import { featureOn } from "../../_shared/flags.ts";
 
 export const MAX_MESSAGE = 1000;
 const me = (ctx: Ctx) => ctx.student!;
@@ -22,7 +23,11 @@ export function handlers(): Record<string, Handler> {
         .eq("student_id", me(ctx).id).in("status", ["sent"]).order("created_at", { ascending: false }).limit(60);
       const list = (data ?? []).sort(byTime);
       const last = list.at(-1);
-      return json({ messages: list.map((m: any) => ({ id: m.id, role: m.role, body: m.body, at: m.sent_at ?? m.created_at })), waiting: !!last && last.role === "student" });
+      return json({
+        messages: list.map((m: any) => ({ id: m.id, role: m.role, body: m.body, at: m.sent_at ?? m.created_at })),
+        waiting: !!last && last.role === "student",
+        assistant: await featureOn(ctx.db, "concierge"),
+      });
     },
 
     // The student's message, stored before the concierge runs (the agent function calls this).

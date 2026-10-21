@@ -18,6 +18,8 @@ import TasksPage from './pages/TasksPage'
 import FlagsPage from './pages/FlagsPage'
 import AnalystPage from './pages/AnalystPage'
 import ApprovalsPage from './pages/ApprovalsPage'
+import ChatRepliesPage from './pages/ChatRepliesPage'
+import SendListPage from './pages/SendListPage'
 import JoinPage from './pages/JoinPage'
 import { signupSiteUrl } from './lib/signupLink'
 
@@ -66,6 +68,8 @@ export default function App() {
             <Route path="flags" element={<OwnerRoute><FlagsPage /></OwnerRoute>} />
             <Route path="analyst" element={<OwnerRoute><AnalystPage /></OwnerRoute>} />
             <Route path="approvals" element={<OwnerRoute><ApprovalsPage /></OwnerRoute>} />
+            <Route path="chat-replies" element={<ChatRepliesPage />} />
+            <Route path="send-list" element={<OwnerRoute><SendListPage /></OwnerRoute>} />
             <Route path="messages" element={<MessagesPage />} />
             <Route path="reports" element={<ReportsPage />} />
             <Route path="actions" element={<TasksPage />} />
