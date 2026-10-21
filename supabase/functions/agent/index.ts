@@ -15,6 +15,7 @@ import { aiClient, MODELS, monthSpend } from "../_shared/ai.ts";
 import { askAnalyst, writeOwnerBrief } from "./analyst.ts";
 import { answerStudent, DAILY_LIMIT, studentMessagesToday } from "./concierge.ts";
 import { runCollections } from "./collections.ts";
+import { draftMessage } from "./writer.ts";
 import { authStudent } from "../_shared/student.ts";
 import { REGISTRY } from "../api/actions.ts";
 import { runAction } from "../api/run.ts";
@@ -34,6 +35,13 @@ async function handleRequest(req: Request): Promise<Response> {
     if (body?.agent === "concierge") return await handleConcierge(req, body);
     const staff = await authStaff(req);
     if (!staff) return err("Unauthorized", 401);
+    if (body?.agent === "writer") {
+      // P2.5: AI-drafted welcome / study-report messages for any staff member, for their branch.
+      const db = adminClient();
+      if (!(await featureOn(db, "ai_messages"))) return err("AI-drafted messages are switched off (pssai_ai_messages)", 403);
+      const r = await draftMessage(db, staff, body);
+      return "error" in r ? err(r.error, r.status ?? 400) : json(r);
+    }
     if (!isOwnerOrAdmin(staff)) return err("Owner only", 403);
     if (body?.agent !== "analyst") return err("Unknown agent");
     const db = adminClient();

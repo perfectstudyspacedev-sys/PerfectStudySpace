@@ -4,6 +4,7 @@ import { err, json } from "../_shared/http.ts";
 import { actorColumnsAvailable, actorDb, eventRow, writeEvent } from "../_shared/audit.ts";
 import { JWT_SECRET } from "../_shared/auth.ts";
 import { claimKey, finishKey, MAX_KEY_LENGTH, requestHash } from "../_shared/idempotency.ts";
+import { broadcastChange } from "../_shared/live.ts";
 import type { ActionDef, Ctx } from "./registry.ts";
 
 // Actions that are not safe to repeat (mutating, not idempotent) honour an Idempotency-Key: the
@@ -43,6 +44,11 @@ export async function runAction(def: ActionDef, ctx: Ctx, payload: any): Promise
   }
   if (def.mutating || ctx.actor.type === "agent" || ctx.actor.type === "student") {
     await writeEvent(ctx.db, await eventRow(def, ctx.actor, ctx.runId, payload, res));
+  }
+  // P2.5: tell open staff screens something changed (only with pssai_realtime on).
+  if (def.mutating && res.status < 400) {
+    const branchId = typeof payload?.branchId === "string" ? payload.branchId : ctx.staff?.branch_id ?? ctx.student?.branch_id ?? null;
+    await broadcastChange(ctx.db, branchId);
   }
   return res;
 }

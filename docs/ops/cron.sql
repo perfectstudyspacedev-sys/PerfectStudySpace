@@ -67,6 +67,8 @@ SELECT cron.schedule('pss_purge_idempotency', '17 * * * *',  $$SELECT pss_run_cr
 SELECT cron.schedule('pss_integrity_report',  '30 20 * * *', $$SELECT pss_run_cron_job('cron_integrity_report')$$);  -- 02:00 IST
 -- P2 (does nothing until a student or the owner starts a hold with a planned end):
 SELECT cron.schedule('pss_resume_holds',      '25 * * * *',  $$SELECT pss_run_cron_job('cron_resume_holds')$$);      -- hourly
+SELECT cron.schedule('pss_session_reminders', '*/5 * * * *', $$SELECT pss_run_cron_job('cron_session_reminders')$$); -- every 5 min (pssai_session_reminders)
+SELECT cron.schedule('pss_waitlist_offers',   '*/15 * * * *', $$SELECT pss_run_cron_job('cron_waitlist_offers')$$);  -- every 15 min (pssai_waitlist_offers)
 -- P1.8 (needs `supabase functions deploy agent`; does nothing while pssai_analyst is off):
 SELECT cron.schedule('pss_owner_brief',       '30 1 * * *',  $$SELECT pss_run_agent_job('owner_brief')$$);           -- 07:00 IST
 -- P2.4 A4 (does nothing while pssai_collections is off):

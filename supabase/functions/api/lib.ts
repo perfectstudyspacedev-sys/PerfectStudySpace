@@ -268,7 +268,9 @@ export const signupClaimCutoff = () => new Date(Date.now() - SIGNUP_CLAIM_MINUTE
 // A sign-up not handled by the end of the IST day it was sent on is deleted (SSP decision 2).
 // Run lazily wherever sign-ups are read or written instead of on a schedule.
 export async function purgeExpiredSignups(db: ReturnType<typeof adminClient>) {
-  await db.from("signup_requests").delete().lt("created_at", istDayStart(todayISO()));
+  // PSS-AI A3: a sign-up whose payment waits for the owner is kept until its keep_until.
+  await db.from("signup_requests").delete().lt("created_at", istDayStart(todayISO()))
+    .or(`keep_until.is.null,keep_until.lt.${new Date().toISOString()}`);
 }
 
 // Same checks as New Registration, so staff never have to fix what the student typed.

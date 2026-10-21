@@ -1,5 +1,6 @@
 import { useEffect, useRef, useCallback, useState } from 'react'
 import { api } from '../lib/api'
+import { SLOW_POLL_MS, useLiveSignal } from './useLiveSignal'
 import { fireNativeNotification } from '../lib/utils'
 
 const POLL_INTERVAL = 30_000
@@ -126,11 +127,13 @@ export function useMessageAlerts(branchId, currentStaffId, canSeeAllBranches) {
     } catch { /* ignore network errors */ }
   }, [branchId, currentStaffId, canSeeAllBranches])
 
+  // P2.5: with live updates on, re-fetch on the server's signal and poll only as a safety net.
+  const live = useLiveSignal(branchId, check)
   useEffect(() => {
     check()
-    const id = setInterval(check, POLL_INTERVAL)
+    const id = setInterval(check, live ? Math.max(POLL_INTERVAL, SLOW_POLL_MS) : POLL_INTERVAL)
     return () => clearInterval(id)
-  }, [check])
+  }, [check, live])
 
   const dismiss = useCallback((id) => {
     setToasts(prev => prev.filter(t => t.id !== id))

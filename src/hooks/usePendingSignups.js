@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { api } from '../lib/api'
+import { SLOW_POLL_MS, useLiveSignal } from './useLiveSignal'
 
 const POLL_INTERVAL = 30_000
 
@@ -23,13 +24,15 @@ export function usePendingSignups(branchId, isOwner, enabled) {
     }
   }, [branchId, isOwner, enabled])
 
+  // P2.5: with live updates on, re-fetch on the server's signal and poll only as a safety net.
+  const live = useLiveSignal(branchId, refresh)
   useEffect(() => {
     refresh()
-    const t = setInterval(refresh, POLL_INTERVAL)
+    const t = setInterval(refresh, live ? Math.max(POLL_INTERVAL, SLOW_POLL_MS) : POLL_INTERVAL)
     const onChange = () => refresh()
     window.addEventListener('pss:signups-changed', onChange)
     return () => { clearInterval(t); window.removeEventListener('pss:signups-changed', onChange) }
-  }, [refresh])
+  }, [refresh, live])
 
   return { requests, error, refresh }
 }

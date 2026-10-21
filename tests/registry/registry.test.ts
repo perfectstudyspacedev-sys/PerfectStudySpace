@@ -11,7 +11,7 @@ const T3_LIST = ['delete_membership', 'close_membership', 'cancel_early_renewal'
 const T2_LIST = ['record_payment', 'record_locker_payment', 'add_manual_payment', 'topup_food_pass', 'create_food_bill', 'collect_food_bill_shortfall', 'create_walkin', 'create_membership', 'renew_membership', 'renew_locker', 'add_locker', 'checkout_booking']
 
 // Scheduled jobs added in P0.7/P0.8; run only by the cron function.
-const SYSTEM_JOBS = ['cron_expiry_alerts', 'cron_integrity_report', 'cron_purge_idempotency', 'cron_purge_signups', 'cron_resume_holds']
+const SYSTEM_JOBS = ['cron_expiry_alerts', 'cron_integrity_report', 'cron_purge_idempotency', 'cron_purge_signups', 'cron_resume_holds', 'cron_session_reminders', 'cron_waitlist_offers']
 const PEOPLE = ['public', 'staff', 'owner', 'admin']
 
 describe('action registry (P0.4)', () => {
@@ -24,7 +24,7 @@ describe('action registry (P0.4)', () => {
   })
   test('the public actions are the only ones open without a login (P2.1 adds the portal PIN login and setup)', () => {
     expect(ACTION_META.filter((a) => a.callers.includes('public')).map((a) => a.name).sort())
-      .toEqual(['login', 'me_login', 'me_set_pin', 'public_create_enquiry', 'public_signup_info', 'public_signup_submit'])
+      .toEqual(['login', 'me_login', 'me_set_pin', 'public_create_enquiry', 'public_signup_info', 'public_signup_pay', 'public_signup_plans', 'public_signup_proof', 'public_signup_submit'])
   })
   test('portal actions (me_*) are for students only, and students reach nothing else (P2.1)', () => {
     for (const a of ACTION_META.filter((x) => x.name.startsWith('me_') && !['me_login', 'me_set_pin'].includes(x.name))) {

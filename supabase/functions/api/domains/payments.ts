@@ -18,7 +18,7 @@ import { registrationAction } from "./onboarding.ts";
 const me = (ctx: Ctx) => ctx.student!;
 
 // What confirming a proof runs: the existing action, as the owner, by UPI.
-async function confirmAction(ctx: Ctx, proof: any): Promise<{ name: string; payload: any } | { error: string }> {
+async function confirmAction(ctx: Ctx, proof: any): Promise<{ name: string; payload: any; after?: (body: any) => Promise<{ studentId: string | null }> } | { error: string }> {
   const { db } = ctx;
   const req = proof.request ?? {};
   const amount = Number(proof.amount_expected);
@@ -150,7 +150,8 @@ export function handlers(): Record<string, Handler> {
       if ("error" in plan) { await release(); return err(plan.error, 409); }
       const ran = await runNested(actionDef(plan.name), ctx, {}, plan.payload);
       if (!ran.ok) { await release(); return err(`Not confirmed — ${plan.name} said: ${ran.body?.error ?? `HTTP ${ran.status}`}`, ran.status >= 500 ? 500 : 409); }
-      const studentId = before.student_id ?? ran.body?.studentId ?? null;
+      const extra = plan.after ? await plan.after(ran.body) : null;
+      const studentId = before.student_id ?? extra?.studentId ?? null;
       const { data: tx } = studentId
         ? await db.from("transactions").select("id").eq("student_id", studentId).eq("payment_mode", "upi").gte("created_at", startedAt)
         : { data: [] };

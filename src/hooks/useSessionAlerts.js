@@ -1,5 +1,6 @@
 import { useEffect, useRef, useCallback, useState } from 'react'
 import { api } from '../lib/api'
+import { useLiveSignal } from './useLiveSignal'
 import { fireNativeNotification } from '../lib/utils'
 
 const POLL_INTERVAL = 60_000       // check every 60 s
@@ -82,6 +83,9 @@ export function useSessionAlerts(branchId) {
     }
   }, [])
 
+  // P2.5: with live updates on, also re-fetch on the server's signal. The 60 s timer stays: the
+  // 5-minute warning is about the clock, not about data changing.
+  useLiveSignal(branchId, check)
   useEffect(() => {
     check()
     const id = setInterval(check, POLL_INTERVAL)
