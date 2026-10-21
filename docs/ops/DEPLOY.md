@@ -1,7 +1,7 @@
-# Deploying PSS-AI (Phases 0 and 1)
+# Deploying PSS-AI
 
-Branch `pss-ai/all-phases` — every phase is built on it. One deploy brings in Phase 0 and Phase 1
-together; every Phase 1 feature stays switched off until you turn it on (part 2 below).
+Branch `pss-ai/all-phases` — every phase is built on it. One deploy brings in every phase built
+so far; every new feature stays switched off until you turn it on (parts 2 and 3 below).
 Order matters (plan rule R10): **database → functions → website**.
 The website must never go live before the functions — the new payment, checkout and renewal
 forms send a header that only the new `api` function accepts.
@@ -20,11 +20,11 @@ SELECT 'overtime' = ANY (enum_range(NULL::transaction_category)::text[]) AS m049
 `m049`, `m050` and `m051` must all be `true` (they come from the RSP/SSP work already on `main`).
 If one is `false`, apply that file first. `m052_already` should be `false`.
 
-## 2. Database: migrations 052 to 057
-Either `supabase db push` (asks before applying), or paste each file into the SQL editor in order:
-`052_event_log.sql`, `053_actor_audit.sql`, `054_idempotency_keys.sql`, `055_focus_pulse.sql`,
-`056_model_outputs.sql`, `057_agent_runs.sql`. All are additions only; 055–057 are Phase 1 tables
-that nothing uses until you switch Phase 1 features on.
+## 2. Database: migrations 052 onwards
+Either `supabase db push` (asks before applying), or paste each file into the SQL editor in number
+order, from `052_event_log.sql` to the newest file in `supabase/migrations/`. All are additions
+only. Phase 1 and 2 tables are unused until you switch their features on. `059` and `062` also
+create two **private** Storage buckets, `payment-proofs` and `id-photos` (no public links).
 
 ## 3. Secrets and extensions
 - Database → Extensions: turn on **pg_cron** and **pg_net**.
@@ -33,6 +33,8 @@ that nothing uses until you switch Phase 1 features on.
   - `ALLOWED_ORIGINS` — optional. Without it the built-in list is used:
     `https://perfect-study-space.pages.dev, https://join.perfectstudyspace.in, https://perfectstudyspace.in, https://www.perfectstudyspace.in, http://localhost:5173`.
     Set it only if the staff site is also opened from another address.
+  - `STUDENT_JWT_SECRET` — another long random value (like `CRON_SECRET`, but different). It signs
+    student portal logins. Without it students are logged out whenever the function restarts.
   - `AI_API_KEY` — your Claude API key (from the Claude Console), for the owner analyst. It lives only
     here; never put it in the website's settings or in a chat. Without it the analyst says it is not set
     up and nothing else changes. Optional: `AI_MODEL` (default `claude-haiku-5-5`) and `AI_MODEL_HARD`
@@ -110,3 +112,54 @@ a feature on.
    on the Dashboard. Spend so far: `SELECT sum(cost_usd) FROM agent_runs WHERE started_at >= date_trunc('month', now());`
 4. Phase 1 exit gate (owner): the churn report beats the 7-day reminder on your data; two weeks of
    flags reviewed with an acceptable false-alarm rate; the owner analyst passes its evaluation (18/20).
+
+# Part 3 — switching Phase 2 on (student portal, UPI payments, agents)
+
+Only after Phase 1's checks. Everything below is off until you switch it on; switch on in this
+order and live with each step for a few days. Every switch is an `app_settings` row (SQL editor):
+
+```sql
+INSERT INTO app_settings (key, value) VALUES ('<key>', '<value>')
+  ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = now();
+```
+
+1. **Business details** (shown on the portal's Privacy page, C5): `business_legal_name`,
+   `grievance_contact_name`, `grievance_contact_phone`, `grievance_contact_email`.
+2. **Student portal** — `pssai_portal` = `on`. Staff then see "🔐 Portal setup code" on each
+   student's profile: it makes a 6-digit code (24 hours, once) and sends it on WhatsApp. The
+   student opens `https://join.perfectstudyspace.in/me/setup`, enters phone + code + a PIN. Start
+   with a few students at the pilot branch (Hopes, A5). A forgotten PIN: send a new code (D6).
+   Owner staff also get an **Approvals** link; every member of staff gets **Chat replies**.
+3. **UPI payments** — `upi_vpa` = your UPI ID (e.g. `perfectstudyspace@okaxis`), `upi_payee_name`
+   = the name on it, then `pssai_upi_pay` = `on`. Students pay in the portal; you confirm each one on
+   **Approvals** after checking your bank app (D2: within 2 hours, 08:00–22:00). Optional:
+   `pssai_proof_reading` = `on` lets the AI read screenshots (Claude Sonnet 5.5; needs
+   `AI_API_KEY`); it never confirms anything.
+4. **Holds** — nothing to switch: with the portal on, students can hold a temporary plan for up to
+   7 days once a month; longer holds and permanent seats come to Approvals. Schedule
+   `pss_resume_holds` (in `docs/ops/cron.sql`) ends planned holds.
+5. **Chat assistant (A1)** — `pssai_concierge` = `on`. It starts in **shadow mode**: every reply is
+   a draft on Chat replies that staff send, edit or discard. After at least two weeks, run
+   `tests/agents/concierge-eval.md` (pass bar 18/20, C4); only then set `pssai_agent_shadow` =
+   `off` to let replies go straight to students. Setting it back to anything else returns to
+   shadow mode at once.
+6. **Reminders (A4)** — `pssai_collections` = `on` (schedule `pss_collections`, 08:00 IST). Each
+   morning **Send list** shows who to remind, why, and a drafted WhatsApp message. Works without AI.
+7. **Sign-up payment (A3)** — `pssai_auto_approve` = `on` (needs `pssai_upi_pay`). New students can
+   choose a plan, a PIN and pay on the sign-up page; you confirm on Approvals and the registration
+   completes itself. The desk's Approve/Register still works as before.
+8. **Optional** — `pssai_session_reminders` (portal notice 10 minutes before a session ends),
+   `pssai_waitlist_offers` (free permanent seats offered for 24 hours, C2), `pssai_ai_messages`
+   ("✨ AI draft" on the welcome and study-report messages), `pssai_realtime` (live updates instead
+   of fast polling; needs the new CSP in `public/_headers`, already in this deploy).
+
+Schedules: re-run `docs/ops/cron.sql` (it is safe to run again) to add `pss_resume_holds`,
+`pss_session_reminders`, `pss_waitlist_offers` and `pss_collections`.
+
+Phase 2 exit gate (you): most renewals at Hopes paid in the portal and confirmed within 2 hours;
+two weeks of shadow-mode chat passing 18/20; no T3 action ran without your approval
+(`SELECT action, actor_type FROM events WHERE tier = 'T3' AND actor_type IN ('agent','student')`
+must be empty); the portal isolation test passes (`npm run test:integration` against a local copy).
+
+Rollback: set the switch back to `off`. Payments already confirmed stay recorded as normal UPI
+transactions.
