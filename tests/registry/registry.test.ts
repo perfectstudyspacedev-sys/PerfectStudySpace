@@ -11,7 +11,7 @@ const T3_LIST = ['delete_membership', 'close_membership', 'cancel_early_renewal'
 const T2_LIST = ['record_payment', 'record_locker_payment', 'add_manual_payment', 'topup_food_pass', 'create_food_bill', 'collect_food_bill_shortfall', 'create_walkin', 'create_membership', 'renew_membership', 'renew_locker', 'add_locker', 'checkout_booking']
 
 // Scheduled jobs added in P0.7/P0.8; run only by the cron function.
-const SYSTEM_JOBS = ['cron_expiry_alerts', 'cron_integrity_report', 'cron_purge_idempotency', 'cron_purge_signups']
+const SYSTEM_JOBS = ['cron_expiry_alerts', 'cron_integrity_report', 'cron_purge_idempotency', 'cron_purge_signups', 'cron_resume_holds']
 const PEOPLE = ['public', 'staff', 'owner', 'admin']
 
 describe('action registry (P0.4)', () => {
@@ -22,14 +22,21 @@ describe('action registry (P0.4)', () => {
     const names = ACTION_META.map((a) => a.name)
     expect(new Set(names).size).toBe(names.length)
   })
-  test('the four public actions are the only ones open without a login', () => {
+  test('the public actions are the only ones open without a login (P2.1 adds the portal PIN login and setup)', () => {
     expect(ACTION_META.filter((a) => a.callers.includes('public')).map((a) => a.name).sort())
-      .toEqual(['login', 'public_create_enquiry', 'public_signup_info', 'public_signup_submit'])
+      .toEqual(['login', 'me_login', 'me_set_pin', 'public_create_enquiry', 'public_signup_info', 'public_signup_submit'])
+  })
+  test('portal actions (me_*) are for students only, and students reach nothing else (P2.1)', () => {
+    for (const a of ACTION_META.filter((x) => x.name.startsWith('me_') && !['me_login', 'me_set_pin'].includes(x.name))) {
+      expect(a.callers.filter((c) => c !== 'agent'), a.name).toEqual(['student'])
+    }
+    for (const a of ACTION_META.filter((x) => x.callers.includes('student'))) expect(a.name, a.name).toMatch(/^me_/)
   })
   test('reads are not mutating; every mutating staff action needs an idempotency key', () => {
     for (const a of ACTION_META) {
       if (/^(list_|get_|lookup_|search_)/.test(a.name) || a.name === 'whoami') expect(a.mutating, a.name).toBe(false)
-      if (a.mutating && a.callers.some((c) => ['staff', 'owner', 'admin'].includes(c))) expect(a.idempotent, a.name).toBe(false)
+      // create_portal_setup_code answers with a secret code, which a stored retry answer would keep.
+      if (a.mutating && a.callers.some((c) => ['staff', 'owner', 'admin'].includes(c)) && a.name !== 'create_portal_setup_code') expect(a.idempotent, a.name).toBe(false)
     }
   })
   test('agents (P1.8) may call T0 reads, plus save_owner_brief which only agents may call', () => {

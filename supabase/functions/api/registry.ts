@@ -3,6 +3,7 @@
 // Tiers follow Appendix D of docs/plans/PSS-AI-execution-plan.md. In Phase 0 tiers and callers are
 // declared and logged only; staff, owner and admin access still uses each handler's own checks (R6).
 import type { adminClient, StaffRow } from "../_shared/auth.ts";
+import type { StudentScope } from "../_shared/student.ts";
 
 export type Caller = 'public' | 'staff' | 'owner' | 'admin' | 'agent' | 'student' | 'system';
 export type Tier = 'T0' | 'T1' | 'T2' | 'T3';
@@ -12,7 +13,7 @@ export interface Ctx {
   req: Request;
   action: string;              // the action name, as the old handler saw it
   staff?: StaffRow;            // set for staff/owner/admin callers
-  student?: { id: string };    // set for student callers (P2)
+  student?: StudentScope;      // set for student callers (P2.1): always the token's student
   actor: { type: Caller; id: string | null };
   runId?: string;              // agent runs (P1)
 }
@@ -44,6 +45,8 @@ const SYSTEM: Caller[] = ["system"]; // scheduled jobs: cron function only (P0.7
 const STAFF_AGENT: Caller[] = [...STAFF, "agent"];
 const OWNER_AGENT: Caller[] = [...OWNER, "agent"];
 const AGENT: Caller[] = ["agent"];        // agent runs only: the api router refuses these
+// P2.1: the student portal. Student tokens reach only these; staff tokens never do.
+const STUDENT: Caller[] = ["student"];
 
 // name, tier, callers, mutating, idempotent
 export const ACTION_META: ActionMeta[] = ([
@@ -64,19 +67,24 @@ export const ACTION_META: ActionMeta[] = ([
   ["checkout_booking", "T2", STAFF, true, false],
   ["claim_signup_request", "T1", STAFF, true, false],
   ["clear_staff_override", "T3", OWNER, true, false],
+  ["confirm_payment_proof", "T2", OWNER, true, false],
   ["close_membership", "T3", STAFF, true, false],
   ["collect_food_bill_shortfall", "T2", STAFF, true, false],
   ["create_enquiry", "T1", STAFF, true, false],
   ["create_food_bill", "T2", STAFF, true, false],
   ["create_food_item", "T3", OWNER, true, false],
   ["create_membership", "T2", STAFF, true, false],
+  // Idempotent on purpose: its answer holds the code, which must never be stored with a retry key.
+  ["create_portal_setup_code", "T1", STAFF, true, true],
   ["create_staff", "T3", OWNER, true, false],
   ["create_task", "T1", STAFF, true, false],
   ["create_walkin", "T2", STAFF, true, false],
   ["cron_expiry_alerts", "T1", SYSTEM, true, true],
   ["cron_integrity_report", "T0", SYSTEM, false, true],
+  ["cron_resume_holds", "T1", SYSTEM, true, true],
   ["cron_purge_idempotency", "T3", SYSTEM, true, true],
   ["cron_purge_signups", "T3", SYSTEM, true, true],
+  ["decide_approval", "T1", OWNER, true, false],
   ["delete_enquiries", "T3", STAFF, true, false],
   ["delete_membership", "T3", STAFF, true, false],
   ["deny_signup_request", "T1", STAFF, true, false],
@@ -101,6 +109,7 @@ export const ACTION_META: ActionMeta[] = ([
   ["get_membership_delete_summary", "T0", STAFF, false, true],
   ["get_my_tasks_today", "T0", STAFF, false, true],
   ["get_owner_brief", "T0", OWNER, false, true],
+  ["get_payment_proof_image", "T0", OWNER, false, true],
   ["get_permanent_waitlist", "T0", STAFF, false, true],
   ["get_recent_activity", "T0", STAFF, false, true],
   ["get_referral_stats", "T0", STAFF_AGENT, false, true],
@@ -119,6 +128,7 @@ export const ACTION_META: ActionMeta[] = ([
   ["list_active_memberships", "T0", STAFF, false, true],
   ["list_alerts", "T0", STAFF, false, true],
   ["list_anomaly_flags", "T0", OWNER_AGENT, false, true],
+  ["list_approvals", "T0", OWNER, false, true],
   ["list_branch_staff", "T0", STAFF, false, true],
   ["list_branches", "T0", STAFF_AGENT, false, true],
   ["list_cashbacks", "T0", STAFF, false, true],
@@ -134,6 +144,7 @@ export const ACTION_META: ActionMeta[] = ([
   ["list_lockers", "T0", STAFF, false, true],
   ["list_messages", "T0", STAFF, false, true],
   ["list_open_enquiry_followups", "T0", STAFF, false, true],
+  ["list_payment_proofs", "T0", OWNER, false, true],
   ["list_signup_requests", "T0", STAFF, false, true],
   ["list_staff", "T0", OWNER, false, true],
   ["list_staff_attendance", "T0", OWNER, false, true],
@@ -145,15 +156,35 @@ export const ACTION_META: ActionMeta[] = ([
   ["list_transfer_desks", "T0", STAFF, false, true],
   ["login", "T1", PUBLIC, true, true],
   ["lookup_student", "T0", STAFF, false, true],
+  ["me_login", "T1", PUBLIC, true, true],
+  ["me_logout", "T1", STUDENT, true, true],
+  ["me_mark_read", "T1", STUDENT, true, true],
+  ["me_membership", "T0", STUDENT, false, true],
+  ["me_notifications", "T0", STUDENT, false, true],
+  ["me_payment_request", "T2", STUDENT, true, false],
+  ["me_plans", "T0", STUDENT, false, true],
+  ["me_privacy", "T0", STUDENT, false, true],
+  ["me_profile", "T0", STUDENT, false, true],
+  ["me_receipts", "T0", STUDENT, false, true],
+  ["me_request", "T1", STUDENT, true, false],
+  ["me_request_hold", "T1", STUDENT, true, false],
+  ["me_respond_offer", "T1", STUDENT, true, false],
+  ["me_resume", "T1", STUDENT, true, false],
+  ["me_set_pin", "T1", PUBLIC, true, true],
+  ["me_study_report", "T0", STUDENT, false, true],
+  ["me_submit_payment_proof", "T2", STUDENT, true, false],
+  ["me_update_contact", "T1", STUDENT, true, false],
   ["pause_membership", "T1", STAFF, true, false],
   ["pause_session", "T1", STAFF, true, false],
   ["public_create_enquiry", "T1", PUBLIC, true, true],
   ["public_signup_info", "T0", PUBLIC, false, true],
   ["public_signup_submit", "T1", PUBLIC, true, true],
+  ["read_payment_proof", "T1", OWNER, true, false],
   ["record_focus_rating", "T1", STAFF, true, false],
   ["record_locker_payment", "T2", STAFF, true, false],
   ["record_payment", "T2", STAFF, true, false],
   ["redeem_cashback_now", "T3", STAFF, true, false],
+  ["reject_payment_proof", "T1", OWNER, true, false],
   ["release_signup_request", "T1", STAFF, true, false],
   ["remove_desk", "T3", OWNER, true, false],
   ["remove_from_waitlist", "T1", STAFF, true, false],

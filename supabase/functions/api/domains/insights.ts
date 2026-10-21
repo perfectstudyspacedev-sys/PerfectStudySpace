@@ -9,7 +9,12 @@ import { featureOn } from "../../_shared/flags.ts";
 import { isISODate } from "../lib.ts";
 
 // The switches the app needs to know about (R9). Missing rows mean off.
-const FLAGS = { focusPulse: "pssai_focus_pulse", anomaly: "pssai_anomaly", analyst: "pssai_analyst" } as const;
+const FLAGS = {
+  focusPulse: "pssai_focus_pulse", anomaly: "pssai_anomaly", analyst: "pssai_analyst",
+  // Phase 2
+  portal: "pssai_portal", upiPay: "pssai_upi_pay", concierge: "pssai_concierge", collections: "pssai_collections",
+  autoApprove: "pssai_auto_approve", aiMessages: "pssai_ai_messages", realtime: "pssai_realtime",
+} as const;
 const DISCOUNT_CONFIRM_KEY = "pssai_discount_confirm_over";
 export const DISCOUNT_CONFIRM_DEFAULT = 1000;
 const MAX_LIST = 500;
@@ -51,9 +56,7 @@ export function handlers(): Record<string, Handler> {
       const value = new Map((data ?? []).map((r: { key: string; value: string }) => [r.key, r.value]));
       const over = Number(value.get(DISCOUNT_CONFIRM_KEY));
       return json({
-        focusPulse: value.get(FLAGS.focusPulse) === "on",
-        anomaly: value.get(FLAGS.anomaly) === "on",
-        analyst: value.get(FLAGS.analyst) === "on",
+        ...Object.fromEntries(Object.entries(FLAGS).map(([k, key]) => [k, value.get(key) === "on"])),
         discountConfirmOver: Number.isFinite(over) && over > 0 ? over : DISCOUNT_CONFIRM_DEFAULT,
       });
     },

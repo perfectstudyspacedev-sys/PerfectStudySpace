@@ -1,6 +1,6 @@
 // Runs one registry action for a caller: idempotency key (P0.6), actor stamping and the event log
 // (P0.5). Used by the api router and the cron function.
-import { err } from "../_shared/http.ts";
+import { err, json } from "../_shared/http.ts";
 import { actorColumnsAvailable, actorDb, eventRow, writeEvent } from "../_shared/audit.ts";
 import { JWT_SECRET } from "../_shared/auth.ts";
 import { claimKey, finishKey, MAX_KEY_LENGTH, requestHash } from "../_shared/idempotency.ts";
@@ -27,6 +27,13 @@ export async function runOnce(def: ActionDef, ctx: Ctx, payload: any): Promise<R
 // deno-lint-ignore no-explicit-any
 export async function runAction(def: ActionDef, ctx: Ctx, payload: any): Promise<Response> {
   let res: Response;
+  // P2.3 (S9): a T3 action asked for by an agent or a student never runs here. It waits in the
+  // owner's approval queue; the owner's approval runs it with the owner as actor.
+  if ((ctx.actor.type === "agent" || ctx.actor.type === "student") && def.tier === "T3") {
+    res = await queueForApproval(def, ctx, payload);
+    await writeEvent(ctx.db, await eventRow(def, ctx.actor, ctx.runId, payload, res));
+    return res;
+  }
   try {
     const stamp = await actorColumnsAvailable(ctx.db);
     const handlerCtx: Ctx = { ...ctx, db: stamp ? actorDb(ctx.db, ctx.actor, ctx.runId) : ctx.db };
@@ -38,4 +45,23 @@ export async function runAction(def: ActionDef, ctx: Ctx, payload: any): Promise
     await writeEvent(ctx.db, await eventRow(def, ctx.actor, ctx.runId, payload, res));
   }
   return res;
+}
+
+async function queueForApproval(def: ActionDef, ctx: Ctx, payload: any): Promise<Response> {
+  const kept = JSON.stringify(payload ?? {}).length <= 8192 ? payload : { truncated: true };
+  const { data, error } = await ctx.db.from("approvals").insert({
+    kind: "t3_action", action: def.name, payload: kept, requested_by_type: ctx.actor.type, requested_by_id: ctx.actor.id,
+    run_id: ctx.runId ?? null, student_id: ctx.student?.id ?? null, branch_id: ctx.student?.branch_id ?? null,
+  }).select("id").single();
+  if (error || !data) return err(`Could not queue this for approval: ${error?.message ?? "no id"}`, 500);
+  return json({ pending_approval: data.id, message: "This needs the owner's approval. You will be told when it is decided." }, 202);
+}
+
+/** Runs another registry action inside a request, as the given scope (the owner approving, or a
+ * branch-limited portal scope for a student's own hold). It goes through runAction, so it has its
+ * own event and the T3 gate still applies to agent and student actors. */
+export async function runNested(def: ActionDef, ctx: Ctx, scope: { staff?: Ctx["staff"]; actor?: Ctx["actor"] }, payload: any) {
+  const res = await runAction(def, { ...ctx, action: def.name, staff: scope.staff ?? ctx.staff, actor: scope.actor ?? ctx.actor }, payload);
+  const body = await res.clone().json().catch(() => ({}));
+  return { status: res.status, ok: res.status < 400, body };
 }

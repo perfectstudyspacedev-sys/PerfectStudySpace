@@ -5,8 +5,8 @@
 
 type Row = Record<string, any>;
 const g = globalThis as any;
-g.__FAKE_DB__ ??= { tables: {} as Record<string, Row[]>, log: [] as string[] };
-export const fake = g.__FAKE_DB__ as { tables: Record<string, Row[]>; log: string[] };
+g.__FAKE_DB__ ??= { tables: {} as Record<string, Row[]>, log: [] as string[], storage: {} as Record<string, { bytes: Uint8Array; contentType: string }> };
+export const fake = g.__FAKE_DB__ as { tables: Record<string, Row[]>; log: string[]; storage: Record<string, { bytes: Uint8Array; contentType: string }> };
 
 const DEFAULTS: Record<string, Row> = {
   memberships: { is_active: true, is_paused: false, hold_days: 0, fee_due: 0, total_paid: 0, discount_percent: 0, months_paid: 1, timings: "", paused_at: null, hours_per_day_weekend: null, renewed_from_membership_id: null, plan_amount: null, plan_days: null, desk_id: null, cabin_no: null, payment_mode: null },
@@ -19,14 +19,25 @@ const DEFAULTS: Record<string, Row> = {
   students: { status: "pending", total_visits: 0, total_hours_studied: 0, course: null, emergency_contact: null, referral_source: null },
   alerts: { status: "pending" },
   food_bills: { paid: false, discount_amount: 0 },
-  membership_holds: { resumed_at: null, days_paused: 0 },
+  membership_holds: { resumed_at: null, days_paused: 0, planned_resume_date: null, requested_by_student: false },
   waivers: {},
-  signup_requests: { claimed_by_staff_id: null, claimed_at: null },
+  signup_requests: { claimed_by_staff_id: null, claimed_at: null, pin_hash: null, keep_until: null, id_photo_path: null, id_check: null },
+  // PSS-AI Phase 2 (058–062)
+  student_credentials: { failed_attempts: 0, locked_until: null, privacy_accepted_at: null },
+  student_setup_codes: { attempts: 0 },
+  student_sessions: { revoked_at: null },
+  payment_proofs: { status: "requested", request: {}, student_id: null, signup_request_id: null, utr: null, image_path: null, ai_reading: null, checks: null, submitted_at: null, decided_by_staff_id: null, decided_at: null, reject_reason: null, transaction_ids: null },
+  portal_notifications: { body: null, action_url: null, dedupe_key: null, read_at: null },
+  portal_chat_messages: { status: "sent", reply_to: null, run_id: null, sent_by_staff_id: null, sent_at: null },
+  send_list: { status: "pending", amount: null, run_id: null, handled_by_staff_id: null, handled_at: null },
+  approvals: { status: "pending", action: null, run_id: null, student_id: null, branch_id: null, decided_by_staff_id: null, decided_at: null, reason: null, result: null, requested_by_id: null },
+  student_requests: { status: "pending", details: {}, approval_id: null, decided_at: null },
+  permanent_waitlist: { status: "waiting", student_id: null, offered_at: null, offer_expires_at: null, offer_status: null, hours_per_day: null, notes: null },
 };
 
 function uuid() { return crypto.randomUUID(); }
 // Tables whose primary key is not a generated id; a second insert with the same key fails like Postgres.
-const PRIMARY_KEY: Record<string, string> = { idempotency_keys: "key", focus_ratings: "booking_id", fingerprints: "student_id" };
+const PRIMARY_KEY: Record<string, string> = { idempotency_keys: "key", focus_ratings: "booking_id", fingerprints: "student_id", student_credentials: "student_id", student_setup_codes: "student_id" };
 // events has a BIGSERIAL id and occurred_at (migration 052), so it takes no uuid from the seeded counter.
 function baseRow(table: string): Row {
   if (table === "events") return { id: tbl(table).reduce((m, r) => Math.max(m, r.id), 0) + 1, occurred_at: new Date().toISOString() };
@@ -239,5 +250,24 @@ export function createClient(_url?: string, _key?: string) {
     from: (t: string) => new Query(t),
     // Tests may install globalThis.__FAKE_RPC__(fn, args) to answer database functions (e.g. a login).
     rpc: (fn: string, args: any) => Promise.resolve(g.__FAKE_RPC__?.(fn, args) ?? (fn === "hash_staff_password" ? { data: "hash", error: null } : { data: null, error: null })),
+    // Storage (private buckets): objects kept in fake.storage under "bucket/path".
+    storage: {
+      from: (bucket: string) => ({
+        upload: (path: string, bytes: Uint8Array, opts: any = {}) => {
+          const key = `${bucket}/${path}`;
+          if (key in fake.storage && !opts.upsert) return Promise.resolve({ data: null, error: { message: "The resource already exists" } });
+          fake.storage[key] = { bytes: new Uint8Array(bytes), contentType: opts.contentType ?? "application/octet-stream" };
+          return Promise.resolve({ data: { path }, error: null });
+        },
+        download: (path: string) => {
+          const hit = fake.storage[`${bucket}/${path}`];
+          return Promise.resolve(hit ? { data: new Blob([hit.bytes], { type: hit.contentType }), error: null } : { data: null, error: { message: "Object not found" } });
+        },
+        createSignedUrl: (path: string, seconds: number) => Promise.resolve(`${bucket}/${path}` in fake.storage
+          ? { data: { signedUrl: `http://fake.local/storage/v1/object/sign/${bucket}/${path}?expires=${seconds}` }, error: null }
+          : { data: null, error: { message: "Object not found" } }),
+        remove: (paths: string[]) => { for (const p of paths) delete fake.storage[`${bucket}/${p}`]; return Promise.resolve({ data: paths, error: null }); },
+      }),
+    },
   };
 }

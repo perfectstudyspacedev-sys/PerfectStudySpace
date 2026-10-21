@@ -6,8 +6,11 @@
 // audited tables are stamped with the caller (see _shared/audit.ts). Since P0.6 a retried
 // mutating action with the same Idempotency-Key header gets the stored answer (_shared/idempotency.ts).
 // The run itself (logging, actor stamping, keys) is in run.ts, shared with the cron function.
+// Since P2.1 a third path serves the student portal: me_* actions need a student token.
 import { withCors, err } from "../_shared/http.ts";
 import { adminClient, authStaff, markAttendanceIfNeeded } from "../_shared/auth.ts";
+import { authStudent } from "../_shared/student.ts";
+import { featureOn } from "../_shared/flags.ts";
 import type { Caller } from "./registry.ts";
 import { REGISTRY } from "./actions.ts";
 import { runOnce } from "./run.ts";
@@ -31,6 +34,14 @@ async function handleRequest(req: Request): Promise<Response> {
     // ─── PUBLIC ───
     if (def && def.callers.includes("public")) {
       return await runOnce(def, { db, req, action, actor: { type: "public", id: null } }, payload);
+    }
+
+    // ─── STUDENT (portal, P2.1) ─── a student token only; staff tokens never pass authStudent.
+    if (found && found.callers.includes("student")) {
+      if (!(await featureOn(db, "portal"))) return err("The student portal is not open yet — please ask at the desk.", 403);
+      const student = await authStudent(req, db);
+      if (!student) return err("Unauthorized", 401);
+      return await runOnce(found, { db, req, action, student, actor: { type: "student", id: student.id } }, payload);
     }
 
     const staff = await authStaff(req);

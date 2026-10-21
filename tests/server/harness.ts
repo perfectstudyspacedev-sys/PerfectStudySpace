@@ -5,6 +5,7 @@ import { fake } from "./fake-supabase.ts";
 import { SignJWT } from "npm:jose@5";
 
 Deno.env.set("JWT_SECRET", "test-secret");
+Deno.env.set("STUDENT_JWT_SECRET", "student-test-secret");
 Deno.env.set("SUPABASE_URL", "http://fake.local");
 Deno.env.set("SUPABASE_SERVICE_ROLE_KEY", "fake");
 Deno.env.set("PUBLIC_SITE_KEY", "site-key");
@@ -31,7 +32,7 @@ export async function call(action: string, payload: any = {}, token?: string) {
 }
 /** Sends a raw Request straight to the api function (for header-level checks such as CORS). */
 export async function raw(req: Request) { return await handler!(req); }
-export function reset() { for (const k of Object.keys(fake.tables)) delete fake.tables[k]; fake.log.length = 0; }
+export function reset() { for (const k of Object.keys(fake.tables)) delete fake.tables[k]; fake.log.length = 0; for (const k of Object.keys(fake.storage ?? {})) delete fake.storage[k]; }
 export function rows(t: string) { return (fake.tables[t] ??= []); }
 export function insert(t: string, r: any) { const row = { id: crypto.randomUUID(), created_at: new Date().toISOString(), ...r }; rows(t).push(row); return row; }
 export const IST_TODAY = () => new Date(Date.now() + 5.5 * 3600e3).toISOString().slice(0, 10);

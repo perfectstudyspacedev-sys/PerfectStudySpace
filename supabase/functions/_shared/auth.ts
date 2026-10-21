@@ -42,7 +42,7 @@ export async function signToken(payload: Record<string, unknown>) {
 export async function verifyToken(token: string) {
   const secret = new TextEncoder().encode(JWT_SECRET);
   const { payload } = await jwtVerify(token, secret);
-  return payload as unknown as { sub: string; role: string; username: string };
+  return payload as unknown as { sub: string; role: string; username: string; typ?: string };
 }
 
 export function adminClient() {
@@ -56,6 +56,8 @@ export async function authStaff(req: Request): Promise<StaffRow | null> {
   if (!auth?.startsWith("Bearer ")) return null;
   try {
     const payload = await verifyToken(auth.slice(7));
+    // PSS-AI P2.1: a student portal token is never a staff token, even if both secrets match.
+    if (payload.typ === "student") return null;
     const db = adminClient();
     // Tolerate override_branch_id/override_date not existing yet (migration 029 not applied
     // to this environment) — fall back to a plain lookup instead of failing every request.

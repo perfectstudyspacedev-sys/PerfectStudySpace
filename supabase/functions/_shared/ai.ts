@@ -220,3 +220,57 @@ export async function toolLoop(opts: {
   }
   return { text: lastText, stop: "cut_short", toolCalls, totals };
 }
+
+// ── One structured call (no tools) ──
+// For jobs that read or draft one thing: the answer must match `schema` (structured outputs), so
+// nothing is parsed from free text. Returns the parsed object, or null with the reason.
+export async function structuredCall<T>(opts: {
+  client: Anthropic; model: string; system: string; content: Anthropic.ContentBlockParam[] | string;
+  schema: Record<string, unknown>; maxTokens?: number;
+}): Promise<{ data: T | null; stop: LoopResult["stop"]; error?: string; totals: RunTotals }> {
+  const totals = emptyTotals();
+  let response: Anthropic.Message;
+  try {
+    response = await opts.client.messages.create({
+      model: opts.model,
+      max_tokens: opts.maxTokens ?? 2000,
+      system: opts.system,
+      messages: [{ role: "user", content: opts.content }],
+      output_config: { format: { type: "json_schema", schema: opts.schema } },
+    });
+  } catch (e) {
+    return { data: null, stop: "error", error: describeAiError(e), totals };
+  }
+  totals.modelCalls = 1;
+  totals.tokensIn = response.usage.input_tokens;
+  totals.tokensOut = response.usage.output_tokens;
+  totals.cacheRead = response.usage.cache_read_input_tokens ?? 0;
+  totals.cacheWrite = response.usage.cache_creation_input_tokens ?? 0;
+  totals.costUsd = costUsd(opts.model, response.usage);
+  if (response.stop_reason === "refusal") return { data: null, stop: "refused", totals };
+  if (response.stop_reason !== "end_turn") return { data: null, stop: "cut_short", error: `stop_reason ${response.stop_reason}`, totals };
+  const text = response.content.filter((b) => b.type === "text").map((b) => (b as Anthropic.TextBlock).text).join("");
+  try {
+    return { data: JSON.parse(text) as T, stop: "done", totals };
+  } catch {
+    return { data: null, stop: "error", error: "The answer was not valid JSON", totals };
+  }
+}
+
+/** A JSON-schema field that may be null (structured outputs accept anyOf with null). */
+export const nullable = (schema: Record<string, unknown>) => ({ anyOf: [schema, { type: "null" }] });
+
+/** structuredCall as one logged run: needs the key and room in the monthly budget, and always
+ * writes an agent_runs row. "skipped" says why nothing was asked. */
+export async function loggedStructuredCall<T>(db: Db, meta: { agent: string; model: string; staffId?: string | null; studentId?: string | null },
+  opts: Omit<Parameters<typeof structuredCall>[0], "client" | "model">,
+): Promise<{ skipped: string } | { data: T | null; stop: LoopResult["stop"]; error?: string; runId: string; costUsd: number }> {
+  const client = aiClient();
+  if (!client) return { skipped: "AI_API_KEY is not set" };
+  const budget = await monthSpend(db);
+  if (budget.usedUsd >= budget.capUsd) return { skipped: "this month's AI budget is used up" };
+  const runId = await startRun(db, meta);
+  const r = await structuredCall<T>({ ...opts, client, model: meta.model });
+  await finishRun(db, runId, r.stop === "done" ? "ok" : r.stop, r.totals, r.error);
+  return { data: r.data, stop: r.stop, error: r.error, runId, costUsd: r.totals.costUsd };
+}
