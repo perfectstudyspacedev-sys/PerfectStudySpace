@@ -39,10 +39,14 @@ describe('action registry (P0.4)', () => {
       if (a.mutating && a.callers.some((c) => ['staff', 'owner', 'admin'].includes(c)) && a.name !== 'create_portal_setup_code') expect(a.idempotent, a.name).toBe(false)
     }
   })
-  test('agents (P1.8) may call T0 reads, plus save_owner_brief which only agents may call', () => {
+  test('what agents may call: T0 reads, agent-only saves, and the concierge acting for the student (never T3)', () => {
     const agentCalls = ACTION_META.filter((a) => a.callers.includes('agent'))
-    for (const a of agentCalls.filter((x) => x.name !== 'save_owner_brief')) expect([a.tier, a.mutating], a.name).toEqual(['T0', false])
-    expect(ACTION_META.find((a) => a.name === 'save_owner_brief')?.callers).toEqual(['agent'])
+    for (const a of agentCalls) expect(a.tier, a.name).not.toBe('T3')
+    for (const a of agentCalls.filter((x) => x.mutating)) {
+      // P1.8 brief, P2.4 concierge reply: agent-only. P2.4 concierge: the student's own hold and pay request.
+      expect(['save_owner_brief', 'save_chat_reply', 'save_send_list', 'me_request_hold', 'me_payment_request'], a.name).toContain(a.name)
+    }
+    for (const n of ['save_owner_brief', 'save_chat_reply', 'save_send_list']) expect(ACTION_META.find((a) => a.name === n)?.callers, n).toEqual(['agent'])
   })
   test('system jobs are callable by the system only, and nothing else is', () => {
     expect(ACTION_META.filter((a) => a.callers.includes('system')).map((a) => a.name).sort()).toEqual(SYSTEM_JOBS)

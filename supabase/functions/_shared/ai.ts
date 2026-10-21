@@ -100,7 +100,7 @@ export async function finishRun(db: Db, id: string, status: RunStatus, t: RunTot
 // ── What a tool result may show the model ──
 // Contact details and identity documents never go into a prompt (R11); the agents work from
 // names, figures and dates. Long lists are cut so one tool call cannot flood the context.
-const PERSONAL = /phone|mobile|whatsapp|email|address|aadha?ar|id_?(number|proof|no)\b|dob|birth/i;
+const PERSONAL = /phone|mobile|whatsapp|email|address|emergency|guardian|parent_?contact|aadha?ar|id_?(number|proof|no)\b|dob|birth/i;
 export function stripPersonal(value: unknown, depth = 0): unknown {
   if (depth > 10) return null;
   if (Array.isArray(value)) return value.map((v) => stripPersonal(v, depth + 1));

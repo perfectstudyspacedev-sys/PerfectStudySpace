@@ -69,6 +69,8 @@ SELECT cron.schedule('pss_integrity_report',  '30 20 * * *', $$SELECT pss_run_cr
 SELECT cron.schedule('pss_resume_holds',      '25 * * * *',  $$SELECT pss_run_cron_job('cron_resume_holds')$$);      -- hourly
 -- P1.8 (needs `supabase functions deploy agent`; does nothing while pssai_analyst is off):
 SELECT cron.schedule('pss_owner_brief',       '30 1 * * *',  $$SELECT pss_run_agent_job('owner_brief')$$);           -- 07:00 IST
+-- P2.4 A4 (does nothing while pssai_collections is off):
+SELECT cron.schedule('pss_collections',       '30 2 * * *',  $$SELECT pss_run_agent_job('collections')$$);           -- 08:00 IST
 
 -- ── 4. Check ──
 -- Run one job now and look at the answer a few seconds later:
