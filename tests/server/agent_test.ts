@@ -56,7 +56,7 @@ await setup();
   check(nokey.status === 503 && /AI_API_KEY/.test(nokey.error), "A1: without the AI_API_KEY secret the analyst says it is not set up", nokey);
   Deno.env.set("AI_API_KEY", "test-ai-key");
   const bad = await Promise.all([
-    ask("", tO), ask("x".repeat(2001), tO), agent({ agent: "concierge", question: "hi" }, { token: tO }),
+    ask("", tO), ask("x".repeat(2001), tO), agent({ agent: "no-such-agent", question: "hi" }, { token: tO }),
     ask("hi", tO, { history: [{ role: "assistant", text: "hello" }, { role: "user", text: "x" }] }),
     ask("hi", tO, { history: [{ role: "user", text: "q" }] }),
   ]);
