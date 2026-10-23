@@ -385,9 +385,10 @@ export default function Shell() {
           <NavLink to="/actions">Actions</NavLink>
           {isOwner && flags.anomaly && <NavLink to="/flags">Flags</NavLink>}
           {isOwner && flags.analyst && <NavLink to="/analyst">Analyst</NavLink>}
-          {isOwner && (flags.portal || flags.upiPay) && <NavLink to="/approvals">Approvals</NavLink>}
+          {isOwner && (flags.portal || flags.upiPay || flags.exceptionDesk || flags.referralLinks) && <NavLink to="/approvals">Approvals</NavLink>}
           {flags.portal && <NavLink to="/chat-replies">Chat replies</NavLink>}
-          {isOwner && flags.collections && <NavLink to="/send-list">Send list</NavLink>}
+          {isOwner && (flags.collections || flags.winback || flags.nextExam) && <NavLink to="/send-list">Send list</NavLink>}
+          {isOwner && (flags.yieldPricing || flags.hourRelease || flags.overbooking || flags.referralLinks || flags.examRadar) && <NavLink to="/growth">Growth</NavLink>}
           {isOwner && (
             <>
               <NavLink to="/settings/branches">Branches</NavLink>

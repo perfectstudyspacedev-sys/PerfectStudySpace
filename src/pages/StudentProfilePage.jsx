@@ -1,4 +1,5 @@
 import { useState, useEffect, useCallback } from 'react'
+import PaylaterAdvice from '../components/PaylaterAdvice'
 import { useParams, Link, useSearchParams } from 'react-router-dom'
 import { api } from '../lib/api'
 import { useRetryKey } from '../hooks/useRetryKey'
@@ -2263,6 +2264,7 @@ export default function StudentProfilePage() {
               </div>
             </div>
 
+            {renewPayType !== 'full' && <PaylaterAdvice studentId={id} />}
             {renewPayType === 'partial' && (
               <div className="form-group">
                 <label>Advance Amount (₹)</label>

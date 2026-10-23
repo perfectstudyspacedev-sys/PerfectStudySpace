@@ -11,6 +11,7 @@ import PortalInbox from './PortalInbox'
 import PortalPrivacy from './PortalPrivacy'
 import PortalMore from './PortalMore'
 import PortalChat from './PortalChat'
+import { PortalNext, PortalRefer, PortalRelease, PortalWaitlist } from './PortalGrow'
 
 // PSS-AI P2.1 — the student portal under /me on the student site (loaded only for /me pages).
 export default function PortalRoutes() {
@@ -28,6 +29,10 @@ export default function PortalRoutes() {
         <Route path="privacy" element={<PortalPrivacy />} />
         <Route path="chat" element={<PortalChat />} />
         <Route path="more" element={<PortalMore />} />
+        <Route path="release" element={<PortalRelease />} />
+        <Route path="waitlist" element={<PortalWaitlist />} />
+        <Route path="refer" element={<PortalRefer />} />
+        <Route path="next" element={<PortalNext />} />
         <Route path="*" element={<PortalHome />} />
       </Route>
     </Routes>

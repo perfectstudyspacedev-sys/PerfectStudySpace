@@ -65,7 +65,7 @@ export function handlers(): Record<string, Handler> {
       return json({
         on: await featureOn(db, "exam_radar"),
         notices: (data ?? []).map((n: any) => ({ ...n, label: familyLabel(n.exam_family) || n.exam_name, students: n.exam_family ? families.filter((f) => familiesMatch(f, n.exam_family)).length : 0 })),
-        ladder: await ladder(db),
+        ladder: (await ladder(db)).map((rung) => rung.map((f) => familyLabel(f) || f)),
       });
     },
 

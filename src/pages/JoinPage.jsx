@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { useParams } from 'react-router-dom'
+import { useParams, useSearchParams } from 'react-router-dom'
 import { api } from '../lib/api'
 import { REFERRAL_OPTIONS } from '../lib/utils'
 import SignupPayment from '../components/SignupPayment'
@@ -8,6 +8,10 @@ import SignupPayment from '../components/SignupPayment'
 // outside the login. It can only submit details; staff approve and finish the registration.
 export default function JoinPage() {
   const { code } = useParams()
+  // PSS-AI Phase 3: arriving through a referral link (?r=<code>) fills in how they heard of us.
+  const [params] = useSearchParams()
+  const ref = params.get('r')
+  const [fromLink, setFromLink] = useState(null)
   const [branchName, setBranchName] = useState(null)
   const [linkError, setLinkError] = useState('')
   const [form, setForm] = useState({ name: '', phone: '', emergencyContact: '', course: '', referralSource: '', website: '' })
@@ -24,8 +28,14 @@ export default function JoinPage() {
     api('public_signup_info', { code })
       .then((d) => { if (!cancelled) setBranchName(d.branchName) })
       .catch((e) => { if (!cancelled) setLinkError(e.message || 'This sign-up link is no longer valid.') })
+    // A referral link that is off (or another branch's) just leaves the usual question.
+    if (ref) {
+      api('public_referral_info', { ref })
+        .then((r) => { if (!cancelled && r?.code === code) { setFromLink(r); setForm((f) => ({ ...f, referralSource: r.referralSource })) } })
+        .catch(() => {})
+    }
     return () => { cancelled = true }
-  }, [code])
+  }, [code, ref])
 
   const set = (key) => (e) => {
     const digitsOnly = key === 'phone' || key === 'emergencyContact'
@@ -44,7 +54,7 @@ export default function JoinPage() {
     setLoading(true)
     setError('')
     try {
-      const res = await api('public_signup_submit', { code, ...form, name })
+      const res = await api('public_signup_submit', { code, ...form, name, ...(fromLink ? { ref: fromLink.ref } : {}) })
       // PSS-AI A3: the pay step needs the key the server gives this browser (the Ref is no secret).
       // Kept for this tab only, so correcting a typo and sending again keeps it.
       const keyName = `pss_signup_paykey:${code}:${form.phone}`
@@ -107,13 +117,13 @@ export default function JoinPage() {
               <label htmlFor="join-course">What are you preparing for?</label>
               <input id="join-course" value={form.course} onChange={set('course')} maxLength={80} placeholder="NEET PG, UPSC, CA, etc." />
             </div>
-            <div className="form-group">
+            {!fromLink && <div className="form-group">
               <label htmlFor="join-source">How did you hear about us? *</label>
               <select id="join-source" value={form.referralSource} onChange={set('referralSource')} required>
                 <option value="">Select an option</option>
                 {REFERRAL_OPTIONS.map((r) => <option key={r.value} value={r.value}>{r.label}</option>)}
               </select>
-            </div>
+            </div>}
             {/* Anti-bot trap: hidden from people (and screen readers), filled in by form bots. */}
             <div aria-hidden="true" style={{ position: 'absolute', left: '-10000px', width: 1, height: 1, overflow: 'hidden' }}>
               <label htmlFor="join-website">Website</label>

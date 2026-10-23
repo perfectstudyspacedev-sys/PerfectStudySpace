@@ -402,6 +402,8 @@ function CheckInModal({ branchId, onClose, onDone }) {
       if (result.isSplitSession) {
         notices.push(`This is a split session — ${result.sessionHours}h remaining of today's daily quota has been allotted for this check-in.`)
       }
+      // PSS-AI Phase 3 (O1/SP10): their cabin was sold to a walk-in for these hours.
+      if (result.collision) notices.push(`${student.name}: ${result.collision.message}`)
       if (notices.length) {
         setSuccessNotices(notices)
         setLoading(false)

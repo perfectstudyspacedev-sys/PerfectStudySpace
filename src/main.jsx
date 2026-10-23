@@ -7,7 +7,9 @@ import './styles/theme.css'
 // every staff screen) is a separate file that's never downloaded there.
 // PSS-AI P2.1: /me (the student portal) also loads the student app on any address, so it can be
 // opened locally and from the staff site's address.
-const Root = isSignupHost() || window.location.pathname === '/me' || window.location.pathname.startsWith('/me/')
+// Phase 3: /ask (the enquiry chat) and /r/<code> (referral links) too.
+const path = window.location.pathname
+const Root = isSignupHost() || path === '/me' || path.startsWith('/me/') || path === '/ask' || path.startsWith('/r/')
   ? lazy(() => import('./JoinApp.jsx'))
   : lazy(() => import('./App.jsx'))
 

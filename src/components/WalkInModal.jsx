@@ -1,5 +1,6 @@
 import { useState, useEffect, useCallback } from 'react'
 import { api } from '../lib/api'
+import { useFeatureFlags } from '../hooks/useFeatureFlags'
 import { nowTimeStr, localTimeStrToISO, formatCurrency, openWhatsApp, DEFAULT_WELCOME_TEMPLATE } from '../lib/utils'
 import PaymentModeSelector, { isSplitValid } from './PaymentModeSelector'
 
@@ -44,7 +45,37 @@ export default function WalkInModal({ branchId, onClose, onDone }) {
   }, [])
 
   const hourOptions = Object.keys(fees).map(Number).sort((a, b) => a - b)
-  const walkinFee = (h) => fees[h] ?? 0
+  // PSS-AI Phase 3 (I3): with yield pricing on, every price shown comes from the server's quote,
+  // and the price shown is sent back, so a price that changed meanwhile is refused, not charged.
+  const flags = useFeatureFlags()
+  const [quotes, setQuotes] = useState({})
+  const [priceNote, setPriceNote] = useState(null)
+  const loadQuotes = useCallback(() => {
+    if (!flags.yieldPricing || !branchId) { setQuotes({}); setPriceNote(null); return }
+    Promise.all(hourOptions.map((h) => api('quote_walkin', { branchId, hours: h }).then((q) => [h, q]).catch(() => null)))
+      .then((list) => {
+        const ok = list.filter(Boolean)
+        setQuotes(Object.fromEntries(ok.map(([h, q]) => [h, q.amount])))
+        const q = ok[0]?.[1]
+        setPriceNote(q && q.pct ? `Today's walk-in prices: ${q.pct > 0 ? '+' : ''}${q.pct}%${q.reason ? ` — ${q.reason}` : ''}` : null)
+      })
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [flags.yieldPricing, branchId, hourOptions.join(',')])
+  useEffect(() => { loadQuotes() }, [loadQuotes])
+  const walkinFee = (h) => quotes[h] ?? fees[h] ?? 0
+
+  // PSS-AI Phase 3 (O1/SP10): cabins whose hours are on sale for this walk-in's time.
+  const [released, setReleased] = useState([])
+  const [releaseId, setReleaseId] = useState('')
+  useEffect(() => {
+    if (!(flags.hourRelease || flags.overbooking) || !branchId) { setReleased([]); return undefined }
+    let live = true
+    api('list_resellable_desks', { branchId, startTime: localTimeStrToISO(startTime), hours })
+      .then((r) => { if (live) { setReleased(r.desks ?? []); setReleaseId((cur) => (r.desks ?? []).some((d) => d.releaseId === cur) ? cur : '') } })
+      .catch(() => { if (live) setReleased([]) })
+    return () => { live = false }
+  }, [flags.hourRelease, flags.overbooking, branchId, startTime, hours])
+  const hm = (iso) => new Date(iso).toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit', hour12: false, timeZone: 'Asia/Kolkata' })
 
   const lookupPhone = useCallback(async (p) => {
     if (p.length !== 10) return
@@ -91,6 +122,8 @@ export default function WalkInModal({ branchId, onClose, onDone }) {
         branchId, name, phone, hours, paymentMode: paymentMode.mode,
         cashAmount: paymentMode.cashAmount, upiAmount: paymentMode.upiAmount,
         startTime: localTimeStrToISO(startTime),
+        ...(flags.yieldPricing && hours in quotes ? { expectedAmount: quotes[hours] } : {}),
+        ...(releaseId ? { releaseId } : {}),
       })
       setReceipt(result.booking)
       if (result.isNewStudent) {
@@ -100,6 +133,8 @@ export default function WalkInModal({ branchId, onClose, onDone }) {
       }
     } catch (err) {
       setError(err.message)
+      // A price or a released desk that changed meanwhile: show the current ones.
+      if (/price is now|just sold|not available/.test(err.message)) { loadQuotes(); setReleaseId('') }
     } finally {
       setLoading(false)
     }
@@ -190,13 +225,30 @@ export default function WalkInModal({ branchId, onClose, onDone }) {
                   ))}
                 </select>
               </div>
+              {released.length > 0 && (
+                <div className="form-group">
+                  <label htmlFor="walkin-release">Desk</label>
+                  <select id="walkin-release" value={releaseId} onChange={(e) => setReleaseId(e.target.value)}>
+                    <option value="">Any free seat</option>
+                    {released.map((d) => (
+                      <option key={d.releaseId} value={d.releaseId}>
+                        {d.deskLabel} — free {hm(d.from)}–{hm(d.to)} ({d.source === 'member' ? 'member released' : 'usually free'})
+                      </option>
+                    ))}
+                  </select>
+                  <p style={{ fontSize: '0.75rem', color: 'var(--text-muted)', marginTop: '0.3rem' }}>
+                    A member's cabin, for these hours only. If they arrive, they are seated elsewhere.
+                  </p>
+                </div>
+              )}
               <div className="form-group">
                 <label>Payment Mode</label>
                 <PaymentModeSelector value={paymentMode} onChange={setPaymentMode} total={walkinFee(hours)} />
               </div>
-              <p className="mono" style={{ marginBottom: '1rem', color: 'var(--accent)' }}>
+              <p className="mono" style={{ marginBottom: priceNote ? '0.25rem' : '1rem', color: 'var(--accent)' }}>
                 Bill: {formatCurrency(walkinFee(hours))}
               </p>
+              {priceNote && <p data-testid="walkin-price-note" style={{ fontSize: '0.75rem', color: 'var(--text-muted)', marginBottom: '1rem' }}>{priceNote}</p>}
               {error && <p className="error-msg">{error}</p>}
               <div className="modal-actions">
                 <button type="button" className="btn btn-ghost" onClick={onClose}>Cancel</button>

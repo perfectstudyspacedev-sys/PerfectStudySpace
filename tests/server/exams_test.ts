@@ -70,7 +70,7 @@ await setup();
   // The owner's calendar
   member("Meena", "9100000001", "TNPSC group 4"); member("Kumar", "9100000002", "tnpsc"); member("Divya", "9100000003", "NEET");
   const list = await call("list_exam_notices", {}, tO);
-  check(list.notices[0].students === 2 && list.ladder[0][0] === "tnpsc-group-4", "E2: the calendar shows how many students prepare for it (Group 4 and plain TNPSC)", list.notices[0]);
+  check(list.notices[0].students === 2 && list.ladder[0][0] === "TNPSC Group 4", "E2: the calendar shows how many students prepare for it (Group 4 and plain TNPSC)", list.notices[0]);
   check((await call("review_exam_notice", { id: n[0].id, decision: "confirm" }, tP)).status === 403 && (await call("review_exam_notice", { id: n[0].id, decision: "confirm" }, tO)).status === 200 && n[0].status === "confirmed", "E2: only the owner confirms a suggestion");
   const man = await call("add_exam_notice", { examName: "SSC CGL 2026 Tier 1", examDate: addDays(TODAY, 60) }, tO);
   const dupe = await call("add_exam_notice", { examName: "SSC CGL 2026 Tier 1", examDate: addDays(TODAY, 60) }, tO);

@@ -9,6 +9,7 @@ import RenewalKindBanner from '../components/RenewalKindBanner'
 import PendingSignupsPanel from '../components/PendingSignupsPanel'
 import ConfirmDialog from '../components/ConfirmDialog'
 import AiDraftButton from '../components/AiDraftButton'
+import PaylaterAdvice from '../components/PaylaterAdvice'
 import { buildStudyReportMessage, validateStudyReportRange, STUDY_REPORT_MAX_DAYS, STUDY_REPORT_DEFAULT_DAYS } from '../lib/studyReport'
 import { DEV_MODE } from '../lib/devMode'
 
@@ -153,7 +154,7 @@ function ActiveMembersTab({ branchId, tempPackages, permPackages }) {
     const wasCustomPlan = m.hours_per_day_weekend != null
     const renewal = renewalInfo(m.end_date)
     setRenewModal({
-      membershipId: m.membership_id, studentName: m.student_name,
+      membershipId: m.membership_id, studentName: m.student_name, studentId: m.student_id,
       pendingCashbacks: m.pending_cashbacks ?? (m.pending_cashback ? [m.pending_cashback] : []),
       overtimeDue: Number(m.unbilled_overtime_due) || 0,
       renewal, endDate: m.end_date,
@@ -596,6 +597,7 @@ function ActiveMembersTab({ branchId, tempPackages, permPackages }) {
               </div>
             </div>
 
+            {renewPayType !== 'full' && <PaylaterAdvice studentId={renewModal.studentId} />}
             {renewPayType === 'partial' && (
               <div className="form-group">
                 <label>Advance Amount (₹)</label>

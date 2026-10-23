@@ -3,6 +3,9 @@ import { createPortal } from 'react-dom'
 import { useAuth } from '../context/AuthContext'
 import { api } from '../lib/api'
 import { exportToCSV, formatDate, formatDateTime, openWhatsApp } from '../lib/utils'
+import { DedupePanel, EnquiryChatPanel, LeadScore } from '../components/EnquiryAiPanels'
+import AiDraftButton from '../components/AiDraftButton'
+import { useFeatureFlags } from '../hooks/useFeatureFlags'
 
 const STATUSES = ['new', 'contacted', 'trial_session', 'converted', 'dropped']
 const STATUS_LABEL = { new: 'New', contacted: 'Contacted', trial_session: 'Trial Session', converted: 'Converted', dropped: 'Dropped' }
@@ -10,7 +13,7 @@ const STATUS_BADGE = { new: 'badge-new', contacted: 'badge-pending', trial_sessi
 const STATUS_RANK = { dropped: -1, new: 0, contacted: 1, trial_session: 2, converted: 3 }
 const SOURCE_LABEL = {
   walk_in: 'Walk-in', phone_call: 'Phone Call', referral: 'Referral',
-  instagram: 'Instagram', google_search: 'Google Search', website_form: 'Website Form',
+  instagram: 'Instagram', google_search: 'Google Search', website_form: 'Website Form', website_chat: 'Website Chat',
 }
 const ACT_ICON = { note: '📝', call: '📞', email: '✉️', whatsapp: '💬', status_change: '🔄' }
 const PER_PAGE = 10
@@ -279,6 +282,8 @@ export default function EnquiriesPage() {
   const [page, setPage] = useState(0)
   const [selected, setSelected] = useState(new Set())
   const [dupMode, setDupMode] = useState(false)
+  const flags = useFeatureFlags()
+  const [byScore, setByScore] = useState(false)
 
   const [drawerEnq, setDrawerEnq] = useState(null)
   const [activities, setActivities] = useState([])
@@ -415,8 +420,8 @@ export default function EnquiriesPage() {
         if (!hay.includes(q)) return false
       }
       return true
-    })
-  }, [enquiries, search, statusFilter, sourceFilter, dayFilter, dateFrom, dateTo, dupMode, dupGroups, dupIds])
+    }).sort((a, b) => (byScore ? (Number(b.score ?? -1) - Number(a.score ?? -1)) : 0))
+  }, [enquiries, search, statusFilter, sourceFilter, dayFilter, dateFrom, dateTo, dupMode, dupGroups, dupIds, byScore])
 
   useEffect(() => { setPage(0) }, [search, statusFilter, sourceFilter, dayFilter, dateFrom, dateTo, dupMode])
 
@@ -584,8 +589,9 @@ export default function EnquiriesPage() {
     } catch { showToast('Failed to update follow-up', 'err') }
   }
 
-  const openMergeModal = (enqId) => {
-    const group = dupGroups.find(g => g.some(e => e.id === enqId))
+  // groupOverride: a pair the AI suggested (Phase 3), merged with the same dialog.
+  const openMergeModal = (enqId, groupOverride) => {
+    const group = groupOverride ?? dupGroups.find(g => g.some(e => e.id === enqId))
     if (!group) return
     const suggested = group.reduce((best, e) => (STATUS_RANK[e.status || 'new'] ?? 0) > (STATUS_RANK[best.status || 'new'] ?? 0) ? e : best, group[0])
     setDrawerEnq(null)
@@ -711,6 +717,12 @@ export default function EnquiriesPage() {
 
       {!drawerEnq && (
       <>
+      <DedupePanel branchId={branchId} enquiries={enquiries} onReview={(group) => openMergeModal(group[0].id, group)} />
+      {flags.leadTools && enquiries.some((e) => e.score != null) && (
+        <label style={{ display: 'inline-flex', alignItems: 'center', gap: '0.4rem', fontSize: '0.85rem', marginBottom: '0.75rem' }}>
+          <input type="checkbox" checked={byScore} onChange={(e) => setByScore(e.target.checked)} /> Best leads first (score from this hall's own history)
+        </label>
+      )}
       <div className="stats-row">
         <div className="card stat-card"><div className="value">{stats.total}</div><div className="label">Total Enquiries</div></div>
         <div className="card stat-card"><div className="value">{stats.today}</div><div className="label">New Today</div></div>
@@ -819,6 +831,7 @@ export default function EnquiriesPage() {
                         <td>
                           {fresh && <span title="New today" style={{ display: 'inline-block', width: 7, height: 7, borderRadius: '50%', background: 'var(--accent)', marginRight: 6, boxShadow: '0 0 8px rgba(255,215,0,0.6)' }} />}
                           <span style={{ cursor: 'pointer', fontWeight: 600 }} onClick={() => openDrawer(row.id)}>{row.name}</span>
+                          <LeadScore e={row} />
                         </td>
                         <td>
                           <div className="mono">{row.phone || '—'}</div>
@@ -998,6 +1011,14 @@ export default function EnquiriesPage() {
                   <div className="drw-val" style={{ whiteSpace: 'pre-wrap' }}>{drawerEnq.message}</div>
                 </div>
               )}
+              {drawerEnq.score != null && (
+                <div className="drw-field" style={{ marginTop: '0.75rem' }}>
+                  <div className="drw-lbl">Lead score</div>
+                  <div className="drw-val"><LeadScore e={drawerEnq} /> <span style={{ fontSize: '0.8rem', color: 'var(--text-muted)' }}>{drawerEnq.score_reason}</span></div>
+                </div>
+              )}
+              <EnquiryChatPanel key={drawerEnq.id} enquiryId={drawerEnq.id} phone={drawerEnq.phone} />
+              {drawerEnq.phone && <div style={{ marginTop: '0.6rem' }}><AiDraftButton kind="enquiry_followup" enquiryId={drawerEnq.id} phone={drawerEnq.phone} /></div>}
 
               {activities.filter(a => a.type === 'merged_snapshot').length > 0 && (
                 <>

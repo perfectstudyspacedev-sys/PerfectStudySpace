@@ -8,6 +8,9 @@ import { api } from '../lib/api'
 const OFF = {
   focusPulse: false, anomaly: false, analyst: false, portal: false, upiPay: false, concierge: false,
   collections: false, autoApprove: false, aiMessages: false, realtime: false, discountConfirmOver: 1000,
+  // Phase 3
+  hourRelease: false, overbooking: false, yieldPricing: false, enquiryChat: false, leadTools: false, referralLinks: false,
+  examRadar: false, winback: false, nextExam: false, paylaterAdvice: false, exceptionDesk: false, portalR2: false,
 }
 const MAX_AGE_MS = 10 * 60 * 1000
 let cached = null

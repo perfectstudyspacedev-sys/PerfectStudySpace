@@ -57,6 +57,10 @@ export async function portalApi(action, payload = {}, { idempotencyKey } = {}) {
 export async function portalAgent(payload) {
   return await invoke('agent', null, payload, {}, getStudentToken(), 'pss:portal-unauthorized')
 }
+// PSS-AI Phase 3 (A2) — the public enquiry chat on the join site: no token at all.
+export async function publicAgent(payload) {
+  return await invoke('agent', null, payload, {}, null, 'pss:public-unauthorized')
+}
 
 async function invoke(fn, action, body, extraHeaders, token = getToken(), unauthorizedEvent = 'pss:unauthorized') {
 

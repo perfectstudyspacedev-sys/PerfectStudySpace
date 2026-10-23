@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from 'react'
-import { api } from '../lib/api'
+import { agentApi, api } from '../lib/api'
 import { formatCurrency, formatDateTime } from '../lib/utils'
+import { useFeatureFlags } from '../hooks/useFeatureFlags'
 
 // PSS-AI P2.2–P2.3 — the owner's approval queue. Payments: UPI proofs from the portal with the
 // code's checks and the AI's reading; Confirm runs the normal payment action (as you, by UPI).
@@ -38,7 +39,7 @@ function ProofCard({ p, busy, onConfirm, onReject, onRead, onImage }) {
       <div style={{ display: 'flex', justifyContent: 'space-between', gap: '0.75rem', flexWrap: 'wrap' }}>
         <div>
           <strong>{p.name ?? 'Unknown'}</strong> <span style={{ color: 'var(--text-muted)' }}>· {p.phone} · {p.branch}</span>
-          <div style={{ fontSize: '0.9rem', marginTop: '0.2rem' }}>{PURPOSE[p.purpose]}{p.request?.months ? `, ${p.request.months} month${p.request.months > 1 ? 's' : ''}` : ''} · <strong>{formatCurrency(p.amount_expected)}</strong></div>
+          <div style={{ fontSize: '0.9rem', marginTop: '0.2rem' }}>{PURPOSE[p.purpose]}{p.request?.months ? `, ${p.request.months} month${p.request.months > 1 ? 's' : ''}` : ''} · <strong>{formatCurrency(p.amount_expected)}</strong>{p.request?.existingStudent && <span className="badge" style={{ marginLeft: '0.4rem' }} title="Their own portal PIN is kept; give them a setup code from their profile after confirming">Returning student</span>}</div>
           <div style={{ fontSize: '0.8rem', color: 'var(--text-muted)', marginTop: '0.2rem' }}>
             <span className="mono">{p.reference}</span>{p.utr && <> · UTR <span className="mono">{p.utr}</span></>} · {p.status === 'submitted' ? `sent ${age(p.submitted_at)}` : `asked ${age(p.created_at)}, no proof yet`}
           </div>
@@ -66,11 +67,30 @@ function ProofCard({ p, busy, onConfirm, onReject, onRead, onImage }) {
   )
 }
 
-function RequestCard({ a, busy, onDecide }) {
-  const [denying, setDenying] = useState(false)
-  const details = a.kind === 't3_action'
+// PSS-AI Phase 3 (A7): the exception desk's suggestion. The owner still decides.
+function AiNote({ note }) {
+  const tone = { approve: '#4ade80', deny: '#ff8a65', ask: 'var(--accent)' }[note.recommendation]
+  return (
+    <div data-testid="ai-note" style={{ marginTop: '0.5rem', padding: '0.5rem 0.7rem', borderLeft: `3px solid ${tone}`, background: 'rgba(255,255,255,0.03)', fontSize: '0.85rem' }}>
+      <strong style={{ color: tone }}>AI suggests: {note.recommendation}</strong> <span style={{ color: 'var(--text-muted)' }}>({note.confidence} confidence — you decide)</span>
+      {note.reasons?.length > 0 && <ul style={{ margin: '0.3rem 0 0', paddingLeft: '1.1rem' }}>{note.reasons.map((r) => <li key={r}>{r}</li>)}</ul>}
+      {note.questions?.length > 0 && <p style={{ margin: '0.3rem 0 0', color: 'var(--text-muted)' }}>Ask first: {note.questions.join(' · ')}</p>}
+    </div>
+  )
+}
+
+function requestDetails(a) {
+  if (a.kind === 't3_action' && a.action === 'grant_cashback' && a.requested_by_type === 'system') {
+    return `Referral reward: ${formatCurrency(a.payload?.cashbackValue)} cashback${a.payload?.notes ? ` — ${a.payload.notes}` : ''}`
+  }
+  return a.kind === 't3_action'
     ? `${a.action} asked by ${a.requested_by_type}: ${JSON.stringify(a.payload)}`
     : [a.payload?.days && `${a.payload.days} days`, a.payload?.why, a.payload?.reason, a.payload?.text].filter(Boolean).join(' · ')
+}
+
+function RequestCard({ a, busy, onDecide, onSuggest, canSuggest }) {
+  const [denying, setDenying] = useState(false)
+  const details = requestDetails(a)
   return (
     <div className="card" data-testid="request-card" style={{ marginBottom: '0.9rem' }}>
       <strong>{a.kind === 't3_action' ? 'Agent action' : KIND[a.action] ?? a.action}</strong>
@@ -80,9 +100,11 @@ function RequestCard({ a, busy, onDecide }) {
       {['plan_change', 'refund', 'privacy_download', 'privacy_delete', 'waitlist_accept'].includes(a.action) && (
         <p style={{ fontSize: '0.8rem', color: 'var(--text-muted)', marginTop: '0.3rem' }}>Approving tells the student it is being done — finish it in the student&apos;s profile.</p>
       )}
-      <div style={{ display: 'flex', gap: '0.5rem', marginTop: '0.6rem' }}>
+      {a.ai_note && <AiNote note={a.ai_note} />}
+      <div style={{ display: 'flex', gap: '0.5rem', marginTop: '0.6rem', flexWrap: 'wrap' }}>
         <button type="button" className="btn btn-primary" disabled={busy} onClick={() => onDecide(a, 'approve')}>Approve</button>
         {!denying && <button type="button" className="btn btn-ghost" disabled={busy} onClick={() => setDenying(true)}>Deny</button>}
+        {canSuggest && <button type="button" className="btn btn-ghost" disabled={busy} onClick={() => onSuggest(a)}>{a.ai_note ? '✨ Ask the AI again' : '✨ AI suggestion'}</button>}
       </div>
       {denying && <ReasonBox label="Why? The student sees this." busy={busy} onCancel={() => setDenying(false)} onSubmit={(reason) => onDecide(a, 'deny', reason)} />}
     </div>
@@ -90,6 +112,7 @@ function RequestCard({ a, busy, onDecide }) {
 }
 
 export default function ApprovalsPage() {
+  const flags = useFeatureFlags()
   const [tab, setTab] = useState('payments')
   const [proofs, setProofs] = useState([])
   const [approvals, setApprovals] = useState([])
@@ -113,16 +136,18 @@ export default function ApprovalsPage() {
   }, [])
   useEffect(() => { load() }, [load])
 
+  // done: the message to show, or a function of the action's answer.
   const act = async (fn, done) => {
     setBusy(true)
     setError('')
     setNotice('')
-    try { await fn(); setNotice(done); await load() } catch (err) { setError(err.message) } finally { setBusy(false) }
+    try { const res = await fn(); setNotice(typeof done === 'function' ? done(res) : done); await load() } catch (err) { setError(err.message) } finally { setBusy(false) }
   }
   const confirmProof = (p) => {
     if (!window.confirm(`Confirm ${formatCurrency(p.amount_expected)} from ${p.name} (${PURPOSE[p.purpose]})? Check it in your bank app first — this records the payment.`)) return
-    act(() => api('confirm_payment_proof', { proofId: p.id }), `Confirmed ${formatCurrency(p.amount_expected)} from ${p.name}.`)
+    act(() => api('confirm_payment_proof', { proofId: p.id }), (res) => `Confirmed ${formatCurrency(p.amount_expected)} from ${p.name}.${res?.note ? ` ${res.note}` : ''}`)
   }
+  const suggest = (a) => act(() => agentApi({ agent: 'exception_desk', approvalId: a.id }), 'AI suggestion added — the decision is yours.')
   const rejectProof = (p, reason) => act(() => api('reject_payment_proof', { proofId: p.id, reason }), `Rejected ${p.reference}.`)
   const readProof = (p) => act(() => api('read_payment_proof', { proofId: p.id }), 'Read again.')
   const openImage = async (p) => {
@@ -167,7 +192,7 @@ export default function ApprovalsPage() {
       ) : (
         <>
           {approvals.length === 0 && <p>No requests waiting.</p>}
-          {approvals.map((a) => <RequestCard key={a.id} a={a} busy={busy} onDecide={decide} />)}
+          {approvals.map((a) => <RequestCard key={a.id} a={a} busy={busy} onDecide={decide} onSuggest={suggest} canSuggest={flags.exceptionDesk} />)}
         </>
       )}
     </>

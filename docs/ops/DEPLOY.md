@@ -167,3 +167,48 @@ must be empty); the portal isolation test passes (`npm run test:integration` aga
 
 Rollback: set the switch back to `off`. Payments already confirmed stay recorded as normal UPI
 transactions.
+
+# Part 4 — switching Phase 3 on (growth tools)
+
+Only after Phase 2 has run for a while. Each switch is an `app_settings` row (same SQL as Part 3);
+switch one on, watch it for a few days, then the next. Pilot branch: Hopes; compare with Ram Nagar
+(A5). Re-run `docs/ops/cron.sql` to add the Phase 3 schedules (they do nothing while switched off).
+
+1. **Walk-in prices (I3)** — optional limits first: `yield_floor_pct` (e.g. `-10`) and
+   `yield_ceiling_pct` (e.g. `15`); never beyond ±20% (C8). Then `pssai_yield_pricing` = `on`. Each
+   night (00:05) the day's change is set per branch; see and override it on **Growth → Walk-in
+   prices**. The walk-in screen always shows the price that will be charged.
+2. **Release my hours (SP10)** — `pssai_hour_release` = `on` (needs the portal). Members with their
+   own cabin release hours in the portal; the walk-in screen offers those cabins; the member gets
+   50% of the walk-in price as credit on their next renewal (D7).
+3. **Predicted free hours (O1)** — `pssai_overbooking` = `on` after a few weeks of check-in history.
+   Hours a member almost never uses are offered with a 20% safety margin (C7); if they come anyway
+   they get another desk, or one free day as credit. Watch **Growth → Seat resales** ("member
+   arrived anyway") — it should stay rare.
+4. **Lead tools** — `pssai_lead_tools` = `on`: nightly lead scores and AI duplicate suggestions on
+   the Enquiries page. AI follow-up drafts use the Phase 2 switch `pssai_ai_messages`.
+5. **Enquiry chat (A2)** — write `enquiry_facts` first (hours, AC, Wi-Fi, address, anything you want
+   it to say), then `pssai_enquiry_chat` = `on` and link `https://join.perfectstudyspace.in/ask`
+   from the website. Shadow mode first: replies are drafts in the enquiry drawer. Run
+   `tests/agents/enquiry-eval.md` (18/20) before `pssai_agent_shadow` = `off`.
+6. **Referral links** — `pssai_referral_links` = `on`; make one link per place on **Growth →
+   Referral links** (print the flex-banner one as a QR). For students' own links also switch on
+   `pssai_portal_r2`; set `referral_reward_amount` (e.g. `100`) if a friend joining should earn a
+   reward — each one waits in Approvals for you.
+7. **Exam radar (I25)** — check each page in `exam_sources` (or the defaults in
+   `supabase/functions/_shared/exams.ts`) opens in a browser and lists notifications; then
+   `pssai_exam_radar` = `on`. Suggestions wait on **Growth → Exam calendar**; add an exam by hand
+   when a page can't be read. Edit `exam_ladder` if your students' exam paths differ (C11).
+8. **Next-exam plans (O9) and win-back (I26)** — `pssai_next_exam` = `on`, `pssai_winback` = `on`
+   (optional `winback_discount_pct`, at most 10, C12). Both add rows to the **Send list**.
+9. **Pay-later advice (O3)** and **exception desk (A7)** — `pssai_paylater_advice` = `on` (advice
+   under Partial / Pay Later), `pssai_exception_desk` = `on` (AI suggestions on Approvals; run
+   `tests/agents/exception-desk-eval.md` first). Both only advise; you decide.
+10. **Portal release 2** — `pssai_portal_r2` = `on`: waitlist, referral and cashbacks pages.
+
+Phase 3 exit gate (you): a month at Hopes against Ram Nagar shows more revenue; every "member arrived
+anyway" was handled (another desk or a free day) with no complaint; no hour was sold twice
+(`SELECT release_id, count(*) FROM seat_resales GROUP BY 1 HAVING count(*) > 1` is empty).
+
+Rollback: set the switch back to `off`. Credits already given stay as pending cashbacks; prices
+return to fee_config at once.

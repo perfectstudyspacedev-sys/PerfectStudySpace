@@ -6,7 +6,7 @@ import { useFeatureFlags } from '../hooks/useFeatureFlags'
 // PSS-AI P2.5 — "✨ AI draft": a personal welcome or study-report message drafted by AI from
 // figures the app worked out. Shown for editing; sent through WhatsApp exactly like the standard
 // message. Only while pssai_ai_messages is on.
-export default function AiDraftButton({ kind, studentId, membershipId, dateFrom, dateTo, phone, style }) {
+export default function AiDraftButton({ kind, studentId, membershipId, enquiryId, dateFrom, dateTo, phone, style }) {
   const { aiMessages } = useFeatureFlags()
   const [draft, setDraft] = useState(null)
   const [busy, setBusy] = useState(false)
@@ -16,7 +16,7 @@ export default function AiDraftButton({ kind, studentId, membershipId, dateFrom,
   const make = async () => {
     setBusy(true); setError('')
     try {
-      const r = await agentApi({ agent: 'writer', kind, ...(studentId ? { studentId } : {}), ...(membershipId ? { membershipId } : {}), ...(dateFrom ? { dateFrom, dateTo } : {}) })
+      const r = await agentApi({ agent: 'writer', kind, ...(studentId ? { studentId } : {}), ...(membershipId ? { membershipId } : {}), ...(enquiryId ? { enquiryId } : {}), ...(dateFrom ? { dateFrom, dateTo } : {}) })
       setDraft(r.text)
     } catch (err) { setError(err.message) } finally { setBusy(false) }
   }

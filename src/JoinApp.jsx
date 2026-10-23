@@ -1,6 +1,9 @@
 import { lazy, Suspense } from 'react'
 import { BrowserRouter, Routes, Route } from 'react-router-dom'
 import JoinPage from './pages/JoinPage'
+import ReferralLink from './pages/ReferralLink'
+
+const AskPage = lazy(() => import('./pages/AskPage.jsx'))
 
 // The student portal (PSS-AI P2.1) is a separate file, downloaded only for /me pages.
 const PortalRoutes = lazy(() => import('./portal/PortalRoutes.jsx'))
@@ -14,6 +17,9 @@ export default function JoinApp() {
     <BrowserRouter>
       <Routes>
         <Route path="/me/*" element={<Suspense fallback={null}><PortalRoutes /></Suspense>} />
+        {/* PSS-AI Phase 3: the enquiry chat (C9) and referral links (C10). */}
+        <Route path="/ask" element={<Suspense fallback={null}><AskPage /></Suspense>} />
+        <Route path="/r/:ref" element={<ReferralLink />} />
         <Route path="/:code" element={<JoinPage />} />
         <Route path="/join/:code" element={<JoinPage />} />
         <Route path="*" element={<JoinPage />} />
