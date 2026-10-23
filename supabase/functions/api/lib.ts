@@ -252,7 +252,8 @@ export const STUDY_REPORT_MAX_DAYS = 60;
 export const SIGNUP_CLAIM_MINUTES = 15;
 // Spam ceiling: a branch never legitimately has this many students waiting at the desk at once.
 export const SIGNUP_PENDING_LIMIT = 50;
-export const SIGNUP_REFERRALS = ["google_search", "instagram", "word_of_mouth", "flex", "ai_platform"];
+// whatsapp and other: the C10 channels a referral link can bring (migration 065).
+export const SIGNUP_REFERRALS = ["google_search", "instagram", "word_of_mouth", "flex", "ai_platform", "whatsapp", "other"];
 // 32 symbols, so a random byte maps onto them without bias; no i/l/o/u to misread.
 export const CODE_ALPHABET = "0123456789abcdefghjkmnpqrstvwxyz";
 

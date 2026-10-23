@@ -25,7 +25,7 @@ const EXTRA_FILTERS = [
 const ENTRY_TYPE_LABELS = { income: 'Income', payout: 'Payout', info: 'Info only' }
 const REFERRAL_LABELS = {
   google_search: 'Google Search', instagram: 'Social Media', word_of_mouth: 'Word of Mouth',
-  flex: 'Flex (Banner/Hoarding)', ai_platform: 'Claude/ChatGPT/AI Platforms', unknown: 'Not Recorded',
+  flex: 'Flex (Banner/Hoarding)', ai_platform: 'Claude/ChatGPT/AI Platforms', whatsapp: 'WhatsApp', other: 'Other', unknown: 'Not Recorded',
 }
 const TX_PAGE_SIZE = 200
 // RSP W1 — every way money is taken off what a student owes. Order = display order.

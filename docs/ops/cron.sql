@@ -75,6 +75,18 @@ SELECT cron.schedule('pss_owner_brief',       '30 1 * * *',  $$SELECT pss_run_ag
 -- P2.4 A4 (does nothing while pssai_collections is off):
 SELECT cron.schedule('pss_collections',       '30 2 * * *',  $$SELECT pss_run_agent_job('collections')$$);           -- 08:00 IST
 
+-- Phase 3 (each does nothing while its switch is off):
+SELECT cron.schedule('pss_yield_prices',      '35 18 * * *', $$SELECT pss_run_cron_job('cron_yield_prices')$$);      -- 00:05 IST (pssai_yield_pricing)
+SELECT cron.schedule('pss_predict_releases',  '35 * * * *',  $$SELECT pss_run_cron_job('cron_predict_releases')$$);  -- hourly (pssai_overbooking; also closes past releases)
+SELECT cron.schedule('pss_score_enquiries',   '45 20 * * *', $$SELECT pss_run_cron_job('cron_score_enquiries')$$);   -- 02:15 IST (pssai_lead_tools)
+SELECT cron.schedule('pss_referrals',         '0 21 * * *',  $$SELECT pss_run_cron_job('cron_referral_conversions')$$); -- 02:30 IST (pssai_referral_links)
+SELECT cron.schedule('pss_paylater_scores',   '15 21 * * *', $$SELECT pss_run_cron_job('cron_paylater_scores')$$);   -- 02:45 IST (pssai_paylater_advice)
+SELECT cron.schedule('pss_next_exam',         '40 2 * * *',  $$SELECT pss_run_cron_job('cron_next_exam')$$);         -- 08:10 IST (pssai_next_exam)
+SELECT cron.schedule('pss_enquiry_dedupe',    '0 22 * * *',  $$SELECT pss_run_agent_job('enquiry_dedupe')$$);        -- 03:30 IST (pssai_lead_tools)
+SELECT cron.schedule('pss_exam_radar',        '0 1 * * *',   $$SELECT pss_run_agent_job('exam_radar')$$);            -- 06:30 IST (pssai_exam_radar)
+SELECT cron.schedule('pss_winback',           '30 3 * * 1',  $$SELECT pss_run_agent_job('winback')$$);               -- Mondays 09:00 IST (pssai_winback)
+SELECT cron.schedule('pss_exception_desk',    '*/30 * * * *', $$SELECT pss_run_agent_job('exception_desk')$$);       -- every 30 min (pssai_exception_desk)
+
 -- ── 4. Check ──
 -- Run one job now and look at the answer a few seconds later:
 --   SELECT pss_run_cron_job('cron_integrity_report');

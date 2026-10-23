@@ -20,12 +20,18 @@ export function handlers(): Record<string, Handler> {
       let saved = 0;
       for (const r of payload.rows) {
         if (typeof r.studentId !== "string" || typeof r.branchId !== "string" || typeof r.message !== "string" || !r.message.trim()) continue;
+        // Phase 3: a row can be a win-back offer (I26) as well as a renewal reminder (A4).
+        const kind = r.kind === "winback" ? "winback" : "collections";
         const { data } = await db.from("send_list").upsert({
           list_date: payload.listDate, branch_id: r.branchId, student_id: r.studentId, reason: String(r.reason ?? "").slice(0, 200),
-          amount: Number(r.amount) > 0 ? Number(r.amount) : null, message: r.message.slice(0, 1000), run_id: ctx.runId ?? null,
+          amount: Number(r.amount) > 0 ? Number(r.amount) : null, message: r.message.slice(0, 1000), run_id: ctx.runId ?? null, kind,
         }, { onConflict: "list_date,student_id", ignoreDuplicates: true }).select("id");
         if (!data?.length) continue;
         saved++;
+        if (kind === "winback") {
+          await notifyStudent(db, r.studentId, { kind: "winback", title: "We'd love to have you back", body: String(r.reason ?? "").slice(0, 140), actionUrl: "/me", dedupeKey: `winback:${payload.listDate}` });
+          continue;
+        }
         const days = Number(r.daysToEnd);
         await notifyStudent(db, r.studentId, {
           kind: "renewal_reminder",
@@ -41,7 +47,7 @@ export function handlers(): Record<string, Handler> {
       if (!isOwnerOrAdmin(ctx.staff!)) return err("Owner only", 403);
       const date = payload.date ?? todayISO();
       if (!isISODate(date)) return err("Invalid date");
-      const { data, error } = await ctx.db.from("send_list").select("id, list_date, branch_id, student_id, reason, amount, message, status, handled_at, students(name, phone), branches(name)")
+      const { data, error } = await ctx.db.from("send_list").select("id, list_date, branch_id, student_id, kind, reason, amount, message, status, handled_at, students(name, phone), branches(name)")
         .eq("list_date", date).order("status").order("created_at").limit(MAX_ROWS);
       if (error) return err(error.message, 500);
       return json({ date, rows: (data ?? []).map((r: any) => ({ ...r, name: r.students?.name ?? null, phone: r.students?.phone ?? null, branch: r.branches?.name ?? null, students: undefined, branches: undefined })) });

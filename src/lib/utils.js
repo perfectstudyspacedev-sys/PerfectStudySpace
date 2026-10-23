@@ -215,4 +215,7 @@ export const REFERRAL_OPTIONS = [
   { value: 'word_of_mouth', label: 'Word of Mouth' },
   { value: 'flex', label: 'Flex (Banner/Hoarding)' },
   { value: 'ai_platform', label: 'Claude/ChatGPT/AI Platforms' },
+  // PSS-AI Phase 3 (C10, migration 065): channels a referral link can bring.
+  { value: 'whatsapp', label: 'WhatsApp' },
+  { value: 'other', label: 'Other' },
 ]

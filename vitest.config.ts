@@ -6,7 +6,7 @@ process.env.TZ = 'UTC'
 
 export default defineConfig({
   test: {
-    include: ['tests/money/**/*.test.ts', 'tests/registry/**/*.test.ts', 'tests/predeploy/**/*.test.ts'],
+    include: ['tests/money/**/*.test.ts', 'tests/registry/**/*.test.ts', 'tests/predeploy/**/*.test.ts', 'tests/units/**/*.test.ts'],
     environment: 'node',
   },
 })

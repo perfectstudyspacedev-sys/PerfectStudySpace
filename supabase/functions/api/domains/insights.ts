@@ -14,6 +14,11 @@ const FLAGS = {
   // Phase 2
   portal: "pssai_portal", upiPay: "pssai_upi_pay", concierge: "pssai_concierge", collections: "pssai_collections",
   autoApprove: "pssai_auto_approve", aiMessages: "pssai_ai_messages", realtime: "pssai_realtime",
+  // Phase 3
+  hourRelease: "pssai_hour_release", overbooking: "pssai_overbooking", yieldPricing: "pssai_yield_pricing",
+  enquiryChat: "pssai_enquiry_chat", leadTools: "pssai_lead_tools", referralLinks: "pssai_referral_links",
+  examRadar: "pssai_exam_radar", winback: "pssai_winback", nextExam: "pssai_next_exam",
+  paylaterAdvice: "pssai_paylater_advice", exceptionDesk: "pssai_exception_desk", portalR2: "pssai_portal_r2",
 } as const;
 const DISCOUNT_CONFIRM_KEY = "pssai_discount_confirm_over";
 export const DISCOUNT_CONFIRM_DEFAULT = 1000;

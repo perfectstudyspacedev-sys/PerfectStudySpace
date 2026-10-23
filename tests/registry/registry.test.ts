@@ -6,12 +6,12 @@ import { ACTION_META } from '../../supabase/functions/api/registry.ts'
 const snapshot: string[] = JSON.parse(readFileSync(new URL('./actions.snapshot.json', import.meta.url), 'utf8'))
 
 // Appendix D, explicit T3 list (docs/plans/PSS-AI-execution-plan.md).
-const T3_LIST = ['delete_membership', 'close_membership', 'cancel_early_renewal', 'change_membership_plan', 'change_membership_cabin', 'transfer_student_branch', 'apply_loyalty_discount', 'grant_cashback', 'redeem_cashback_now', 'set_overtime_excluded', 'add_attendance', 'update_attendance', 'fix_membership_dates', 'fix_negative_food_pass_balances', 'update_fee_config', 'update_welcome_template', 'update_branch', 'add_desk', 'remove_desk', 'remove_locker', 'update_locker_due_date', 'update_locker_number', 'create_food_item', 'update_food_item', 'create_staff', 'update_staff', 'assign_staff_override', 'clear_staff_override', 'end_staff_session', 'delete_enquiries', 'rotate_signup_link']
+const T3_LIST = ['delete_membership', 'close_membership', 'cancel_early_renewal', 'change_membership_plan', 'change_membership_cabin', 'transfer_student_branch', 'apply_loyalty_discount', 'grant_cashback', 'redeem_cashback_now', 'set_overtime_excluded', 'add_attendance', 'update_attendance', 'fix_membership_dates', 'fix_negative_food_pass_balances', 'update_fee_config', 'update_welcome_template', 'update_branch', 'add_desk', 'remove_desk', 'remove_locker', 'update_locker_due_date', 'update_locker_number', 'create_food_item', 'update_food_item', 'create_staff', 'update_staff', 'assign_staff_override', 'clear_staff_override', 'end_staff_session', 'delete_enquiries', 'rotate_signup_link', 'set_walkin_price_day']
 // Appendix D, T2 = money comes in (amounts calculated by code).
 const T2_LIST = ['record_payment', 'record_locker_payment', 'add_manual_payment', 'topup_food_pass', 'create_food_bill', 'collect_food_bill_shortfall', 'create_walkin', 'create_membership', 'renew_membership', 'renew_locker', 'add_locker', 'checkout_booking']
 
 // Scheduled jobs added in P0.7/P0.8; run only by the cron function.
-const SYSTEM_JOBS = ['cron_expiry_alerts', 'cron_integrity_report', 'cron_purge_idempotency', 'cron_purge_images', 'cron_purge_signups', 'cron_resume_holds', 'cron_session_reminders', 'cron_waitlist_offers']
+const SYSTEM_JOBS = ['cron_expiry_alerts', 'cron_integrity_report', 'cron_next_exam', 'cron_paylater_scores', 'cron_predict_releases', 'cron_purge_idempotency', 'cron_purge_images', 'cron_purge_signups', 'cron_referral_conversions', 'cron_resume_holds', 'cron_score_enquiries', 'cron_session_reminders', 'cron_waitlist_offers', 'cron_yield_prices']
 const PEOPLE = ['public', 'staff', 'owner', 'admin']
 
 describe('action registry (P0.4)', () => {
@@ -24,7 +24,7 @@ describe('action registry (P0.4)', () => {
   })
   test('the public actions are the only ones open without a login (P2.1 adds the portal PIN login and setup)', () => {
     expect(ACTION_META.filter((a) => a.callers.includes('public')).map((a) => a.name).sort())
-      .toEqual(['login', 'me_login', 'me_set_pin', 'public_create_enquiry', 'public_signup_info', 'public_signup_pay', 'public_signup_plans', 'public_signup_proof', 'public_signup_submit'])
+      .toEqual(['login', 'me_login', 'me_set_pin', 'public_create_enquiry', 'public_referral_info', 'public_signup_info', 'public_signup_pay', 'public_signup_plans', 'public_signup_proof', 'public_signup_submit'])
   })
   test('portal actions (me_*) are for students only, and students reach nothing else (P2.1)', () => {
     for (const a of ACTION_META.filter((x) => x.name.startsWith('me_') && !['me_login', 'me_set_pin'].includes(x.name))) {
@@ -44,9 +44,9 @@ describe('action registry (P0.4)', () => {
     for (const a of agentCalls) expect(a.tier, a.name).not.toBe('T3')
     for (const a of agentCalls.filter((x) => x.mutating)) {
       // P1.8 brief, P2.4 concierge reply: agent-only. P2.4 concierge: the student's own hold and pay request.
-      expect(['save_owner_brief', 'save_chat_reply', 'save_send_list', 'me_request_hold', 'me_payment_request'], a.name).toContain(a.name)
+      expect(['save_owner_brief', 'save_chat_reply', 'save_send_list', 'me_request_hold', 'me_payment_request', 'save_dedupe_suggestions', 'save_enquiry_chat', 'save_enquiry_chat_reply', 'save_exam_notices', 'save_approval_note'], a.name).toContain(a.name)
     }
-    for (const n of ['save_owner_brief', 'save_chat_reply', 'save_send_list']) expect(ACTION_META.find((a) => a.name === n)?.callers, n).toEqual(['agent'])
+    for (const n of ['save_owner_brief', 'save_chat_reply', 'save_send_list', 'save_dedupe_suggestions', 'save_enquiry_chat', 'save_enquiry_chat_reply', 'save_exam_notices', 'save_approval_note']) expect(ACTION_META.find((a) => a.name === n)?.callers, n).toEqual(['agent'])
   })
   test('system jobs are callable by the system only, and nothing else is', () => {
     expect(ACTION_META.filter((a) => a.callers.includes('system')).map((a) => a.name).sort()).toEqual(SYSTEM_JOBS)

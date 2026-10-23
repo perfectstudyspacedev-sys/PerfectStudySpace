@@ -29,10 +29,19 @@ const DEFAULTS: Record<string, Row> = {
   payment_proofs: { status: "requested", request: {}, student_id: null, signup_request_id: null, utr: null, image_path: null, ai_reading: null, checks: null, submitted_at: null, decided_by_staff_id: null, decided_at: null, reject_reason: null, transaction_ids: null },
   portal_notifications: { body: null, action_url: null, dedupe_key: null, read_at: null },
   portal_chat_messages: { status: "sent", reply_to: null, run_id: null, sent_by_staff_id: null, sent_at: null },
-  send_list: { status: "pending", amount: null, run_id: null, handled_by_staff_id: null, handled_at: null },
-  approvals: { status: "pending", action: null, run_id: null, student_id: null, branch_id: null, decided_by_staff_id: null, decided_at: null, reason: null, result: null, requested_by_id: null },
+  send_list: { status: "pending", amount: null, run_id: null, handled_by_staff_id: null, handled_at: null, kind: "collections" },
+  approvals: { status: "pending", action: null, run_id: null, student_id: null, branch_id: null, decided_by_staff_id: null, decided_at: null, reason: null, result: null, requested_by_id: null, ai_note: null, ai_note_at: null },
   student_requests: { status: "pending", details: {}, approval_id: null, decided_at: null },
   permanent_waitlist: { status: "waiting", student_id: null, offered_at: null, offer_expires_at: null, offer_status: null, hours_per_day: null, notes: null },
+  // PSS-AI Phase 3 (063–066) and the Phase 2 review (067)
+  seat_releases: { status: "open", probability: null, parent_id: null, closed_at: null },
+  seat_resales: { credit_amount: 0, credit_cashback_id: null, collision: null, collision_at: null, collision_cashback_id: null },
+  walkin_price_days: { occupancy: null, source: "auto", set_by_staff_id: null },
+  enquiry_dedupe: { status: "open", confidence: null, reason: null, run_id: null, decided_by_staff_id: null },
+  enquiry_chat_messages: { status: "sent", ip_hash: null, run_id: null, sent_by_staff_id: null, sent_at: null },
+  referral_links: { is_active: true, label: null, referrer_student_id: null, created_by_staff_id: null },
+  referral_attributions: { converted_student_id: null, converted_at: null, reward_approval_id: null },
+  exam_notices: { status: "suggested", exam_family: null, notified_on: null, apply_by: null, exam_date: null, url: null, run_id: null, created_by_staff_id: null, reviewed_by_staff_id: null, reviewed_at: null },
 };
 
 function uuid() { return crypto.randomUUID(); }

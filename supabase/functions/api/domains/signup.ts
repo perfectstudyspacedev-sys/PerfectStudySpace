@@ -6,6 +6,7 @@ import { err, json } from "../../_shared/http.ts";
 import { isOwnerOrAdmin, requireBranch } from "../../_shared/auth.ts";
 import { featureOn } from "../../_shared/flags.ts";
 import { ID_BUCKET, newPayKey, payKeyHash, selfPayOn } from "./onboarding.ts";
+import { activeLink, attributeReferral, CHANNEL_SOURCE } from "./referrals.ts";
 import { SIGNUP_PENDING_LIMIT, claimSignup, isSignupLinkCode, newSignupLinkCode, newSignupRef, purgeExpiredSignups, signupBusyMessage, signupClaimCutoff, validateSignupFields } from "../lib.ts";
 
 export function handlers(): Record<string, Handler> {
@@ -26,8 +27,12 @@ export function handlers(): Record<string, Handler> {
 
       // Hidden "website" field: people never see it, form-filling bots do. Pretend it worked.
       if (String(payload.website ?? "").trim()) return json({ ok: true, ref: newSignupRef() });
-      const v = validateSignupFields(payload);
+      // PSS-AI Phase 3: a referral link (/r/<code>) of this branch sets how they heard about us.
+      const link = payload.ref ? await activeLink(db, payload.ref) : null;
+      const fromLink = link && link.branch_id === signupBranch.id ? link : null;
+      const v = validateSignupFields(fromLink ? { ...payload, referralSource: CHANNEL_SOURCE[fromLink.channel] } : payload);
       if ("error" in v) return err(v.error);
+      const attribute = () => (fromLink ? attributeReferral(db, fromLink.code, signupBranch.id, v.phone, "signup") : null);
 
       await purgeExpiredSignups(db);
       const fields = {
@@ -55,7 +60,7 @@ export function handlers(): Record<string, Handler> {
         return json({ ok: true, ref: existing.ref_code, updated: true });
       };
       const resubmitted = await updateExisting();
-      if (resubmitted) return resubmitted;
+      if (resubmitted) { if (resubmitted.status < 400) await attribute(); return resubmitted; }
 
       const { count: pendingCount } = await db.from("signup_requests")
         .select("*", { count: "exact", head: true }).eq("branch_id", signupBranch.id);
@@ -76,6 +81,7 @@ export function handlers(): Record<string, Handler> {
             branch_id: signupBranch.id, sender_staff_id: null, recipient_type: "staff",
             content: `[new_signup] ${v.name} (…${v.phone.slice(-4)}) · Ref #${ref}`,
           });
+          await attribute();
           return json({ ok: true, ref, ...(payKey ? { payKey } : {}) });
         }
         if (insErr.code !== "23505") {
@@ -85,7 +91,7 @@ export function handlers(): Record<string, Handler> {
         // Unique clash: the same phone sent twice at the same moment (update that one), or the
         // random Ref collided with another waiting sign-up (try a new Ref).
         const raced = await updateExisting();
-        if (raced) return raced;
+        if (raced) { if (raced.status < 400) await attribute(); return raced; }
       }
       return err("Your details could not be saved — please try again or speak to the desk.", 500);
     },

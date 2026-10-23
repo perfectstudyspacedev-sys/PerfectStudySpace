@@ -2,8 +2,11 @@
 //  - the owner's app: { agent: "analyst", question, history?, deep? } with an owner or admin staff
 //    token ({ agent: "analyst", op: "usage" } returns this month's AI spend);
 //  - the student portal (P2.4 A1): { agent: "concierge", message } with a student token;
-//  - pg_cron through pg_net: { job: "owner_brief" } with the x-cron-secret header (the same
-//    CRON_SECRET as the cron function), at 07:00 IST — see docs/ops/cron.sql.
+//  - the join site's enquiry chat (Phase 3, A2): { agent: "enquiry", op, ... } — public, rate-limited;
+//  - the owner's Approvals page: { agent: "exception_desk", approvalId } (Phase 3, A7);
+//  - pg_cron through pg_net: { job: "owner_brief" | "collections" | "enquiry_dedupe" | "exam_radar" |
+//    "winback" | "exception_desk" } with the x-cron-secret header (the same CRON_SECRET as the cron
+//    function) — see docs/ops/cron.sql.
 // Every run needs its switch on (pssai_analyst), the AI_API_KEY secret, and room in the monthly
 // AI budget (pssai_ai_budget_usd). The key never leaves this function.
 // deno-lint-ignore-file no-explicit-any
@@ -16,6 +19,11 @@ import { askAnalyst, writeOwnerBrief } from "./analyst.ts";
 import { answerStudent, DAILY_LIMIT, studentMessagesToday } from "./concierge.ts";
 import { runCollections } from "./collections.ts";
 import { draftMessage } from "./writer.ts";
+import { handleEnquiryChat } from "./enquiry.ts";
+import { runDedupe } from "./dedupe.ts";
+import { runExamRadar } from "./examRadar.ts";
+import { runWinback } from "./winback.ts";
+import { runExceptionDesk } from "./exceptionDesk.ts";
 import { authStudent } from "../_shared/student.ts";
 import { REGISTRY } from "../api/actions.ts";
 import { runAction } from "../api/run.ts";
@@ -33,6 +41,7 @@ async function handleRequest(req: Request): Promise<Response> {
   try {
     const body = await req.json().catch(() => null);
     if (body?.agent === "concierge") return await handleConcierge(req, body);
+    if (body?.agent === "enquiry") return await handleEnquiryChat(req, body);
     const staff = await authStaff(req);
     if (!staff) return err("Unauthorized", 401);
     if (body?.agent === "writer") {
@@ -43,6 +52,16 @@ async function handleRequest(req: Request): Promise<Response> {
       return "error" in r ? err(r.error, r.status ?? 400) : json(r);
     }
     if (!isOwnerOrAdmin(staff)) return err("Owner only", 403);
+    if (body?.agent === "exception_desk") {
+      // A7 on demand: one approval's suggestion, from the Approvals page.
+      const db = adminClient();
+      if (typeof body.approvalId !== "string") return err("Choose an approval");
+      if (!aiClient()) return err("AI is not set up yet: the AI_API_KEY secret is missing", 503);
+      const r = await runExceptionDesk(db, staff, [body.approvalId]);
+      if ("skipped" in r && !("noted" in r)) return err(r.skipped as string, 403);
+      const { data } = await db.from("approvals").select("ai_note, ai_note_at").eq("id", body.approvalId).maybeSingle();
+      return data?.ai_note ? json({ note: data.ai_note, at: data.ai_note_at }) : err((r as any).skipped ?? "No suggestion could be drafted", 503);
+    }
     if (body?.agent !== "analyst") return err("Unknown agent");
     const db = adminClient();
     if (!(await featureOn(db, "analyst"))) return err("The owner analyst is switched off (pssai_analyst)", 403);
@@ -121,6 +140,18 @@ async function handleJob(req: Request): Promise<Response> {
       const owner = await ownerScope(db);
       if (!owner) return err("No active owner account", 500);
       return json(await runCollections(db, owner));
+    }
+    // Phase 3 jobs: each checks its own switch and needs an owner account to act for.
+    const phase3: Record<string, (owner: StaffRow) => Promise<unknown>> = {
+      enquiry_dedupe: (owner) => runDedupe(db, owner),
+      exam_radar: (owner) => runExamRadar(db, owner),
+      winback: (owner) => runWinback(db, owner),
+      exception_desk: (owner) => runExceptionDesk(db, owner),
+    };
+    if (body?.job in phase3) {
+      const owner = await ownerScope(db);
+      if (!owner) return err("No active owner account", 500);
+      return json(await phase3[body.job](owner));
     }
     if (body?.job !== "owner_brief") return err(`Unknown job: ${body?.job}`);
     if (!(await featureOn(db, "analyst"))) return json({ skipped: "pssai_analyst is off" });

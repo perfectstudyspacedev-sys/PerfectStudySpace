@@ -122,7 +122,7 @@ export function handlers(): Record<string, Handler> {
       const status = payload.status ?? "pending";
       if (!["pending", "approved", "denied"].includes(status)) return err("Invalid status");
       const { data, error } = await ctx.db.from("approvals")
-        .select("id, kind, action, payload, requested_by_type, requested_by_id, run_id, student_id, status, reason, result, decided_at, created_at, students(name, phone), branches(name)")
+        .select("id, kind, action, payload, requested_by_type, requested_by_id, run_id, student_id, status, reason, result, decided_at, created_at, ai_note, ai_note_at, students(name, phone), branches(name)")
         .eq("status", status).order("created_at", { ascending: status === "pending" }).limit(200);
       if (error) return err(error.message, 500);
       return json({ approvals: (data ?? []).map((a: any) => ({ ...a, name: a.students?.name ?? null, phone: a.students?.phone ?? null, branch: a.branches?.name ?? null, students: undefined, branches: undefined })) });

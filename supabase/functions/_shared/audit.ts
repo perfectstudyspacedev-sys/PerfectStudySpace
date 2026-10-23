@@ -119,13 +119,17 @@ function publicPayload(action: string, payload: Record<string, unknown>) {
 const LENGTH_ONLY: Record<string, string[]> = {
   me_chat_send: ["body"], save_chat_reply: ["body"], send_chat_reply: ["body"],
   me_update_contact: ["emergencyContact"],
-  save_enquiry_chat: ["message", "reply"], send_enquiry_chat_reply: ["body"],
+  save_enquiry_chat: ["message"], save_enquiry_chat_reply: ["reply"], send_enquiry_chat_reply: ["body"],
 };
+// Fields left out entirely: the enquiry chat's opening details (a visitor's name and phone) and
+// hashes that would only help link visitors together.
+const OMIT: Record<string, string[]> = { save_enquiry_chat: ["open", "ipHash"] };
 function lengthOnly(action: string, payload: Record<string, unknown>) {
-  const fields = LENGTH_ONLY[action];
-  if (!fields) return payload;
+  const fields = LENGTH_ONLY[action], omit = OMIT[action];
+  if (!fields && !omit) return payload;
   const out = { ...payload };
-  for (const k of fields) if (typeof out[k] === "string") out[k] = `[${(out[k] as string).length} chars]`;
+  for (const k of fields ?? []) if (typeof out[k] === "string") out[k] = `[${(out[k] as string).length} chars]`;
+  for (const k of omit ?? []) if (k in out) out[k] = "[omitted]";
   return out;
 }
 
