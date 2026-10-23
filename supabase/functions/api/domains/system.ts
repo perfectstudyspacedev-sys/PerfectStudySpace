@@ -11,6 +11,7 @@ import { fetchAllRows, membershipDateDrift, purgeExpiredSignups, remindExpiringM
 
 export const IDEMPOTENCY_KEY_HOURS = 48;
 export const STALE_SESSION_HOURS = 24;
+export const PROOF_IMAGE_KEEP_DAYS = 180;
 const LIST_LIMIT = 100; // rows listed per finding; the counts are always complete
 
 /** Read-only checks for the nightly integrity report (P0.8). Writes nothing. */
@@ -24,8 +25,20 @@ export async function integrityFindings(db: Ctx["db"]) {
   const cutoff = new Date(Date.now() - STALE_SESSION_HOURS * 3600e3).toISOString();
   const stale = await fetchAllRows<any>(() => db.from("bookings").select("id, student_id, branch_id, booking_type, start_time")
     .eq("status", "active").lt("start_time", cutoff).order("start_time").order("id"));
+  // 4. UPI payments marked confirmed whose action wrote no transaction (a crash between the two).
+  const settled = new Date(Date.now() - 15 * 60e3).toISOString();
+  const confirmed = await fetchAllRows<any>(() => db.from("payment_proofs").select("id, reference, student_id, branch_id, amount_expected, transaction_ids, decided_at")
+    .eq("status", "confirmed").lt("decided_at", settled).gte("decided_at", new Date(Date.now() - 30 * 86400e3).toISOString()).order("id"));
+  const noTx = confirmed.filter((p) => !Array.isArray(p.transaction_ids) || p.transaction_ids.length === 0);
+  // 5. AI runs that never finished (the function was stopped mid-call): their cost is not counted.
+  const stuck = await fetchAllRows<any>(() => db.from("agent_runs").select("id, agent, started_at").eq("status", "running").lt("started_at", settled).order("id"));
   return {
-    counts: { membership_dates: membershipDates.length, negative_food_pass: passes.length, stale_active_bookings: stale.length },
+    counts: {
+      membership_dates: membershipDates.length, negative_food_pass: passes.length, stale_active_bookings: stale.length,
+      proofs_without_transactions: noTx.length, stuck_agent_runs: stuck.length,
+    },
+    proofs_without_transactions: noTx.slice(0, LIST_LIMIT).map((p) => ({ proof_id: p.id, reference: p.reference, student_id: p.student_id, branch_id: p.branch_id, amount: p.amount_expected, decided_at: p.decided_at })),
+    stuck_agent_runs: stuck.slice(0, LIST_LIMIT).map((r) => ({ run_id: r.id, agent: r.agent, started_at: r.started_at })),
     checked: { memberships: checked },
     membership_dates: membershipDates.slice(0, LIST_LIMIT),
     negative_food_pass: passes.slice(0, LIST_LIMIT).map((p) => ({ food_pass_id: p.id, student_id: p.student_id, branch_id: p.branch_id, balance: p.balance })),
@@ -55,6 +68,25 @@ export function handlers(): Record<string, Handler> {
     cron_purge_signups: async (ctx: Ctx): Promise<Response | undefined> => {
       await purgeExpiredSignups(ctx.db);
       return json({ ok: true });
+    },
+    // 03:00 IST: payment screenshots are kept for proof_image_keep_days (default 180) after the
+    // payment was sent, then deleted from storage (the reading and the decision stay).
+    cron_purge_images: async (ctx: Ctx): Promise<Response | undefined> => {
+      const { db } = ctx;
+      const { data: setting } = await db.from("app_settings").select("value").eq("key", "proof_image_keep_days").maybeSingle();
+      const days = Number(setting?.value) >= 30 ? Number(setting!.value) : PROOF_IMAGE_KEEP_DAYS;
+      const old = await fetchAllRows<any>(() => db.from("payment_proofs").select("id, image_path")
+        .in("status", ["confirmed", "rejected", "cancelled"]).not("image_path", "is", null)
+        .lt("created_at", new Date(Date.now() - days * 86400e3).toISOString()).order("id"));
+      let removed = 0;
+      for (let i = 0; i < old.length; i += 100) {
+        const batch = old.slice(i, i + 100);
+        const removedBatch: { error: { message: string } | null } = await db.storage.from("payment-proofs").remove(batch.map((p) => p.image_path));
+        if (removedBatch.error) return err(removedBatch.error.message, 500);
+        await db.from("payment_proofs").update({ image_path: null }).in("id", batch.map((p) => p.id));
+        removed += batch.length;
+      }
+      return json({ ok: true, removed, keepDays: days });
     },
     // Hourly: idempotency keys are only needed while a retry is likely.
     cron_purge_idempotency: async (ctx: Ctx): Promise<Response | undefined> => {

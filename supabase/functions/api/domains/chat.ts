@@ -8,8 +8,18 @@ import { err, json } from "../../_shared/http.ts";
 import { isOwnerOrAdmin, requireBranch } from "../../_shared/auth.ts";
 import { notifyStudent } from "../../_shared/notify.ts";
 import { featureOn } from "../../_shared/flags.ts";
+import { istDayStart, todayISO } from "../../_shared/dates.ts";
 
 export const MAX_MESSAGE = 1000;
+export const DAILY_LIMIT = 30;          // a student's chat messages per day (the desk's time, and the AI budget)
+const THREAD_ROWS = 1000;
+
+/** The student's messages today (IST). */
+export async function studentMessagesToday(db: Ctx["db"], studentId: string) {
+  const { count } = await db.from("portal_chat_messages").select("*", { count: "exact", head: true })
+    .eq("student_id", studentId).eq("role", "student").gte("created_at", istDayStart(todayISO()));
+  return count ?? 0;
+}
 const me = (ctx: Ctx) => ctx.student!;
 // Oldest first. Within the same instant a student's message comes before the reply to it.
 export const byTime = (a: any, b: any) => (a.created_at < b.created_at ? -1 : a.created_at > b.created_at ? 1 : (a.role === "student" ? 0 : 1) - (b.role === "student" ? 0 : 1));
@@ -34,6 +44,7 @@ export function handlers(): Record<string, Handler> {
     me_chat_send: async (ctx: Ctx, payload: any): Promise<Response | undefined> => {
       const body = cleanBody(payload.body);
       if (!body) return err("Write a message");
+      if ((await studentMessagesToday(ctx.db, me(ctx).id)) >= DAILY_LIMIT) return err(`That's ${DAILY_LIMIT} messages today — please ask at the desk, or write again tomorrow`, 429);
       const { data, error } = await ctx.db.from("portal_chat_messages")
         .insert({ student_id: me(ctx).id, role: "student", body, status: "sent", sent_at: new Date().toISOString() }).select("id").single();
       if (error || !data) return err(error?.message ?? "Could not save the message", 500);
@@ -63,12 +74,15 @@ export function handlers(): Record<string, Handler> {
       if (branchId && !requireBranch(staff, branchId)) return err("Branch access denied", 403);
       if (!branchId && !isOwnerOrAdmin(staff)) return err("Pick a branch", 403);
       const since = new Date(Date.now() - 14 * 86400e3).toISOString();
-      const { data } = await db.from("portal_chat_messages").select("id, student_id, role, body, status, created_at, sent_at, reply_to, students!inner(name, phone, branch_id)")
-        .neq("status", "discarded").gte("created_at", since).order("created_at").limit(1000);
+      // Newest first, so a busy fortnight drops the oldest rows, never the newest questions; the
+      // branch is filtered in the database (through the inner join), before the limit.
+      let q = db.from("portal_chat_messages").select("id, student_id, role, body, status, created_at, sent_at, reply_to, students!inner(name, phone, branch_id)")
+        .neq("status", "discarded").gte("created_at", since);
+      if (branchId) q = q.eq("students.branch_id", branchId);
+      const { data } = await q.order("created_at", { ascending: false }).limit(THREAD_ROWS);
       const threads = new Map<string, any>();
       for (const m of (data ?? []).sort(byTime)) {
         const s = (m as any).students;
-        if (branchId && s?.branch_id !== branchId) continue;
         const t = threads.get(m.student_id) ?? { studentId: m.student_id, name: s?.name, phone: s?.phone, branchId: s?.branch_id, messages: [] as any[] };
         t.messages.push({ id: m.id, role: m.role, body: m.body, status: m.status, at: m.sent_at ?? m.created_at, replyTo: m.reply_to });
         threads.set(m.student_id, t);
@@ -99,6 +113,9 @@ export function handlers(): Record<string, Handler> {
       } else {
         await db.from("portal_chat_messages").insert({ student_id: student.id, role: "staff", body, status: "sent", sent_by_staff_id: staff.id, sent_at: now });
       }
+      // The reply answers the thread: older drafts (answers to earlier questions) are dropped, so
+      // the page never offers a stale one next.
+      await db.from("portal_chat_messages").update({ status: "discarded" }).eq("student_id", student.id).eq("status", "draft").lt("created_at", now);
       await notifyStudent(db, student.id, { kind: "chat_reply", title: "New reply in your chat", body: body.slice(0, 140), actionUrl: "/me/chat" });
       return json({ ok: true });
     },

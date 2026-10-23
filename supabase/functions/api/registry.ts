@@ -85,6 +85,7 @@ export const ACTION_META: ActionMeta[] = ([
   ["cron_integrity_report", "T0", SYSTEM, false, true],
   ["cron_resume_holds", "T1", SYSTEM, true, true],
   ["cron_purge_idempotency", "T3", SYSTEM, true, true],
+  ["cron_purge_images", "T3", SYSTEM, true, true],
   ["cron_purge_signups", "T3", SYSTEM, true, true],
   ["decide_approval", "T1", OWNER, true, false],
   ["discard_chat_draft", "T1", STAFF, true, false],

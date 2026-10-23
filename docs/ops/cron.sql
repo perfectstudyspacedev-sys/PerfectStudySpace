@@ -65,6 +65,7 @@ SELECT cron.schedule('pss_expiry_alerts',     '30 0 * * *',  $$SELECT pss_run_cr
 SELECT cron.schedule('pss_purge_signups',     '35 18 * * *', $$SELECT pss_run_cron_job('cron_purge_signups')$$);     -- 00:05 IST
 SELECT cron.schedule('pss_purge_idempotency', '17 * * * *',  $$SELECT pss_run_cron_job('cron_purge_idempotency')$$); -- hourly
 SELECT cron.schedule('pss_integrity_report',  '30 20 * * *', $$SELECT pss_run_cron_job('cron_integrity_report')$$);  -- 02:00 IST
+SELECT cron.schedule('pss_purge_images',      '30 21 * * *', $$SELECT pss_run_cron_job('cron_purge_images')$$);      -- 03:00 IST (payment screenshots after 180 days)
 -- P2 (does nothing until a student or the owner starts a hold with a planned end):
 SELECT cron.schedule('pss_resume_holds',      '25 * * * *',  $$SELECT pss_run_cron_job('cron_resume_holds')$$);      -- hourly
 SELECT cron.schedule('pss_session_reminders', '*/5 * * * *', $$SELECT pss_run_cron_job('cron_session_reminders')$$); -- every 5 min (pssai_session_reminders)

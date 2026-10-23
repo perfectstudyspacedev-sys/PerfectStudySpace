@@ -30,6 +30,7 @@
   "cron_expiry_alerts",
   "cron_integrity_report",
   "cron_purge_idempotency",
+  "cron_purge_images",
   "cron_purge_signups",
   "cron_resume_holds",
   "cron_session_reminders",

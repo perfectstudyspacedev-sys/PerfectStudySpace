@@ -71,6 +71,22 @@ export async function monthSpend(db: Db): Promise<{ usedUsd: number; capUsd: num
   return { usedUsd: Math.round(used * 10000) / 10000, capUsd: Number.isFinite(cap) && cap >= 0 ? cap : BUDGET_DEFAULT_USD };
 }
 
+// Calls that people outside the staff can start (an ID photo at sign-up, a payment screenshot)
+// have their own daily cap, so a script can't spend the month's budget for everyone else.
+export const PUBLIC_AI_KEY = "pssai_public_ai_daily";
+export const PUBLIC_AI_DEFAULT = 40;
+export const PUBLIC_AI_AGENTS = ["proof-reader", "id-check"];
+
+/** True while today's (IST) public-started AI reads are under the owner's cap. */
+export async function publicAiAllowed(db: Db): Promise<boolean> {
+  const { data: setting } = await db.from("app_settings").select("value").eq("key", PUBLIC_AI_KEY).maybeSingle();
+  const raw = Number(setting?.value);
+  const cap = Number.isFinite(raw) && raw >= 0 && setting?.value !== "" && setting?.value != null ? raw : PUBLIC_AI_DEFAULT;
+  const { count } = await db.from("agent_runs").select("*", { count: "exact", head: true })
+    .in("agent", PUBLIC_AI_AGENTS).is("staff_id", null).gte("started_at", istDayStart(todayISO()));
+  return (count ?? 0) < cap;
+}
+
 // ── Run log (agent_runs) ──
 export interface RunTotals {
   tokensIn: number; tokensOut: number; cacheRead: number; cacheWrite: number;

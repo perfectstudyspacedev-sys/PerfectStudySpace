@@ -636,6 +636,38 @@ All agents follow **Appendix F**.
 - **P2.5** ✅ — `api/domains/notices.ts` (`cron_session_reminders` every 5 minutes, `cron_waitlist_offers` every 15), `agent/writer.ts` + `src/components/AiDraftButton.jsx` (AI drafts are shown for editing and refused if they add a number, drop a link or miss the sign-off), `_shared/live.ts` + `src/lib/live.js` + `src/hooks/useLiveSignal.js` (empty Realtime broadcast after each change; three polling hooks drop to a 5-minute safety net, the time-driven session warning keeps its 60-second timer; CSP allows `wss://*.supabase.co`). The "Removed in Phase 2" items wait for operation (they depend on Realtime and auto-approval being verified live).
 - **Tests** — server suites `portal`, `payments`, `requests`, `concierge`, `collections`, `onboarding`, `notices`, `writer_live` (fake Supabase, scripted Claude); `npm run test:integration` (now Deno, real api function + real Supabase client) runs B1–B10 and the Phase 2 flows including the portal isolation test against Postgres 16 + PostgREST 12 — all pass; agent evaluation sets `tests/agents/analyst-eval.md` and `tests/agents/concierge-eval.md`; browser QA of the portal at phone width and of the owner pages.
 
+### Independent review of P1.8 and Phase 2 (2026-10-23)
+
+One independent reviewer read the whole range (`1670d8b..bb33ccf`). Isolation (every `me_*` action), the T3 gate, the renewal quote, claim-first Confirm and decide, the upsert targets, the event-log redaction and the service worker held up. All findings fixed, with a test each (server suites; the five that need a real database also in `tests/integration/review_p2_test.ts`):
+
+| # | Finding | Fix |
+|---|---|---|
+| 1 | High: parallel PIN (and setup-code) guesses each read the same counter, so a burst got many checks for one counted try | Each try is counted with one conditional update before the PIN is checked; a try that loses the race is answered "wrong" without a check. 40 parallel guesses = 1 try |
+| 2 | High: the sign-up Ref is printed for the desk, yet code + Ref + phone could set the portal PIN and send proofs | A 32-character pay key, given only to the browser that sent the form (hash kept, migration 067); resending the form once self-pay has started is refused |
+| 3 | A returning student's phone on a new sign-up could take over their account at Confirm; an active member could pay for a registration | Active members are refused at the pay step; a returning student is registered but keeps their own PIN (the owner is told to send a setup code) |
+| 4 | The lock-out answer (429) told which phones have accounts | Same answer and the same hashing for every failure; the text says logins pause after 5 wrong tries |
+| 5 | Anyone could spend the AI budget with ID photos and screenshots | Only a proof's first screenshot is read by itself; at most 2 ID checks per sign-up; a daily cap for public-started reads (`pssai_public_ai_daily`, default 40); the owner's own Read is outside the cap |
+| 6 | Payment requests were never reused on Postgres (jsonb key order) | Compared field by field |
+| 7 | The chat page could drop the newest messages after 1,000 rows; the daily limit only held on one path | Newest first, branch filtered in SQL; the 30-a-day limit is in `me_chat_send` |
+| 8 | The collections ranking stopped at 1,000 members and lost churn scores on long id lists | Paged reads; ids in chunks of 200; errors raised |
+| 9 | An accepted waitlist offer didn't hold its desk, so the desk was offered again | Accepted offers waiting for the owner count as holding a desk |
+| 10 | An accept that couldn't be queued left the offer stuck | Queued first, then marked accepted |
+| 11 | An approved hold didn't re-check the membership | Same membership, active, not paused, not ended — else the approval stays open with a reason |
+| 12 | One UPI payment (UTR) could confirm two proofs | Confirm refuses a UTR already confirmed; a unique index on confirmed UTRs (067) refuses a race |
+| 13 | The desk and self-pay could both take money for one sign-up; the sign-up could be cleaned up under a waiting proof | The desk can't register or deny while a sent payment waits; a payment only asked for is cancelled when the desk takes over; sending a proof keeps the sign-up 3 more days |
+| 14 | A crash during Confirm could leave a "confirmed" proof with no transaction | Clock margin on the lookup; the nightly report lists confirmed proofs with no transaction |
+| 15 | Every public call and student change broadcast to every screen, and the broadcast was awaited | No signal for public callers; students only to their branch; sent after the answer (`EdgeRuntime.waitUntil`) |
+| 16 | An older chat draft could be offered after a newer one was sent | Sending a reply discards older drafts |
+| 17 | Chat text and emergency numbers were kept in the 400-day event log | Stored as their length only |
+| 18 | ID photos and screenshots were never deleted | A denied or expired sign-up's photo is deleted; `cron_purge_images` deletes decided payments' screenshots after 180 days (`proof_image_keep_days`) |
+| 19 | The screenshot was read before the proof was saved | Saved as sent first; the nightly report lists AI runs that never finished |
+| 20 | The collections draft check missed "1500 rupees" and wrong dates | Every number in a draft must come from the facts |
+| — | Nits | Portal scope `/me/`; the AI study summary counts a running session up to now |
+
+Found while testing on Postgres: PostgREST 12.2 refuses an update or delete whose `.or()` filter names a column not in its `.select()` ("column … does not exist"). Three places did this — the new PIN count, the sign-up clean-up, and the sign-up form's own "send again" path from before Phase 2 (a re-sent form was answered "the desk is already processing your details"). Each now selects the columns its `.or()` uses, with a test on Postgres.
+
+Decisions taken (owner may overrule): the daily public AI cap (40 reads), the 180-day screenshot retention, and the "length only" event log for chat text.
+
 ## Phase 2 exit gate
 
 - [ ] Most renewals at the pilot branch are paid through the portal, with payments confirmed within the time agreed in D2
@@ -707,7 +739,7 @@ Tests: server suites for each item (fake Supabase, scripted Claude, stubbed web 
 
 | Item | What to build | Closes |
 |---|---|---|
-| Self check-in (SP13) | Migration `067_checkin_location`: add `latitude`, `longitude`, `checkin_key` to `branches`; a `checkin_records` table with the location result and consent. A printed QR poster encodes `https://join.perfectstudyspace.in/me/checkin?b=<branch>&k=<checkin_key>`. New action `me_check_in` (T1) checks the key and the phone's location against the D9 radius, then runs the same logic as `check_in_member` with the student as actor. Desk choice: permanent members get their own desk; others get one from seat matching. The owner can reprint with a new key. | G1 |
+| Self check-in (SP13) | Migration `068_checkin_location`: add `latitude`, `longitude`, `checkin_key` to `branches`; a `checkin_records` table with the location result and consent. A printed QR poster encodes `https://join.perfectstudyspace.in/me/checkin?b=<branch>&k=<checkin_key>`. New action `me_check_in` (T1) checks the key and the phone's location against the D9 radius, then runs the same logic as `check_in_member` with the student as actor. Desk choice: permanent members get their own desk; others get one from seat matching. The owner can reprint with a new key. | G1 |
 | Self checkout | New action `me_check_out` runs the same logic as `checkout_booking`, so overtime and Food Pass rules are unchanged | — |
 | A5 Session watch | Reminds students in the portal before quota end, closes forgotten sessions, applies overtime by rule and flags manual edits. The "Correct checkout time" control becomes an exception path. Without sensors an early exit cannot be verified. | G4; G2 and G5 partly |
 | I4 Seat matching | Replaces the first-free-desk choice in `create_walkin` with placement based on study profiles | G6 |
@@ -744,7 +776,7 @@ Tests: server suites for each item (fake Supabase, scripted Claude, stubbed web 
 | O7 Space-yield optimiser | Occupancy heat-maps suggest which zones become premium cabins, group rooms or extra seats |
 | I13, I10 | Study Wrapped card and exam coach in the portal |
 | Portal R4 | SP18 focus profile, SP19 exam coach, SP20 Study Wrapped, SP21 study buddy (opt-in) |
-| S1 Retire desk-staff modules | Migration `068_deprecate_staff_ops` marks tables deprecated; a later migration drops them after the data is archived. Remove: `markAttendanceIfNeeded` on every request; `staff_attendance` reads, `list_staff_attendance`, `end_staff_session` and the logout cut-off in `authStaff`; `assign_staff_override`, `clear_staff_override`; `list_branch_staff`, `get_staff_grid`; staff-to-staff `list_messages`, `send_message`, `MessagesPage`; `StaffPage`; `TasksPage` unless housekeeping still uses it. `create_staff` and `update_staff` shrink to owner, admin and kitchen/housekeeping accounts. Do this only after the staff modules sit unused for a full month. |
+| S1 Retire desk-staff modules | Migration `069_deprecate_staff_ops` marks tables deprecated; a later migration drops them after the data is archived. Remove: `markAttendanceIfNeeded` on every request; `staff_attendance` reads, `list_staff_attendance`, `end_staff_session` and the logout cut-off in `authStaff`; `assign_staff_override`, `clear_staff_override`; `list_branch_staff`, `get_staff_grid`; staff-to-staff `list_messages`, `send_message`, `MessagesPage`; `StaffPage`; `TasksPage` unless housekeeping still uses it. `create_staff` and `update_staff` shrink to owner, admin and kitchen/housekeeping accounts. Do this only after the staff modules sit unused for a full month. |
 
 ## Phase 5 exit gate
 
@@ -844,14 +876,15 @@ Values marked "pinned" record what the code returns today. If one looks wrong, r
 | 060 | `060_portal_notifications.sql` | P2 | Portal inbox |
 | 061 | `061_approvals.sql` | P2 | Approval queue |
 | 062 | `062_student_requests.sql` | P2 | Holds, plan changes, refunds asked for by students |
-| 063 | `063_overbooking.sql` | P3 | Resold hours and fallback credits |
-| 064 | `064_hour_release.sql` | P3 | Released hours and member credits |
-| 065 | `065_referral_links.sql` | P3 | Tracked referral links |
-| 066 | `066_exam_notices.sql` | P3 | Exam notices read from public pages |
-| 067 | `067_checkin_location.sql` | P4 | Branch location, check-in key, check-in records |
-| 068 | `068_deprecate_staff_ops.sql` | P5 | Marks desk-staff tables deprecated |
+| 063 | `063_seat_releases.sql` | P3 | Released and predicted-free desk hours, resales and their credits (O1, SP10) |
+| 064 | `064_yield_and_leads.sql` | P3 | Walk-in price days, enquiry scores, AI duplicate suggestions, the enquiry chat, the approvals AI note |
+| 065 | `065_referral_links.sql` | P3 | Tracked referral links and attributions |
+| 066 | `066_exam_notices.sql` | P3 | Exam notices; Send list kinds |
+| 067 | `067_phase2_hardening.sql` | P2 review | Sign-up pay key; one confirmed proof per UTR |
+| 068 | `068_checkin_location.sql` | P4 | Branch location, check-in key, check-in records |
+| 069 | `069_deprecate_staff_ops.sql` | P5 | Marks desk-staff tables deprecated |
 
-Numbers are indicative. Because phases ship in order, the migration owner may renumber unbuilt ones so files are applied in the order they ship; update this table in the same commit. *Renumbered on 2026-10-20 (P1.8) into build order; later phases may add rows after 068.*
+Numbers are indicative. Because phases ship in order, the migration owner may renumber unbuilt ones so files are applied in the order they ship; update this table in the same commit. *Renumbered on 2026-10-20 (P1.8) and 2026-10-23 (Phase 3 and the Phase 2 review) into build order.*
 
 ---
 

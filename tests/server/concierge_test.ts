@@ -142,6 +142,27 @@ await setup();
   check(capped.status === 429, "C7: at most 30 messages per student per day", capped);
   const other = await say("hi", tB);
   check(other.status === 200, "C7: the limit is per student");
+  const direct2 = await call("me_chat_send", { body: "and another" }, tA);
+  check(direct2.status === 429, "R7: the daily limit holds on the direct path (me_chat_send) too", direct2);
+  const ev = rows("events").filter((e) => e.action === "me_chat_send" && e.ok);
+  check(ev.length > 0 && ev.every((e) => /^\[\d+ chars\]$/.test(e.payload.body)), "R17: the event log keeps only the length of chat text", ev.at(-1)?.payload);
+}
+
+// ── Review 7 and 16: the newest messages always show; sending a reply clears older drafts ──
+await setup();
+{
+  const b2 = insert("branches", { name: "Ram Nagar", is_active: true });
+  const other = insert("students", { name: "Elsewhere", phone: "9100000007", branch_id: b2.id, status: "active" });
+  const old = new Date(Date.now() - 3 * 86400e3).getTime();
+  for (let i = 0; i < 1100; i++) insert("portal_chat_messages", { student_id: other.id, role: "student", body: `x${i}`, status: "sent", created_at: new Date(old + i * 1000).toISOString() });
+  insert("portal_chat_messages", { student_id: asha.id, role: "student", body: "Is the AC on?", status: "sent", created_at: new Date(old - 3600e3).toISOString() });
+  const d1 = insert("portal_chat_messages", { student_id: asha.id, role: "assistant", body: "Old draft", status: "draft", created_at: new Date(old - 1800e3).toISOString() });
+  insert("portal_chat_messages", { student_id: asha.id, role: "student", body: "Hello again?", status: "sent", created_at: new Date(Date.now() - 60e3).toISOString() });
+  const d2 = insert("portal_chat_messages", { student_id: asha.id, role: "assistant", body: "New draft", status: "draft", created_at: new Date(Date.now() - 30e3).toISOString() });
+  const list = await call("list_chat_threads", { branchId: b1.id }, tP);
+  check(list.threads.length === 1 && list.threads[0].studentId === asha.id && list.threads[0].drafts.length === 2, "R7: another branch's 1,100 messages don't push this branch's newest question off the page", list.threads.length);
+  const sent = await call("send_chat_reply", { studentId: asha.id, draftId: d2.id, body: "New draft" }, tP);
+  check(sent.status === 200 && d2.status === "sent" && d1.status === "discarded", "R16: sending the newest draft discards the older one, so it is never offered next", { d1: d1.status });
 }
 
 done();

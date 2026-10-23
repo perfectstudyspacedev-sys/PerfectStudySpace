@@ -18,7 +18,7 @@ import { registrationAction } from "./onboarding.ts";
 const me = (ctx: Ctx) => ctx.student!;
 
 // What confirming a proof runs: the existing action, as the owner, by UPI.
-async function confirmAction(ctx: Ctx, proof: any): Promise<{ name: string; payload: any; after?: (body: any) => Promise<{ studentId: string | null }> } | { error: string }> {
+async function confirmAction(ctx: Ctx, proof: any): Promise<{ name: string; payload: any; after?: (body: any) => Promise<{ studentId: string | null; note?: string }> } | { error: string }> {
   const { db } = ctx;
   const req = proof.request ?? {};
   const amount = Number(proof.amount_expected);
@@ -122,7 +122,7 @@ export function handlers(): Record<string, Handler> {
       let bin = ""; for (const b of bytes) bin += String.fromCharCode(b);
       const decoded = decodeImage({ data: btoa(bin) });
       if ("error" in decoded) return err(decoded.error);
-      const r = await readScreenshot(db, p.student_id, decoded);
+      const r = await readScreenshot(db, p.student_id, decoded, ctx.staff!.id);
       if (!r.reading) return err(`Not read: ${r.note}`, 503);
       const upi = await upiSettings(db);
       const checks = await proofChecks(db, p, r.reading, upi.vpa);
@@ -138,11 +138,19 @@ export function handlers(): Record<string, Handler> {
       const { data: before } = await db.from("payment_proofs").select("*").eq("id", payload.proofId).maybeSingle();
       if (!before) return err("Payment not found", 404);
       if (!OPEN.includes(before.status)) return err(`This payment is already ${before.status}`, 409);
+      // One UPI payment confirms one proof: a UTR (typed or read) already on a confirmed proof is
+      // refused here, and the unique index on confirmed UTRs (067) refuses a race.
+      const utrs = [...new Set([before.utr, before.ai_reading?.utr].filter((u: unknown): u is string => typeof u === "string" && /^\d{12}$/.test(u)))];
+      if (utrs.length) {
+        const { data: used } = await db.from("payment_proofs").select("reference, utr").in("utr", utrs).eq("status", "confirmed").neq("id", before.id).limit(1);
+        if (used?.length) return err(`UTR ${used[0].utr} already paid for ${used[0].reference} — one UPI payment can't confirm two proofs. Reject this one with a note.`, 409);
+      }
       // Claim it first, so a second click (or a second owner) can never run the payment twice.
       const startedAt = new Date().toISOString();
-      const { data: claimed } = await db.from("payment_proofs")
+      const { data: claimed, error: claimErr } = await db.from("payment_proofs")
         .update({ status: "confirmed", decided_by_staff_id: staff.id, decided_at: startedAt })
         .eq("id", before.id).eq("status", before.status).select("id");
+      if (claimErr?.code === "23505") return err("This UTR is already on a confirmed payment — reject this one with a note.", 409);
       if (!claimed?.length) return err("Someone else is deciding this payment — refresh", 409);
       const release = () => db.from("payment_proofs").update({ status: before.status, decided_by_staff_id: null, decided_at: null }).eq("id", before.id);
 
@@ -152,12 +160,15 @@ export function handlers(): Record<string, Handler> {
       if (!ran.ok) { await release(); return err(`Not confirmed — ${plan.name} said: ${ran.body?.error ?? `HTTP ${ran.status}`}`, ran.status >= 500 ? 500 : 409); }
       const extra = plan.after ? await plan.after(ran.body) : null;
       const studentId = before.student_id ?? extra?.studentId ?? null;
+      // The UPI rows the action just wrote (a few seconds' margin either side for the clocks of the
+      // function and the database). The nightly report lists any confirmed proof left without one.
       const { data: tx } = studentId
-        ? await db.from("transactions").select("id").eq("student_id", studentId).eq("payment_mode", "upi").gte("created_at", startedAt)
+        ? await db.from("transactions").select("id").eq("student_id", studentId).eq("payment_mode", "upi")
+          .gte("created_at", new Date(Date.parse(startedAt) - 5000).toISOString()).lte("created_at", new Date(Date.now() + 5000).toISOString())
         : { data: [] };
       await db.from("payment_proofs").update({ transaction_ids: (tx ?? []).map((t: any) => t.id), student_id: studentId }).eq("id", before.id);
       if (studentId) await notifyStudent(db, studentId, { kind: "payment_confirmed", title: `Payment ₹${Number(before.amount_expected)} confirmed`, body: `Your ${PURPOSE_LABEL[before.purpose]} payment (${before.reference}) is confirmed. Thank you!`, actionUrl: "/me/receipts", dedupeKey: `proof:${before.id}` });
-      return json({ ok: true, action: plan.name, result: ran.body });
+      return json({ ok: true, action: plan.name, result: ran.body, ...(extra?.note ? { note: extra.note } : {}) });
     },
 
     reject_payment_proof: async (ctx: Ctx, payload: any): Promise<Response | undefined> => {

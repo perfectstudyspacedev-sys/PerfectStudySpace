@@ -65,6 +65,10 @@ await setup();
     "L1: after a change the branch gets an empty 'changed' signal (reads send none)", sent);
   await call("create_enquiry", { branchId: b1.id, name: "", phone: "1" }, tP);
   check(sent.length === 1, "L1: a refused change sends no signal");
+  // Review 15: public callers never make every screen re-fetch.
+  Deno.env.set("PUBLIC_SITE_KEY", "site-key");
+  const pub = await call("public_create_enquiry", { siteKey: "site-key", name: "Web Visitor", phone: "9555555557", branch: "Hopes" });
+  check(pub.status === 200 && sent.length === 1, "R15: a public call (the website form) sends no signal", { pub: pub.status, sent: sent.length });
   globalThis.fetch = realFetch;
 }
 

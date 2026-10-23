@@ -5,6 +5,7 @@ import type { Ctx, Handler } from "../registry.ts";
 import { err, json } from "../../_shared/http.ts";
 import { isOwnerOrAdmin, requireBranch } from "../../_shared/auth.ts";
 import { featureOn } from "../../_shared/flags.ts";
+import { ID_BUCKET, newPayKey, payKeyHash, selfPayOn } from "./onboarding.ts";
 import { SIGNUP_PENDING_LIMIT, claimSignup, isSignupLinkCode, newSignupLinkCode, newSignupRef, purgeExpiredSignups, signupBusyMessage, signupClaimCutoff, validateSignupFields } from "../lib.ts";
 
 export function handlers(): Record<string, Handler> {
@@ -35,9 +36,12 @@ export function handlers(): Record<string, Handler> {
       };
       const busy = "The desk is already processing your details — please speak to them.";
       const updateExisting = async (): Promise<Response | null> => {
-        const { data: existing } = await db.from("signup_requests").select("id, ref_code, claimed_by_staff_id, claimed_at")
+        const { data: existing } = await db.from("signup_requests").select("id, ref_code, claimed_by_staff_id, claimed_at, pin_hash, keep_until")
           .eq("branch_id", signupBranch.id).eq("phone", v.phone).maybeSingle();
         if (!existing) return null;
+        // PSS-AI review: once self-pay has started (a PIN chosen, a payment asked for), the details
+        // are fixed — otherwise anyone who knows the phone number could change them.
+        if (existing.pin_hash || existing.keep_until) return err("Your sign-up is waiting for its payment to be confirmed — please speak to the desk to change your details.", 409);
         // A resubmission corrects the waiting entry (same Ref) — unless staff are on it.
         const cutoff = signupClaimCutoff();
         if (existing.claimed_by_staff_id && existing.claimed_at && Date.parse(existing.claimed_at) >= Date.parse(cutoff)) return err(busy, 409);
@@ -45,7 +49,8 @@ export function handlers(): Record<string, Handler> {
           .update({ ...fields, claimed_by_staff_id: null, claimed_at: null })
           .eq("id", existing.id)
           .or(`claimed_by_staff_id.is.null,claimed_at.lt.${cutoff}`)
-          .select("id");
+          // The .or() columns must be selected too, or PostgREST 12.2 refuses the update.
+          .select("id, claimed_by_staff_id, claimed_at");
         if (!updated?.length) return err(busy, 409);
         return json({ ok: true, ref: existing.ref_code, updated: true });
       };
@@ -58,9 +63,12 @@ export function handlers(): Record<string, Handler> {
         return err("We can't take more sign-ups right now — please speak to the desk.", 429);
       }
 
+      // PSS-AI A3: with self-pay on, the browser that sent the form gets a key for the pay step.
+      const payKey = (await selfPayOn(db)) ? newPayKey() : null;
+      const payKeyFields = payKey ? { pay_key_hash: await payKeyHash(payKey) } : {};
       for (let attempt = 0; attempt < 5; attempt++) {
         const ref = newSignupRef();
-        const { error: insErr } = await db.from("signup_requests").insert({ branch_id: signupBranch.id, ref_code: ref, ...fields });
+        const { error: insErr } = await db.from("signup_requests").insert({ branch_id: signupBranch.id, ref_code: ref, ...fields, ...payKeyFields });
         if (!insErr) {
           // Popup for that branch's staff and the owner, through the same tagged-message path
           // as website enquiries. Only the last 4 digits of the phone go into chat.
@@ -68,7 +76,7 @@ export function handlers(): Record<string, Handler> {
             branch_id: signupBranch.id, sender_staff_id: null, recipient_type: "staff",
             content: `[new_signup] ${v.name} (…${v.phone.slice(-4)}) · Ref #${ref}`,
           });
-          return json({ ok: true, ref });
+          return json({ ok: true, ref, ...(payKey ? { payKey } : {}) });
         }
         if (insErr.code !== "23505") {
           console.error("signup_requests insert failed:", insErr.message);
@@ -137,9 +145,16 @@ export function handlers(): Record<string, Handler> {
       const { db, action } = ctx;
       const staff = ctx.staff!;
       const { id } = payload;
-      const { data: reqRow } = await db.from("signup_requests").select("id, branch_id").eq("id", id).maybeSingle();
+      const { data: reqRow } = await db.from("signup_requests").select("id, branch_id, id_photo_path").eq("id", id).maybeSingle();
       if (!reqRow) return err("This sign-up was already handled by someone else (or has expired).", 409);
       if (!requireBranch(staff, reqRow.branch_id)) return err("Branch access denied", 403);
+      if (action !== "release_signup_request") {
+        // PSS-AI review: a UPI payment the student sent waits for the owner — the desk must not take
+        // a second payment (or delete the sign-up under it). A payment only asked for is cancelled.
+        const { data: proofs } = await db.from("payment_proofs").select("id, status").eq("signup_request_id", id).in("status", ["requested", "submitted"]);
+        if ((proofs ?? []).some((p: any) => p.status === "submitted")) return err("This student has sent a UPI payment that waits for the owner — the owner must confirm or reject it first.", 409);
+        if (proofs?.length) await db.from("payment_proofs").update({ status: "cancelled" }).eq("signup_request_id", id).eq("status", "requested");
+      }
 
       if (action === "release_signup_request") {
         await db.from("signup_requests").update({ claimed_by_staff_id: null, claimed_at: null })
@@ -163,7 +178,10 @@ export function handlers(): Record<string, Handler> {
         (q: any) => q.lt("claimed_at", signupClaimCutoff()),
       ]) {
         const { data: gone } = await narrow(db.from("signup_requests").delete().eq("id", id)).select("id");
-        if (gone?.length) return json({ ok: true });
+        if (gone?.length) {
+          if (reqRow.id_photo_path) await db.storage.from(ID_BUCKET).remove([reqRow.id_photo_path]);
+          return json({ ok: true });
+        }
       }
       return err(await signupBusyMessage(db, id), 409);
     },

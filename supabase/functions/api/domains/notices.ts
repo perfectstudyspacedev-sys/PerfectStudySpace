@@ -48,7 +48,9 @@ export function handlers(): Record<string, Handler> {
       for (const branchId of branches) {
         const { count: free } = await db.from("desks").select("*", { count: "exact", head: true }).eq("branch_id", branchId).eq("status", "free");
         const queue = (waiting ?? []).filter((w: any) => w.branch_id === branchId);
-        const open = queue.filter((w: any) => w.offer_status === "offered" && w.offer_expires_at > nowIso).length;
+        // A live offer holds a seat, and so does an accepted one waiting for the owner (until the
+        // owner denies it or the desk gives the seat), so one free desk is never offered twice.
+        const open = queue.filter((w: any) => (w.offer_status === "offered" && w.offer_expires_at > nowIso) || w.offer_status === "accepted").length;
         let slots = (free ?? 0) - open;
         for (const w of queue) {
           if (slots <= 0) break;

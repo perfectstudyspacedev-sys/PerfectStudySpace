@@ -21,7 +21,7 @@ const DEFAULTS: Record<string, Row> = {
   food_bills: { paid: false, discount_amount: 0 },
   membership_holds: { resumed_at: null, days_paused: 0, planned_resume_date: null, requested_by_student: false },
   waivers: {},
-  signup_requests: { claimed_by_staff_id: null, claimed_at: null, pin_hash: null, keep_until: null, id_photo_path: null, id_check: null },
+  signup_requests: { claimed_by_staff_id: null, claimed_at: null, pin_hash: null, keep_until: null, id_photo_path: null, id_check: null, pay_key_hash: null },
   // PSS-AI Phase 2 (058–062)
   student_credentials: { failed_attempts: 0, locked_until: null, privacy_accepted_at: null },
   student_setup_codes: { attempts: 0 },
@@ -42,6 +42,8 @@ const PRIMARY_KEY: Record<string, string> = { idempotency_keys: "key", focus_rat
 function baseRow(table: string): Row {
   if (table === "events") return { id: tbl(table).reduce((m, r) => Math.max(m, r.id), 0) + 1, occurred_at: new Date().toISOString() };
   if (table in PRIMARY_KEY) return { created_at: new Date().toISOString() };
+  // agent_runs (057) stamps started_at, not created_at.
+  if (table === "agent_runs") return { id: uuid(), started_at: new Date().toISOString(), staff_id: null, student_id: null };
   return { id: uuid(), created_at: new Date().toISOString() };
 }
 function tbl(name: string) { return (fake.tables[name] ??= []); }

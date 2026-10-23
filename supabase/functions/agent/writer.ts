@@ -14,7 +14,7 @@ const SIGN_OFF = "— Team Perfect Study Space"; // C6
 const DEFAULT_WELCOME = "Hi {name}, welcome to Perfect Study Space! 🎉 If you have any questions, feel free to reach out anytime.";
 const SCHEMA = { type: "object", additionalProperties: false, required: ["text"], properties: { text: { type: "string" } } };
 
-const numbersIn = (s: string) => [...s.matchAll(/\d+(?:[.,]\d+)*/g)].map((m) => m[0].replace(/,/g, ""));
+export const numbersIn = (s: string) => [...s.matchAll(/\d+(?:[.,]\d+)*/g)].map((m) => m[0].replace(/,/g, ""));
 const urlsIn = (s: string) => [...s.matchAll(/https?:\/\/\S+/g)].map((m) => m[0]);
 
 /** The draft keeps every link, adds no number that the facts don't have, and signs off. */
@@ -61,7 +61,9 @@ export async function draftMessage(db: Ctx["db"], staff: StaffRow, payload: any)
       .neq("status", "cancelled").gte("start_time", istDayStart(from)).lte("start_time", istDayEnd(to)).limit(1000);
     const perDay = new Map<string, number>();
     for (const b of rows ?? []) {
-      const end = b.end_time ? new Date(b.end_time).getTime() : Date.now();
+      // A session still running counts up to now, not to its planned end (same as the portal).
+      const planned = b.end_time ? new Date(b.end_time).getTime() : Date.now();
+      const end = b.status === "active" ? Math.min(planned, Date.now()) : planned;
       const min = Math.max(0, Math.round((end - new Date(b.start_time).getTime()) / 60000) - Number(b.total_pause_minutes ?? 0));
       perDay.set(toISTDateStr(b.start_time), (perDay.get(toISTDateStr(b.start_time)) ?? 0) + min);
     }

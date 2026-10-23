@@ -5,8 +5,10 @@
 import type { Ctx } from "./registry.ts";
 import { featureOn } from "../_shared/flags.ts";
 import { proofChecks, readScreenshot } from "../_shared/proofReader.ts";
+import { publicAiAllowed } from "../_shared/ai.ts";
 import { currentMembership, quoteRenewal, RENEWAL_MONTHS } from "./portal-lib.ts";
 
+export const KEEP_SIGNUP_DAYS = 3;   // a sign-up with a payment waiting is kept this long (A3)
 export const BUCKET = "payment-proofs";
 export const MAX_IMAGE_BYTES = 1_572_864; // 1.5 MB
 const FOOD_PASS_MIN = 100, FOOD_PASS_MAX = 5000;
@@ -82,6 +84,14 @@ export async function priceRequest(db: Ctx["db"], student: { id: string; branch_
   return { error: "Choose what to pay for" };
 }
 
+/** Same request, field by field: Postgres returns jsonb keys in its own order, not the one written. */
+export function sameRequest(a: Record<string, unknown> | null, b: Record<string, unknown>): boolean {
+  const x = a ?? {};
+  const keys = new Set([...Object.keys(x), ...Object.keys(b)]);
+  for (const k of keys) if (String(x[k] ?? "") !== String(b[k] ?? "")) return false;
+  return true;
+}
+
 /** Creates (or reuses, within a day) a payment request and returns the pay link. */
 export async function createPaymentRequest(db: Ctx["db"], owner: { student_id?: string | null; signup_request_id?: string | null; branch_id: string },
   priced: { purpose: string; amount: number; request: Record<string, unknown>; label: string }) {
@@ -91,7 +101,7 @@ export async function createPaymentRequest(db: Ctx["db"], owner: { student_id?: 
     .gte("created_at", new Date(Date.now() - 24 * 3600e3).toISOString());
   q = owner.student_id ? q.eq("student_id", owner.student_id) : q.eq("signup_request_id", owner.signup_request_id);
   const { data: open } = await q;
-  let row = (open ?? []).find((p: any) => Number(p.amount_expected) === priced.amount && JSON.stringify(p.request) === JSON.stringify(priced.request));
+  let row = (open ?? []).find((p: any) => Number(p.amount_expected) === priced.amount && sameRequest(p.request, priced.request));
   for (let attempt = 0; !row && attempt < 3; attempt++) {
     const { data, error } = await db.from("payment_proofs").insert({
       student_id: owner.student_id ?? null, signup_request_id: owner.signup_request_id ?? null, branch_id: owner.branch_id,
@@ -124,18 +134,32 @@ export async function submitProof(db: Ctx["db"], proof: any, payload: any, reade
     const { error } = await db.storage.from(BUCKET).upload(imagePath, image.bytes, { contentType: image.mime, upsert: true });
     if (error) return { error: `Could not save the screenshot: ${error.message}`, status: 500 };
   }
-  const update: Record<string, unknown> = { utr: utr ?? proof.utr, image_path: imagePath, status: "submitted", submitted_at: new Date().toISOString() };
-  let reading = proof.ai_reading ?? null;
-  let note: string | null = null;
-  if (image && (await featureOn(db, "proof_reading"))) {
-    const r = await readScreenshot(db, readerStudentId, image);
-    reading = r.reading; note = r.note;
-    update.ai_reading = reading ?? { unread: note };
-  }
+  // Saved as submitted first, so a slow or failed AI read never loses the proof.
   const upi = await upiSettings(db);
-  update.checks = await proofChecks(db, { id: proof.id, amount_expected: proof.amount_expected, utr: (update.utr as string | null) }, reading?.unread ? null : reading, upi.vpa);
+  const typedUtr = utr ?? proof.utr;
+  // A new screenshot replaces the old reading. Only a proof's first screenshot is read by itself;
+  // the owner can read a replacement (read_payment_proof), so resending can't spend the budget.
+  const firstImage = !!image && !proof.image_path && !proof.ai_reading;
+  const reading0 = image ? null : (proof.ai_reading?.unread ? null : proof.ai_reading ?? null);
+  const update: Record<string, unknown> = {
+    utr: typedUtr, image_path: imagePath, status: "submitted", submitted_at: new Date().toISOString(),
+    ...(image ? { ai_reading: null } : {}),
+  };
+  const checks = await proofChecks(db, { id: proof.id, amount_expected: proof.amount_expected, utr: typedUtr }, reading0, upi.vpa);
+  if (image && !firstImage) checks.push("A new screenshot was sent — press Read to check it");
+  update.checks = checks;
   const { error } = await db.from("payment_proofs").update(update).eq("id", proof.id).in("status", OPEN);
   if (error) return { error: error.message, status: 500 };
+  if (proof.purpose === "registration" && proof.signup_request_id) {
+    // The sign-up is kept while its payment waits for the owner.
+    await db.from("signup_requests").update({ keep_until: new Date(Date.now() + KEEP_SIGNUP_DAYS * 86400e3).toISOString() }).eq("id", proof.signup_request_id);
+  }
+  if (image && firstImage && (await featureOn(db, "proof_reading"))) {
+    const r = (await publicAiAllowed(db)) ? await readScreenshot(db, readerStudentId, image) : { reading: null, note: "today's limit for automatic reads is reached" };
+    const after = await proofChecks(db, { id: proof.id, amount_expected: proof.amount_expected, utr: typedUtr }, r.reading, upi.vpa);
+    update.checks = after;
+    await db.from("payment_proofs").update({ ai_reading: r.reading ?? { unread: r.note }, checks: after }).eq("id", proof.id).eq("status", "submitted");
+  }
   return { ok: true, submitted: true, checks: update.checks };
 }
 

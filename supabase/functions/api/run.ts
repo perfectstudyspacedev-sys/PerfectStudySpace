@@ -45,10 +45,18 @@ export async function runAction(def: ActionDef, ctx: Ctx, payload: any): Promise
   if (def.mutating || ctx.actor.type === "agent" || ctx.actor.type === "student") {
     await writeEvent(ctx.db, await eventRow(def, ctx.actor, ctx.runId, payload, res));
   }
-  // P2.5: tell open staff screens something changed (only with pssai_realtime on).
-  if (def.mutating && res.status < 400) {
+  // P2.5: tell open staff screens something changed (only with pssai_realtime on). Never for public
+  // callers (anyone could make every screen re-fetch), and a student's change only reaches their
+  // own branch. In the edge runtime the signal is sent after the answer (waitUntil), so it never
+  // slows the request; elsewhere (tests) it is awaited.
+  if (def.mutating && res.status < 400 && ctx.actor.type !== "public") {
     const branchId = typeof payload?.branchId === "string" ? payload.branchId : ctx.staff?.branch_id ?? ctx.student?.branch_id ?? null;
-    await broadcastChange(ctx.db, branchId);
+    if (branchId || ctx.actor.type !== "student") {
+      const sending = broadcastChange(ctx.db, branchId).catch(() => {});
+      const runtime = (globalThis as { EdgeRuntime?: { waitUntil?: (p: Promise<unknown>) => void } }).EdgeRuntime;
+      if (runtime?.waitUntil) runtime.waitUntil(sending);
+      else await sending;
+    }
   }
   return res;
 }

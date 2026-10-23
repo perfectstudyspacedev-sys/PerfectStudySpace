@@ -130,4 +130,13 @@ await setup();
     "G1: approved, it runs once as the owner with the request recorded as its reason", { yes, reason: del.reason });
 }
 
+// ── Review 11: an approved hold re-checks the membership first ──
+await setup();
+{
+  const q = await hold(12);
+  memA.is_active = false;   // ended (or renewed) before the owner decided
+  const late = await call("decide_approval", { approvalId: q.pending_approval, decision: "approve" }, tO);
+  check(late.status === 409 && /membership has changed/.test(late.error) && !holds().length && rows("approvals")[0].status === "pending", "R11: a hold approved after the membership ended pauses nothing and stays open for the owner to deny", late);
+}
+
 done();

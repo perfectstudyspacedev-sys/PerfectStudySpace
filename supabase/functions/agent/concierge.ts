@@ -6,7 +6,7 @@
 // deno-lint-ignore-file no-explicit-any
 import type Anthropic from "npm:@anthropic-ai/sdk@0.131.0";
 import type { StudentScope } from "../_shared/student.ts";
-import { istDayStart, todayISO } from "../_shared/dates.ts";
+import { todayISO } from "../_shared/dates.ts";
 import { type AgentTool, compactJson, emptyTotals, finishRun, type LoopResult, type RunStatus, startRun, stripPersonal, toolLoop } from "../_shared/ai.ts";
 import { REGISTRY } from "../api/actions.ts";
 import { runAction } from "../api/run.ts";
@@ -14,7 +14,7 @@ import type { Ctx } from "../api/registry.ts";
 import { byTime } from "../api/domains/chat.ts";
 
 export const AGENT_NAME = "concierge";
-export const DAILY_LIMIT = 30;
+export { DAILY_LIMIT, studentMessagesToday } from "../api/domains/chat.ts";
 const HISTORY = 12;
 
 const TOOL_SPECS: Record<string, { description: string; properties: Record<string, unknown>; required?: string[]; acts?: boolean }> = {
@@ -84,11 +84,6 @@ export async function chatContext(db: Ctx["db"], studentId: string): Promise<Ant
   return turns;
 }
 
-export async function studentMessagesToday(db: Ctx["db"], studentId: string) {
-  const { count } = await db.from("portal_chat_messages").select("*", { count: "exact", head: true })
-    .eq("student_id", studentId).eq("role", "student").gte("created_at", istDayStart(todayISO()));
-  return count ?? 0;
-}
 
 const runStatus = (r: LoopResult): RunStatus => (r.stop === "done" ? "ok" : r.stop);
 

@@ -2,7 +2,7 @@
 // each job once, the pssai_cron switch, and the nightly integrity report.
 // deno-lint-ignore-file no-explicit-any
 import "./determinism.ts";
-import { call, insert, rows, reset, tokenFor, check, done, IST_TODAY, addDays } from "./harness.ts";
+import { call, insert, rows, reset, tokenFor, check, done, IST_TODAY, addDays, fake } from "./harness.ts";
 
 Deno.env.set("CRON_SECRET", "cron-test-secret");
 let cronHandler: ((req: Request) => Promise<Response>) | null = null;
@@ -183,6 +183,27 @@ await setup();
   check(latest.report.counts.membership_dates === 0 && latest.report.counts.negative_food_pass === 0 && rows("events").filter((e) => e.action === "integrity_report").length === 2,
     "I2: after the fixes the next report is clean and is the one returned", latest.report.counts);
   void good;
+}
+
+// ── Review 14, 18, 19: the report lists unrecorded payments and stuck AI runs; old screenshots go ──
+await setup();
+{
+  const st = insert("students", { name: "Asha Rao", phone: "9100000001", branch_id: b1.id, status: "active" });
+  const longAgo = new Date(Date.now() - 3600e3).toISOString();
+  insert("payment_proofs", { student_id: st.id, branch_id: b1.id, purpose: "food_pass", amount_expected: 300, reference: "PSS-NOTXNOTX", status: "confirmed", decided_at: longAgo, transaction_ids: [] });
+  insert("payment_proofs", { student_id: st.id, branch_id: b1.id, purpose: "food_pass", amount_expected: 300, reference: "PSS-OKOKOKOK", status: "confirmed", decided_at: longAgo, transaction_ids: ["t1"] });
+  insert("agent_runs", { agent: "proof-reader", model: "m", status: "running", started_at: longAgo });
+  const r = await cron("cron_integrity_report");
+  const rep = (await call("get_integrity_report", {}, tO)).report;
+  check(r.status === 200 && rep.counts.proofs_without_transactions === 1 && rep.proofs_without_transactions[0].reference === "PSS-NOTXNOTX" && rep.counts.stuck_agent_runs === 1,
+    "R14/R19: the nightly report lists a confirmed UPI payment with no transaction, and an AI run that never finished", rep.counts);
+  const old = insert("payment_proofs", { student_id: st.id, branch_id: b1.id, purpose: "food_pass", amount_expected: 300, reference: "PSS-OLDOLDOL", status: "confirmed", image_path: `${st.id}/old.png`, created_at: new Date(Date.now() - 200 * 86400e3).toISOString() });
+  const fresh = insert("payment_proofs", { student_id: st.id, branch_id: b1.id, purpose: "food_pass", amount_expected: 300, reference: "PSS-NEWNEWNE", status: "confirmed", image_path: `${st.id}/new.png` });
+  const waiting = insert("payment_proofs", { student_id: st.id, branch_id: b1.id, purpose: "food_pass", amount_expected: 300, reference: "PSS-WAITWAIT", status: "submitted", image_path: `${st.id}/wait.png`, created_at: new Date(Date.now() - 200 * 86400e3).toISOString() });
+  for (const p of [old, fresh, waiting]) fake.storage[`payment-proofs/${p.image_path}`] = { bytes: new Uint8Array([1]), contentType: "image/png" };
+  const purge = await cron("cron_purge_images");
+  check(purge.removed === 1 && old.image_path === null && !fake.storage[`payment-proofs/${st.id}/old.png`] && fresh.image_path && waiting.image_path,
+    "R18: screenshots of decided payments older than 180 days are deleted; newer ones and undecided ones stay", purge);
 }
 
 done();

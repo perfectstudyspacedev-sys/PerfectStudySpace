@@ -9,16 +9,30 @@ import { err, json } from "../../_shared/http.ts";
 import { featureOn } from "../../_shared/flags.ts";
 import { multiMonthDiscount } from "../../_shared/membership.ts";
 import { hashSecret, pinProblem } from "../../_shared/student.ts";
-import { loggedStructuredCall, MODELS, nullable } from "../../_shared/ai.ts";
-import { getMembershipPackage, isSignupLinkCode } from "../lib.ts";
-import { createPaymentRequest, decodeImage, OPEN, submitProof } from "../payments-lib.ts";
+import { loggedStructuredCall, MODELS, nullable, publicAiAllowed } from "../../_shared/ai.ts";
+import { CODE_ALPHABET, getMembershipPackage, isSignupLinkCode, randomCode } from "../lib.ts";
+import { createPaymentRequest, decodeImage, KEEP_SIGNUP_DAYS, OPEN, submitProof } from "../payments-lib.ts";
 import { RENEWAL_MONTHS } from "../portal-lib.ts";
 
-const KEEP_DAYS = 3;          // a sign-up with a payment waiting is kept this long
-const ID_BUCKET = "id-photos";
+export const ID_BUCKET = "id-photos";
+const ID_CHECKS_MAX = 2;      // automatic ID checks per sign-up; the owner can look at the photo
 
-async function selfPayOn(db: Ctx["db"]) {
+export async function selfPayOn(db: Ctx["db"]) {
   return (await featureOn(db, "auto_approve")) && (await featureOn(db, "upi_pay"));
+}
+
+// The sign-up's Ref is printed for the desk, so it is no secret. Self-pay (choosing the PIN,
+// paying, sending the proof) needs this key, given only to the browser that sent the form; only
+// its hash is stored (067).
+export const newPayKey = () => randomCode(32, CODE_ALPHABET);
+export async function payKeyHash(key: string): Promise<string> {
+  const digest = new Uint8Array(await crypto.subtle.digest("SHA-256", new TextEncoder().encode(key)));
+  return [...digest].map((b) => b.toString(16).padStart(2, "0")).join("");
+}
+function sameHash(a: string, b: string) {
+  let diff = a.length ^ b.length;
+  for (let i = 0; i < Math.max(a.length, b.length); i++) diff |= (a.charCodeAt(i) || 0) ^ (b.charCodeAt(i) || 0);
+  return diff === 0;
 }
 
 async function branchByCode(db: Ctx["db"], code: unknown) {
@@ -27,12 +41,21 @@ async function branchByCode(db: Ctx["db"], code: unknown) {
   return data ?? null;
 }
 
-/** The sign-up behind code + ref + phone (all three must match). */
+/** The sign-up behind code + ref + phone + pay key (all four must match). */
 async function findSignup(db: Ctx["db"], payload: any) {
   const branch = await branchByCode(db, payload.code);
-  if (!branch || typeof payload.ref !== "string" || typeof payload.phone !== "string") return null;
+  if (!branch || typeof payload.ref !== "string" || typeof payload.phone !== "string" || typeof payload.payKey !== "string" || !/^[0-9a-z]{32}$/.test(payload.payKey)) return null;
   const { data } = await db.from("signup_requests").select("*").eq("branch_id", branch.id).eq("ref_code", payload.ref.trim().toUpperCase()).eq("phone", payload.phone.trim()).maybeSingle();
-  return data ? { signup: data, branch } : null;
+  if (!data?.pay_key_hash || !sameHash(data.pay_key_hash, await payKeyHash(payload.payKey))) return null;
+  return { signup: data, branch };
+}
+
+/** A student with this phone already, and whether they have an active membership. */
+async function existingStudent(db: Ctx["db"], phone: string) {
+  const { data: s } = await db.from("students").select("id").eq("phone", phone).maybeSingle();
+  if (!s) return null;
+  const { count } = await db.from("memberships").select("*", { count: "exact", head: true }).eq("student_id", s.id).eq("is_active", true);
+  return { id: s.id as string, active: (count ?? 0) > 0 };
 }
 
 async function freeDesks(db: Ctx["db"], branchId: string) {
@@ -82,7 +105,7 @@ async function checkIdPhoto(db: Ctx["db"], name: string, image: { mime: string; 
 }
 
 /** What the owner's Confirm runs for a registration payment, and what it does after. */
-export async function registrationAction(ctx: Ctx, proof: any): Promise<{ name: string; payload: any; after?: (body: any) => Promise<{ studentId: string | null }> } | { error: string }> {
+export async function registrationAction(ctx: Ctx, proof: any): Promise<{ name: string; payload: any; after?: (body: any) => Promise<{ studentId: string | null; note?: string }> } | { error: string }> {
   const { db } = ctx;
   const { data: signup } = proof.signup_request_id ? await db.from("signup_requests").select("*").eq("id", proof.signup_request_id).maybeSingle() : { data: null };
   if (!signup) return { error: "This sign-up no longer exists (registered or deleted by the desk). Reject the payment with a note, or settle it at the desk." };
@@ -93,6 +116,8 @@ export async function registrationAction(ctx: Ctx, proof: any): Promise<{ name: 
   const desk = req.category === "permanent" ? (await freeDesks(db, signup.branch_id))[0] : null;
   if (req.category === "permanent" && !desk) return { error: "No permanent seat is free now — register at the desk" };
   const pinHash = signup.pin_hash, idPhoto = signup.id_photo_path, phone = signup.phone;
+  const prior = await existingStudent(db, phone);
+  if (prior?.active) return { error: "This phone number already has an active membership — reject the payment with a note (it should be a renewal), or settle it at the desk." };
   return {
     name: "create_membership",
     payload: {
@@ -106,9 +131,17 @@ export async function registrationAction(ctx: Ctx, proof: any): Promise<{ name: 
       const studentId = student?.id ?? null;
       if (!studentId || !body?.membership?.id) return { studentId };
       const now = new Date().toISOString();
-      if (pinHash) await db.from("student_credentials").upsert({ student_id: studentId, pin_hash: pinHash, failed_attempts: 0, locked_until: null, pin_set_at: now, privacy_accepted_at: now }, { onConflict: "student_id" });
+      // A returning student keeps their own account: the PIN chosen on the sign-up page is used only
+      // for a brand-new student, and never replaces an existing one. The desk gives a returning
+      // student a portal setup code instead.
+      let note: string | undefined;
+      if (pinHash && !prior) {
+        await db.from("student_credentials").upsert({ student_id: studentId, pin_hash: pinHash, failed_attempts: 0, locked_until: null, pin_set_at: now, privacy_accepted_at: now }, { onConflict: "student_id", ignoreDuplicates: true });
+      } else if (prior) {
+        note = "Returning student: the PIN from the sign-up page was not used. Give them a portal setup code from their profile.";
+      }
       if (idPhoto) await db.from("students").update({ aadhaar_photo_url: `${ID_BUCKET}/${idPhoto}` }).eq("id", studentId);
-      return { studentId };
+      return { studentId, note };
     },
   };
 }
@@ -140,7 +173,9 @@ export function handlers(): Record<string, Handler> {
       const pinErr = pinProblem(payload.pin);
       if (pinErr) return err(pinErr);
       if (payload.acceptPrivacy !== true) return err("Please read and accept the privacy notice first");
-      const plan = { category: String(payload.category ?? ""), hoursPerDay: Number(payload.hoursPerDay), months: Number(payload.months) };
+      const prior = await existingStudent(db, signup.phone);
+      if (prior?.active) return err("This phone number already has a membership — renew in the student portal or at the desk", 409);
+      const plan = { category: String(payload.category ?? ""), hoursPerDay: Number(payload.hoursPerDay), months: Number(payload.months), ...(prior ? { existingStudent: true } : {}) };
       const q = await quoteRegistration(db, branch.id, plan);
       if ("error" in q) return err(q.error);
       let idUpdate: Record<string, unknown> = {};
@@ -150,10 +185,16 @@ export function handlers(): Record<string, Handler> {
         const path = `signup-${signup.id}.${img.mime.split("/")[1]}`;
         const { error } = await db.storage.from(ID_BUCKET).upload(path, img.bytes, { contentType: img.mime, upsert: true });
         if (error) return err(`Could not save the ID photo: ${error.message}`, 500);
-        idUpdate = { id_photo_path: path, id_check: await checkIdPhoto(db, signup.name, img) };
+        // At most ID_CHECKS_MAX automatic checks per sign-up, inside the daily public cap (review 5).
+        const tries = Number(signup.id_check?.attempts ?? 0);
+        const check = tries >= ID_CHECKS_MAX ? { checked: false, note: "already checked twice — the owner will look at the photo" }
+          : !(await publicAiAllowed(db)) ? { checked: false, note: "today's limit for automatic checks is reached — the owner will look at the photo" }
+          : { ...(await checkIdPhoto(db, signup.name, img)), counted: true };
+        const { counted, ...rest } = check as any;
+        idUpdate = { id_photo_path: path, id_check: { ...rest, attempts: tries + (counted ? 1 : 0) } };
       }
       await db.from("signup_requests").update({
-        pin_hash: await hashSecret(payload.pin), keep_until: new Date(Date.now() + KEEP_DAYS * 86400e3).toISOString(), ...idUpdate,
+        pin_hash: await hashSecret(payload.pin), keep_until: new Date(Date.now() + KEEP_SIGNUP_DAYS * 86400e3).toISOString(), ...idUpdate,
       }).eq("id", signup.id);
       const months = plan.months;
       const r = await createPaymentRequest(db, { signup_request_id: signup.id, branch_id: branch.id }, {

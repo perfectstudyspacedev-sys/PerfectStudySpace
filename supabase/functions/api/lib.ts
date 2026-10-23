@@ -268,9 +268,14 @@ export const signupClaimCutoff = () => new Date(Date.now() - SIGNUP_CLAIM_MINUTE
 // A sign-up not handled by the end of the IST day it was sent on is deleted (SSP decision 2).
 // Run lazily wherever sign-ups are read or written instead of on a schedule.
 export async function purgeExpiredSignups(db: ReturnType<typeof adminClient>) {
-  // PSS-AI A3: a sign-up whose payment waits for the owner is kept until its keep_until.
-  await db.from("signup_requests").delete().lt("created_at", istDayStart(todayISO()))
-    .or(`keep_until.is.null,keep_until.lt.${new Date().toISOString()}`);
+  // PSS-AI A3: a sign-up whose payment waits for the owner is kept until its keep_until (moved on
+  // each time a proof is sent). An ID photo of a sign-up that was never registered goes with it.
+  const { data: gone } = await db.from("signup_requests").delete().lt("created_at", istDayStart(todayISO()))
+    .or(`keep_until.is.null,keep_until.lt.${new Date().toISOString()}`)
+    // The .or() column must be selected too, or PostgREST 12.2 refuses the delete.
+    .select("id_photo_path, keep_until");
+  const photos = (gone ?? []).map((r: { id_photo_path: string | null }) => r.id_photo_path).filter((p: string | null): p is string => !!p);
+  if (photos.length) await db.storage.from("id-photos").remove(photos);
 }
 
 // Same checks as New Registration, so staff never have to fix what the student typed.

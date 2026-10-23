@@ -11,7 +11,10 @@ Deno.env.delete("AI_API_KEY"); // no AI in these runs
 const setting = async (key: string, value: string) => { const { error } = await db.from("app_settings").upsert({ key, value }, { onConflict: "key" }); if (error) throw new Error(error.message); };
 for (const k of ["pssai_portal", "pssai_upi_pay", "pssai_concierge"]) await setting(k, "on");
 await setting("upi_vpa", "pss.it@okaxis");
-await insert("fee_config", { config_type: "membership", cabin_type: "temporary", hours_per_day: 7, fee: 1400, sort_order: 7 }).catch(() => null);
+// Once per database (the suites can be run again on the same one).
+if (!(await db.from("fee_config").select("id").eq("config_type", "membership").eq("cabin_type", "temporary").eq("hours_per_day", 7)).data?.length) {
+  await insert("fee_config", { config_type: "membership", cabin_type: "temporary", hours_per_day: 7, fee: 1400, sort_order: 7 });
+}
 
 async function student(branchId: string, end = addDays(TODAY, 3)) {
   const s = await insert("students", { name: "Portal Student", phone: phone(), emergency_contact: phone(), branch_id: branchId, status: "active" });

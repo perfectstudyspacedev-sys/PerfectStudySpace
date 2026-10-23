@@ -45,7 +45,15 @@ export default function JoinPage() {
     setError('')
     try {
       const res = await api('public_signup_submit', { code, ...form, name })
-      setDone({ ref: res.ref, firstName: name.split(' ')[0], updated: !!res.updated, phone: form.phone })
+      // PSS-AI A3: the pay step needs the key the server gives this browser (the Ref is no secret).
+      // Kept for this tab only, so correcting a typo and sending again keeps it.
+      const keyName = `pss_signup_paykey:${code}:${form.phone}`
+      let payKey = res.payKey ?? null
+      try {
+        if (payKey) sessionStorage.setItem(keyName, payKey)
+        else payKey = sessionStorage.getItem(keyName)
+      } catch { /* private mode: the pay step simply isn't offered after a resend */ }
+      setDone({ ref: res.ref, firstName: name.split(' ')[0], updated: !!res.updated, phone: form.phone, payKey })
     } catch (err) {
       setError(err.message)
     } finally {
@@ -79,7 +87,7 @@ export default function JoinPage() {
               The desk will choose your plan and take the payment to finish your registration today.
             </p>
             {/* PSS-AI A3: shown only when the owner has switched self-pay on. */}
-            <SignupPayment code={code} refCode={done.ref} phone={done.phone} />
+            {done.payKey && <SignupPayment code={code} refCode={done.ref} phone={done.phone} payKey={done.payKey} />}
           </div>
         ) : (
           <form onSubmit={submit} noValidate>

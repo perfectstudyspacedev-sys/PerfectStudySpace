@@ -11,7 +11,7 @@ const T3_LIST = ['delete_membership', 'close_membership', 'cancel_early_renewal'
 const T2_LIST = ['record_payment', 'record_locker_payment', 'add_manual_payment', 'topup_food_pass', 'create_food_bill', 'collect_food_bill_shortfall', 'create_walkin', 'create_membership', 'renew_membership', 'renew_locker', 'add_locker', 'checkout_booking']
 
 // Scheduled jobs added in P0.7/P0.8; run only by the cron function.
-const SYSTEM_JOBS = ['cron_expiry_alerts', 'cron_integrity_report', 'cron_purge_idempotency', 'cron_purge_signups', 'cron_resume_holds', 'cron_session_reminders', 'cron_waitlist_offers']
+const SYSTEM_JOBS = ['cron_expiry_alerts', 'cron_integrity_report', 'cron_purge_idempotency', 'cron_purge_images', 'cron_purge_signups', 'cron_resume_holds', 'cron_session_reminders', 'cron_waitlist_offers']
 const PEOPLE = ['public', 'staff', 'owner', 'admin']
 
 describe('action registry (P0.4)', () => {
@@ -62,7 +62,7 @@ describe('permission tiers (P0.9)', () => {
     expect(ACTION_META.filter((a) => a.tier === 'T3' && a.callers.some((c) => PEOPLE.includes(c))).map((a) => a.name).sort()).toEqual([...T3_LIST].sort())
   })
   test('system purges destroy records, so they are T3', () => {
-    for (const n of ['cron_purge_signups', 'cron_purge_idempotency']) expect(ACTION_META.find((a) => a.name === n)?.tier, n).toBe('T3')
+    for (const n of ['cron_purge_signups', 'cron_purge_idempotency', 'cron_purge_images']) expect(ACTION_META.find((a) => a.name === n)?.tier, n).toBe('T3')
   })
   test('every action Appendix D names as T2 is T2', () => {
     for (const n of T2_LIST) expect(ACTION_META.find((a) => a.name === n)?.tier, n).toBe('T2')

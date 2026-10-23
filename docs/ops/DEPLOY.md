@@ -153,8 +153,12 @@ INSERT INTO app_settings (key, value) VALUES ('<key>', '<value>')
    ("✨ AI draft" on the welcome and study-report messages), `pssai_realtime` (live updates instead
    of fast polling; needs the new CSP in `public/_headers`, already in this deploy).
 
+Limits you may change (defaults in brackets): `pssai_public_ai_daily` — AI reads that students and
+sign-ups can start each day, ID photos and payment screenshots together (40); `proof_image_keep_days`
+— how long payment screenshots are kept after the payment, at least 30 (180).
+
 Schedules: re-run `docs/ops/cron.sql` (it is safe to run again) to add `pss_resume_holds`,
-`pss_session_reminders`, `pss_waitlist_offers` and `pss_collections`.
+`pss_session_reminders`, `pss_waitlist_offers`, `pss_collections` and `pss_purge_images`.
 
 Phase 2 exit gate (you): most renewals at Hopes paid in the portal and confirmed within 2 hours;
 two weeks of shadow-mode chat passing 18/20; no T3 action ran without your approval

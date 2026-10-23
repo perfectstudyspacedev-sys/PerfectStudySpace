@@ -15,7 +15,7 @@ const PNG = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwA
 const CODE = "abcd1234efgh";
 const FORM = { code: CODE, name: "Kavya Sri", phone: "9300000001", emergencyContact: "9300000009", course: "TNPSC", referralSource: "instagram" };
 
-let b1: any, owner: any, tO: string, ref: string;
+let b1: any, owner: any, tO: string, ref: string, payKey: string;
 async function setup() {
   reset(); fakeAi.reset();
   Deno.env.set("AI_API_KEY", "test-ai-key");
@@ -23,11 +23,13 @@ async function setup() {
   owner = insert("staff", { username: "owner", display_name: "Owner", role: "owner", is_active: true, branch_id: null });
   tO = await tokenFor(owner);
   for (const [cat, h, fee] of [["temporary", 6, 1250], ["temporary", 8, 1500], ["permanent", 12, 2100]] as const) insert("fee_config", { config_type: "membership", cabin_type: cat, hours_per_day: h, fee, sort_order: h });
-  for (const [k, v] of [["pssai_portal", "on"], ["upi_vpa", "pss.hall@okaxis"]]) setSetting(k, v);
+  for (const [k, v] of [["pssai_portal", "on"], ["upi_vpa", "pss.hall@okaxis"], ["pssai_auto_approve", "on"], ["pssai_upi_pay", "on"]]) setSetting(k, v);
   const sub = await call("public_signup_submit", FORM);
-  ref = sub.ref;
+  ref = sub.ref; payKey = sub.payKey;
+  setSetting("pssai_auto_approve", "off"); setSetting("pssai_upi_pay", "off");
 }
-const pay = (extra: any = {}) => call("public_signup_pay", { code: CODE, ref, phone: FORM.phone, category: "temporary", hoursPerDay: 6, months: 2, pin: "482915", acceptPrivacy: true, ...extra });
+const pay = (extra: any = {}) => call("public_signup_pay", { code: CODE, ref, phone: FORM.phone, payKey, category: "temporary", hoursPerDay: 6, months: 2, pin: "482915", acceptPrivacy: true, ...extra });
+const proofCall = (extra: any) => call("public_signup_proof", { code: CODE, ref, phone: FORM.phone, payKey, ...extra });
 
 await setup();
 {
@@ -38,6 +40,10 @@ await setup();
   check(plans.selfPay && plans.permanentFree === 0 && plans.plans.every((p: any) => p.category === "temporary") && plans.plans.length === 2, "O2: with no free permanent desk only temporary plans are offered", plans);
   check((await call("public_signup_plans", { code: "zzzzzzzzzzzz" })).status === 404, "O2: a wrong link is refused");
 
+  check(/^[0-9a-z]{32}$/.test(payKey) && rows("signup_requests")[0].pay_key_hash?.length === 64 && !JSON.stringify(rows("signup_requests")).includes(payKey), "R2: with self-pay on, the form's browser gets a pay key; only its hash is stored");
+  const noKey = await pay({ payKey: undefined });
+  const wrongKey = await pay({ payKey: "a".repeat(32) });
+  check(noKey.status === 404 && wrongKey.status === 404, "R2: code + Ref + phone without the pay key can't set a PIN or pay (the Ref is no secret)", [noKey.status, wrongKey.status]);
   const wrongRef = await pay({ ref: "ZZZZ" });
   const wrongPhone = await pay({ phone: "9300000002" });
   const weak = await pay({ pin: "123456" });
@@ -58,9 +64,14 @@ await setup();
   check(su.id_check.readable === true && su.id_check.name_matches === true && !/\d/.test(su.id_check.note) && su.id_photo_path === `signup-${su.id}.png` && fake.storage[`id-photos/${su.id_photo_path}`], "O4: the result is kept without any digits from the card; the photo is in the private bucket", su.id_check);
   check(!JSON.stringify(rows("events")).includes(PNG.slice(0, 20)) && rows("events").filter((e) => e.action === "public_signup_pay").every((e) => JSON.stringify(e.payload) === "{}"), "O4: no photo, PIN or phone in the event log");
 
-  const sent = await call("public_signup_proof", { code: CODE, ref, phone: FORM.phone, reference: r.reference, utr: "555566667777" });
+  const resend = await call("public_signup_submit", { ...FORM, name: "Someone Else" });
+  check(resend.status === 409 && !resend.payKey && rows("signup_requests")[0].name === "Kavya Sri", "R2: once a payment has started, sending the form again with the same phone changes nothing", resend);
+  const sent = await proofCall({ reference: r.reference, utr: "555566667777" });
   check(sent.status === 200 && rows("payment_proofs")[0].status === "submitted", "O5: the payment proof is sent from the sign-up page", sent);
-  check((await call("public_signup_proof", { code: CODE, ref, phone: "9399999999", reference: r.reference, utr: "555566667777" })).status === 404, "O5: someone without the right phone can't send proofs for it");
+  check((await proofCall({ phone: "9399999999", reference: r.reference, utr: "555566667777" })).status === 404 && (await proofCall({ payKey: "b".repeat(32), reference: r.reference, utr: "555566667777" })).status === 404, "O5: someone without the right phone or key can't send proofs for it");
+  const desk = await call("claim_signup_request", { id: su.id }, tO);
+  const deny = await call("deny_signup_request", { id: su.id }, tO);
+  check(desk.status === 409 && deny.status === 409 && /owner must confirm or reject/.test(desk.error) && rows("signup_requests").some((x) => x.id === su.id), "R13: while a sent payment waits for the owner, the desk can't register or deny the sign-up", [desk.error, deny.error]);
 
   // The nightly clean-up keeps it while the owner decides.
   advanceClock(30 * 3600e3);
@@ -85,7 +96,7 @@ await setup();
   insert("desks", { branch_id: b1.id, label: "P2", status: "free", sort_order: 2 });
   const r = await pay({ category: "permanent", hoursPerDay: 12, months: 1 });
   check(r.amount === 2100, "O8: a permanent plan is offered when a desk is free", r);
-  await call("public_signup_proof", { code: CODE, ref, phone: FORM.phone, reference: r.reference, utr: "555566668888" });
+  await proofCall({ reference: r.reference, utr: "555566668888" });
   rows("fee_config").find((f) => f.cabin_type === "permanent").fee = 2300;
   const stale = await call("confirm_payment_proof", { proofId: rows("payment_proofs")[0].id }, tO);
   check(stale.status === 409 && /now costs ₹2300/.test(stale.error) && !rows("students").some((s) => s.phone === FORM.phone), "O9: if the price changed, nothing is registered", stale);
@@ -93,6 +104,50 @@ await setup();
   const ok = await call("confirm_payment_proof", { proofId: rows("payment_proofs")[0].id }, tO);
   const mem = rows("memberships").at(-1);
   check(ok.status === 200 && mem.category === "permanent" && mem.desk_id === d1.id && d1.status !== "free", "O8: confirmed, the first free desk is assigned", { ok, desk: mem.desk_id });
+}
+
+// ── Review fixes: returning students, ID-check cap, desk vs self-pay ──
+await setup();
+{
+  setSetting("pssai_auto_approve", "on"); setSetting("pssai_upi_pay", "on");
+  // A lapsed member (no active plan) signs up again with their phone: Confirm keeps their own account.
+  const old = insert("students", { name: "Kavya Sri", phone: FORM.phone, branch_id: b1.id, status: "inactive" });
+  insert("student_credentials", { student_id: old.id, pin_hash: "pbkdf2-sha256$100000$AAAA$BBBB", failed_attempts: 0 });
+  g.__FAKE_AI__ = () => reply([text(JSON.stringify({ readable: false, kind: "other_id", name_matches: null, note: "blurry" }))]);
+  for (let i = 0; i < 3; i++) await pay({ idPhoto: { data: PNG } });
+  const su = rows("signup_requests")[0];
+  check(fakeAi.requests.length === 2 && su.id_check.attempts === 2 && /checked twice/.test(su.id_check.note), "R5: at most two automatic ID checks per sign-up", su.id_check);
+  const r = await pay();
+  const proof = rows("payment_proofs").find((p) => p.reference === r.reference);
+  check(proof.request.existingStudent === true, "R3: the payment is marked as from a returning student");
+  await proofCall({ reference: r.reference, utr: "555566669999" });
+  const ok = await call("confirm_payment_proof", { proofId: proof.id }, tO);
+  const cred = rows("student_credentials").find((c) => c.student_id === old.id);
+  check(ok.status === 200 && /setup code/.test(ok.note) && cred.pin_hash === "pbkdf2-sha256$100000$AAAA$BBBB" && (await call("me_login", { phone: FORM.phone, pin: "482915" })).status === 401,
+    "R3: Confirm registers them but never replaces their PIN with the one typed on the sign-up page", { ok: ok.status, note: ok.note });
+}
+
+await setup();
+{
+  setSetting("pssai_auto_approve", "on"); setSetting("pssai_upi_pay", "on");
+  const active = insert("students", { name: "Kavya Sri", phone: FORM.phone, branch_id: b1.id, status: "active" });
+  insert("memberships", { student_id: active.id, branch_id: b1.id, category: "temporary", hours_per_day: 6, start_date: IST_TODAY, end_date: IST_TODAY, is_active: true, fee_due: 0 });
+  const r = await pay();
+  check(r.status === 409 && /already has a membership/.test(r.error) && !rows("payment_proofs").length, "R3: a phone with an active membership can't pay for a new registration", r);
+}
+
+await setup();
+{
+  setSetting("pssai_auto_approve", "on"); setSetting("pssai_upi_pay", "on");
+  g.__FAKE_AI__ = () => reply([text(JSON.stringify({ readable: true, kind: "college_id", name_matches: true, note: "ok" }))]);
+  const r = await pay({ idPhoto: { data: PNG } });
+  const su = rows("signup_requests")[0];
+  const claimed = await call("claim_signup_request", { id: su.id }, tO);
+  check(claimed.status === 200 && rows("payment_proofs").find((p) => p.reference === r.reference).status === "cancelled", "R13: when the desk takes a sign-up whose payment was only asked for, that payment request is cancelled", claimed);
+  check((await proofCall({ reference: r.reference, utr: "555566661111" })).status >= 400, "R13: a cancelled payment can't be sent afterwards");
+  await call("release_signup_request", { id: su.id }, tO);
+  const denied = await call("deny_signup_request", { id: su.id }, tO);
+  check(denied.status === 200 && !fake.storage[`id-photos/${su.id_photo_path}`], "R18: denying a sign-up deletes its ID photo", denied);
 }
 
 done();

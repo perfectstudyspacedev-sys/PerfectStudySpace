@@ -113,9 +113,25 @@ function publicPayload(action: string, payload: Record<string, unknown>) {
   return out;
 }
 
+// Free text a person typed (chat messages) and phone numbers kept as their length only: the event
+// log is append-only for 400 days, and anything typed there (an Aadhaar number, an address) could
+// otherwise only be removed with purge_events. The text itself stays in its own table.
+const LENGTH_ONLY: Record<string, string[]> = {
+  me_chat_send: ["body"], save_chat_reply: ["body"], send_chat_reply: ["body"],
+  me_update_contact: ["emergencyContact"],
+  save_enquiry_chat: ["message", "reply"], send_enquiry_chat_reply: ["body"],
+};
+function lengthOnly(action: string, payload: Record<string, unknown>) {
+  const fields = LENGTH_ONLY[action];
+  if (!fields) return payload;
+  const out = { ...payload };
+  for (const k of fields) if (typeof out[k] === "string") out[k] = `[${(out[k] as string).length} chars]`;
+  return out;
+}
+
 /** The payload as stored: public fields only for public callers, redacted, and at most 8 KB. */
 export function storedPayload(action: string, actorType: string, payload: Record<string, unknown>): unknown {
-  const safe = actorType === "public" ? publicPayload(action, payload) : redactPayload(payload);
+  const safe = actorType === "public" ? publicPayload(action, payload) : redactPayload(lengthOnly(action, payload ?? {}));
   const bytes = new TextEncoder().encode(JSON.stringify(safe)).length;
   if (bytes <= MAX_PAYLOAD_BYTES) return safe;
   return { truncated: true, bytes, keys: Object.keys(payload).filter((k) => k.length <= MAX_KEY && !isSecretKey(k)).slice(0, 20) };

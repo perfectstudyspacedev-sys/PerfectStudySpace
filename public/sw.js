@@ -1,4 +1,4 @@
-// PSS-AI P2.1 — the student portal's service worker (scope /me). It makes the portal installable
+// PSS-AI P2.1 — the student portal's service worker (scope /me/). It makes the portal installable
 // and opens its pages offline from the last copy. It never caches API calls or other sites: only
 // same-origin GETs for the portal's own pages and built files.
 const CACHE = 'pss-portal-v1'

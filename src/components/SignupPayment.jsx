@@ -7,7 +7,7 @@ import { rupees, shrinkImage } from '../portal/portalUtils'
 // PSS-AI P2.4 A3 — after the sign-up form, when the owner has switched self-pay on: pick a plan,
 // choose a portal PIN, optionally add an ID photo (C3), and pay by UPI. The owner confirms the
 // payment and the registration completes; the amount always comes from the server.
-export default function SignupPayment({ code, refCode, phone }) {
+export default function SignupPayment({ code, refCode, phone, payKey }) {
   const [info, setInfo] = useState(null)
   const [plan, setPlan] = useState({ key: '', months: 1 })
   const [pin, setPin] = useState({ a: '', b: '', accept: false })
@@ -39,7 +39,7 @@ export default function SignupPayment({ code, refCode, phone }) {
     if (!pin.accept) return setError('Please read and accept the privacy notice')
     setBusy(true); setError('')
     try {
-      const r = await api('public_signup_pay', { code, ref: refCode, phone, category: chosen.category, hoursPerDay: chosen.hoursPerDay, months: plan.months, pin: pin.a, acceptPrivacy: true, ...(idPhoto ? { idPhoto: { data: idPhoto.data } } : {}) })
+      const r = await api('public_signup_pay', { code, ref: refCode, phone, payKey, category: chosen.category, hoursPerDay: chosen.hoursPerDay, months: plan.months, pin: pin.a, acceptPrivacy: true, ...(idPhoto ? { idPhoto: { data: idPhoto.data } } : {}) })
       setRequest(r)
       setStep('pay')
     } catch (err) { setError(err.message) } finally { setBusy(false) }
@@ -50,7 +50,7 @@ export default function SignupPayment({ code, refCode, phone }) {
     if (!utr && !shot) return setError('Type the 12-digit UTR, add a screenshot, or both')
     setBusy(true); setError('')
     try {
-      await api('public_signup_proof', { code, ref: refCode, phone, reference: request.reference, ...(utr ? { utr } : {}), ...(shot ? { image: { data: shot.data } } : {}) })
+      await api('public_signup_proof', { code, ref: refCode, phone, payKey, reference: request.reference, ...(utr ? { utr } : {}), ...(shot ? { image: { data: shot.data } } : {}) })
       setStep('done')
     } catch (err) { setError(err.message) } finally { setBusy(false) }
   }

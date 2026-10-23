@@ -42,8 +42,8 @@ const SYSTEM = [
 ].join("\n");
 
 /** Asks the model to read one screenshot. Null when AI is unavailable (no key, no budget, error). */
-export async function readScreenshot(db: Db, studentId: string | null, image: { mime: string; base64: string }) {
-  const r = await loggedStructuredCall<ProofReading>(db, { agent: "proof-reader", model: MODELS.hard(), studentId }, {
+export async function readScreenshot(db: Db, studentId: string | null, image: { mime: string; base64: string }, staffId: string | null = null) {
+  const r = await loggedStructuredCall<ProofReading>(db, { agent: "proof-reader", model: MODELS.hard(), studentId, staffId }, {
     system: SYSTEM, schema: SCHEMA, maxTokens: 1500,
     content: [
       { type: "image", source: { type: "base64", media_type: image.mime as "image/jpeg", data: image.base64 } },

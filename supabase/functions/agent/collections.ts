@@ -12,8 +12,11 @@ import { REGISTRY } from "../api/actions.ts";
 import { runAction } from "../api/run.ts";
 import type { Ctx } from "../api/registry.ts";
 import { PORTAL_URL } from "../api/domains/portal.ts";
+import { fetchAllRows } from "../api/lib.ts";
+import { numbersIn } from "./writer.ts";
 
 export const PER_BRANCH = 20;
+const ID_CHUNK = 200;
 const QUIET_DAYS = 3;          // nobody is on the list twice within 3 days
 const SIGN_OFF = "— Team Perfect Study Space"; // C6
 
@@ -27,20 +30,26 @@ const rupee = (n: number) => `₹${Math.round(n).toLocaleString("en-IN")}`;
 /** Who to remind today, best first, at most PER_BRANCH per branch. Pure code. */
 export async function rankCandidates(db: Ctx["db"], today = todayISO()): Promise<Candidate[]> {
   const horizon = addDays(today, 7);
-  const { data: mems } = await db.from("memberships")
+  // Every active membership, page by page (PostgREST answers at most 1,000 rows a request).
+  const mems = await fetchAllRows<any>(() => db.from("memberships")
     .select("id, student_id, branch_id, end_date, start_date, fee_due, monthly_fee, is_paused, students(name)")
-    .eq("is_active", true).eq("is_paused", false).limit(5000);
+    .eq("is_active", true).eq("is_paused", false).order("id"));
   // The membership that decides: each student's latest-ending active one.
   const latest = new Map<string, any>();
-  for (const m of mems ?? []) {
+  for (const m of mems) {
     const cur = latest.get(m.student_id);
     if (!cur || m.end_date > cur.end_date) latest.set(m.student_id, m);
   }
-  const { data: recent } = await db.from("send_list").select("student_id").gte("list_date", addDays(today, -(QUIET_DAYS - 1)));
-  const quiet = new Set((recent ?? []).map((r: any) => r.student_id));
+  const recent = await fetchAllRows<any>(() => db.from("send_list").select("id, student_id").gte("list_date", addDays(today, -(QUIET_DAYS - 1))).order("id"));
+  const quiet = new Set(recent.map((r: any) => r.student_id));
   const ids = [...latest.keys()];
-  const { data: scores } = ids.length ? await db.from("student_scores").select("student_id, score").eq("model", "churn").in("student_id", ids) : { data: [] };
-  const churnOf = new Map((scores ?? []).map((s: any) => [s.student_id, Number(s.score)]));
+  // Churn scores in chunks: a thousand ids in one .in() would make the URL too long to send.
+  const churnOf = new Map<string, number>();
+  for (let i = 0; i < ids.length; i += ID_CHUNK) {
+    const { data: scores, error } = await db.from("student_scores").select("student_id, score").eq("model", "churn").in("student_id", ids.slice(i, i + ID_CHUNK));
+    if (error) throw new Error(`churn scores: ${error.message}`);
+    for (const s of scores ?? []) churnOf.set(s.student_id, Number(s.score));
+  }
 
   const out: Candidate[] = [];
   for (const m of latest.values()) {
@@ -77,12 +86,13 @@ export function templateMessage(c: Candidate, portalOn: boolean) {
 }
 
 /** True when a draft only uses amounts the code supplied and keeps the sign-off. */
-export function draftIsSafe(text: string, c: Candidate): boolean {
+export function draftIsSafe(text: string, c: Candidate, portalOn = false): boolean {
   if (!text || text.length > 600 || !text.includes(SIGN_OFF)) return false;
-  const allowed = new Set([c.feeDue, c.monthlyFee].filter((n) => n > 0).map((n) => Math.round(n)));
-  for (const m of text.matchAll(/(?:₹|rs\.?\s*|inr\s*)\s*([\d,]+(?:\.\d+)?)/gi)) {
-    if (!allowed.has(Math.round(Number(m[1].replace(/,/g, ""))))) return false;
-  }
+  // Every number in the draft (amounts however written, dates, days) must come from the facts the
+  // code gave: a made-up "1500 rupees" or a wrong date is refused, not only "₹1500".
+  const facts = [c.feeDue, c.monthlyFee, Math.round(c.feeDue), Math.round(c.monthlyFee), c.endDate, Math.abs(c.daysToEnd), templateMessage(c, portalOn)].join(" ");
+  const allowed = new Set(numbersIn(facts.replace(/https?:\/\/\S+/g, "")).flatMap((n) => [n, String(Number(n))]));
+  for (const n of numbersIn(text.replace(/https?:\/\/\S+/g, ""))) if (!allowed.has(n) && !allowed.has(String(Number(n)))) return false;
   return !/discount|offer|free|waive|cashback|refund/i.test(text);
 }
 
@@ -118,7 +128,7 @@ export async function runCollections(db: Ctx["db"], owner: NonNullable<Ctx["staf
     const drafts = new Map(("skipped" in r || !r.data) ? [] : r.data.messages.map((m) => [m.i, m.text.trim()]));
     list.forEach((c, i) => {
       const draft = drafts.get(i);
-      const safe = !!draft && draftIsSafe(draft, c);
+      const safe = !!draft && draftIsSafe(draft, c, portalOn);
       if (safe) drafted++;
       rows.push({ studentId: c.studentId, branchId: c.branchId, reason: c.reason, amount: c.feeDue || null, message: safe ? draft : templateMessage(c, portalOn), drafted: safe, endDate: c.endDate, daysToEnd: c.daysToEnd });
     });

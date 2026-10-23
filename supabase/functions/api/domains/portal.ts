@@ -16,7 +16,7 @@ import { fetchAllRows, isISODate } from "../lib.ts";
 import { currentMembership, membershipView, quoteRenewal, RENEWAL_MONTHS, renewalBlock } from "../portal-lib.ts";
 
 const PORTAL_OFF = "The student portal is not open yet — please ask at the desk.";
-const LOGIN_FAILED = "Phone number or PIN is wrong";
+const LOGIN_FAILED = `Phone number or PIN is wrong. After ${PIN_MAX_TRIES} wrong tries, login stops for ${PIN_LOCK_MINUTES} minutes.`;
 const SETUP_FAILED = "That code is wrong or has expired — ask the desk for a new one";
 const REPORT_MAX_DAYS = 60;
 export const PORTAL_URL = () => (Deno.env.get("PORTAL_URL")?.trim() || "https://join.perfectstudyspace.in").replace(/\/+$/, "");
@@ -52,20 +52,26 @@ export function handlers(): Record<string, Handler> {
       const { data: cred } = student
         ? await db.from("student_credentials").select("pin_hash, failed_attempts, locked_until").eq("student_id", student.id).maybeSingle()
         : { data: null };
-      if (cred?.locked_until && new Date(cred.locked_until).getTime() > Date.now()) {
-        return err(`Too many wrong PINs. Try again after ${PIN_LOCK_MINUTES} minutes, or ask the desk for a new setup code.`, 429);
+      // Each try is counted before the PIN is checked, with one conditional update (the count must
+      // still be what was read and the PIN not locked), so a burst of parallel guesses gets one
+      // check each for the 5 tries, not one each per request (D6). A try that loses the race, a
+      // locked PIN, an unknown phone and a wrong PIN all get the same answer and the same hashing.
+      let counted = false;
+      if (student && cred && !(cred.locked_until && Date.parse(cred.locked_until) > Date.now())) {
+        const tries = Number(cred.failed_attempts ?? 0) + 1;
+        // The row must still hold exactly what was read (count and lock). Plain filters only: on
+        // PostgREST 12.2 an .or() on an update also filters the returned row, so an update that
+        // sets the lock would look like a lost race (found by the Postgres suite).
+        let q = db.from("student_credentials").update(tries >= PIN_MAX_TRIES
+          ? { failed_attempts: 0, locked_until: new Date(Date.now() + PIN_LOCK_MINUTES * 60e3).toISOString() }
+          : { failed_attempts: tries, locked_until: null })
+          .eq("student_id", student.id).eq("failed_attempts", Number(cred.failed_attempts ?? 0));
+        q = cred.locked_until ? q.eq("locked_until", cred.locked_until) : q.is("locked_until", null);
+        const { data } = await q.select("student_id");
+        counted = !!data?.length;
       }
-      // Same work and the same answer for an unknown phone, a student without a PIN and a wrong PIN.
-      const ok = await verifySecret(pin, cred?.pin_hash);
-      if (!student || !cred || !ok) {
-        if (student && cred) {
-          const tries = Number(cred.failed_attempts ?? 0) + 1;
-          await db.from("student_credentials").update(tries >= PIN_MAX_TRIES
-            ? { failed_attempts: 0, locked_until: new Date(Date.now() + PIN_LOCK_MINUTES * 60e3).toISOString() }
-            : { failed_attempts: tries }).eq("student_id", student.id);
-        }
-        return err(LOGIN_FAILED, 401);
-      }
+      const ok = await verifySecret(pin, counted ? cred!.pin_hash : null);
+      if (!student || !ok) return err(LOGIN_FAILED, 401);
       await db.from("student_credentials").update({ failed_attempts: 0, locked_until: null }).eq("student_id", student.id);
       const token = await openSession(db, student.id);
       return json({ token, student: { name: student.name } });
@@ -86,14 +92,16 @@ export function handlers(): Record<string, Handler> {
       const { data: setup } = student
         ? await db.from("student_setup_codes").select("code_hash, expires_at, attempts").eq("student_id", student.id).maybeSingle()
         : { data: null };
-      const live = !!setup && new Date(setup.expires_at).getTime() > Date.now() && Number(setup.attempts) < SETUP_CODE_MAX_TRIES;
-      const ok = await verifySecret(code, live ? setup.code_hash : null);
-      if (!student || !live || !ok) {
-        if (student && setup && live) {
-          await db.from("student_setup_codes").update({ attempts: Number(setup.attempts) + 1 }).eq("student_id", student.id);
-        }
-        return err(SETUP_FAILED, 401);
+      // As with the PIN: the try is counted (conditionally) before the code is checked, so parallel
+      // guesses can't share one count, and a code dies after 5 tries.
+      let counted = false;
+      if (student && setup && new Date(setup.expires_at).getTime() > Date.now() && Number(setup.attempts) < SETUP_CODE_MAX_TRIES) {
+        const { data } = await db.from("student_setup_codes").update({ attempts: Number(setup.attempts) + 1 })
+          .eq("student_id", student.id).eq("attempts", Number(setup.attempts)).select("student_id");
+        counted = !!data?.length;
       }
+      const ok = await verifySecret(code, counted ? setup!.code_hash : null);
+      if (!student || !ok) return err(SETUP_FAILED, 401);
       const now = new Date().toISOString();
       const { error } = await db.from("student_credentials").upsert({
         student_id: student.id, pin_hash: await hashSecret(payload.pin), failed_attempts: 0, locked_until: null,

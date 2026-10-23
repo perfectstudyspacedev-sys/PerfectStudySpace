@@ -110,8 +110,10 @@ export function handlers(): Record<string, Handler> {
         await db.from("permanent_waitlist").update({ offer_status: "declined", status: "cancelled" }).eq("id", offer.id);
         return json({ ok: true, declined: true });
       }
-      await db.from("permanent_waitlist").update({ offer_status: "accepted" }).eq("id", offer.id);
-      return await queueRequest(ctx, "waitlist_accept", { waitlistId: offer.id, hoursPerDay: offer.hours_per_day });
+      // Queued first: if the request can't be queued, the offer stays open for the student to retry.
+      const queued = await queueRequest(ctx, "waitlist_accept", { waitlistId: offer.id, hoursPerDay: offer.hours_per_day });
+      if (queued.status === 202) await db.from("permanent_waitlist").update({ offer_status: "accepted" }).eq("id", offer.id).eq("offer_status", "offered");
+      return queued;
     },
 
     // ─── Owner ───
@@ -158,6 +160,13 @@ export function handlers(): Record<string, Handler> {
         if (!ran.ok) { await reopen(); return err(`Not approved — ${a.action} said: ${ran.body?.error ?? `HTTP ${ran.status}`}`, 409); }
         result = ran.body;
       } else if (a.action === "hold") {
+        // The plan may have changed since the request (renewed, ended, already on hold): the hold
+        // applies only to the same membership, still active, not paused and not ended.
+        const mem = a.student_id ? await currentMembership(db, a.student_id) : null;
+        if (!mem || mem.id !== a.payload.membershipId || !mem.is_active || mem.is_paused || mem.end_date < todayISO()) {
+          await reopen();
+          return err("The student's membership has changed since this request (renewed, ended or already on hold) — deny it with a note.", 409);
+        }
         const ran = await runNested(actionDef("pause_membership"), ctx, {}, { membershipId: a.payload.membershipId, reason: `Approved hold request ${a.id}` });
         if (!ran.ok) { await reopen(); return err(`Not approved — pause_membership said: ${ran.body?.error ?? `HTTP ${ran.status}`}`, 409); }
         await planResume(db, a.payload.membershipId, Number(a.payload.days), false);

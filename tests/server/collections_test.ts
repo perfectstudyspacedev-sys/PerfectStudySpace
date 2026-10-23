@@ -45,6 +45,7 @@ await setup();
   check(JSON.stringify(ranked.map((c) => c.firstName)) === JSON.stringify(["Asha", "Deepa", "Bala"]), "K1: code ranks Asha (ends in 2 days, churn 0.8), Deepa (in grace), Bala (dues) — not Chitra, Ezhil or Farah (reminded yesterday)", ranked.map((c) => [c.firstName, c.priority]));
   check(ranked[0].reason === "Plan ends in 2 days" && ranked[1].reason === "Plan ended 4 days ago" && ranked[2].reason === "₹600 due", "K1: each has a plain reason", ranked.map((c) => c.reason));
   const c = ranked[2];
+  check(!draftIsSafe("Hi Bala, 650 rupees is due. — Team Perfect Study Space", c) && !draftIsSafe(`Hi Bala, your plan ends on 31 Dec. — Team Perfect Study Space`, c), "R20: a made-up amount however written, or a wrong date, is refused");
   check(draftIsSafe("Hi Bala, ₹600 is due. — Team Perfect Study Space", c) && !draftIsSafe("Hi Bala, pay ₹500 now. — Team Perfect Study Space", c) && !draftIsSafe("Hi Bala, ₹600 is due.", c) && !draftIsSafe("Hi Bala, renew now and get a discount! — Team Perfect Study Space", c),
     "K1: a draft passes only with the given amounts, the sign-off and no offers");
 

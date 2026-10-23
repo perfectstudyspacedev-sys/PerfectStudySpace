@@ -91,10 +91,10 @@ await setup();
   const unknown = await call("me_login", { phone: "9999999999", pin: "482915" });
   const noPin = await call("me_login", { phone: bala.phone, pin: "482915" });
   const wrong = await call("me_login", { phone: asha.phone, pin: "000000" });
-  check([unknown, noPin, wrong].every((r) => r.status === 401 && r.error === "Phone number or PIN is wrong"), "P3: unknown phone, no PIN yet and a wrong PIN all get the same answer", [unknown, noPin, wrong]);
+  check([unknown, noPin, wrong].every((r) => r.status === 401 && /^Phone number or PIN is wrong/.test(r.error)), "P3: unknown phone, no PIN yet and a wrong PIN all get the same answer", [unknown, noPin, wrong]);
   for (let i = 0; i < 4; i++) await call("me_login", { phone: asha.phone, pin: "000000" });
   const locked = await call("me_login", { phone: asha.phone, pin: "482915" });
-  check(locked.status === 429 && /15 minutes/.test(locked.error), "P3: after 5 wrong PINs the account is locked for 15 minutes, even for the right PIN (D6)", locked);
+  check(locked.status === 401 && locked.error === unknown.error && /15 minutes/.test(locked.error), "P3: after 5 wrong PINs login stops for 15 minutes, even for the right PIN (D6) — with the same answer as an unknown phone (review 4)", locked);
   advanceClock(16 * 60e3);
   const after = await call("me_login", { phone: asha.phone, pin: "482915" });
   check(after.status === 200 && rows("student_credentials")[0].failed_attempts === 0, "P3: after 15 minutes the right PIN works and the counter resets", after);
@@ -107,6 +107,24 @@ await setup();
   const newUse = await call("me_profile", {}, fresh);
   const oldPin = await call("me_login", { phone: asha.phone, pin: "482915" });
   check(oldUse.status === 401 && newUse.status === 200 && oldPin.status === 401, "P3: a PIN reset logs out every old session and the old PIN stops working", { oldUse, newUse, oldPin });
+}
+
+// ── Review 1: parallel guesses share one try — at most 5 PIN checks per 15 minutes ──
+await setup();
+{
+  await enrol(asha, tP);
+  const burst = (n: number, base: number) => Promise.all(Array.from({ length: n }, (_, i) => call("me_login", { phone: asha.phone, pin: String(base + i * 7919).slice(0, 6) })));
+  const first = await burst(40, 100000);
+  check(first.every((r) => r.status === 401) && rows("student_credentials")[0].failed_attempts === 1, "R1: 40 parallel wrong PINs count (and check) as one try, not 40", rows("student_credentials")[0].failed_attempts);
+  for (let k = 0; k < 4; k++) await burst(10, 200000 + k * 1000);
+  const right = await call("me_login", { phone: asha.phone, pin: "482915" });
+  check(right.status === 401 && rows("student_credentials")[0].locked_until, "R1: after 5 bursts (5 counted tries) the PIN is locked, even for the right PIN", right.status);
+  // Setup codes: a burst also uses one of the code's 5 tries; the real code still works after it.
+  const code = await call("create_portal_setup_code", { studentId: bala.id }, tO);
+  const guesses = await Promise.all(Array.from({ length: 40 }, (_, i) => call("me_set_pin", { phone: bala.phone, code: String(i).padStart(6, "0"), pin: "739164", acceptPrivacy: true })));
+  const tries = rows("student_setup_codes").find((c) => c.student_id === bala.id).attempts;
+  const real = await call("me_set_pin", { phone: bala.phone, code: code.code, pin: "739164", acceptPrivacy: true });
+  check(guesses.every((r) => r.status === 401) && tries === 1 && real.status === 200, "R1: 40 parallel wrong setup codes count as one try; the real code then works", { tries, real: real.status });
 }
 
 // ── Token separation and sessions ──

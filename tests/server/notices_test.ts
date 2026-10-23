@@ -76,6 +76,24 @@ await setup();
   check(late.status === 404, "N3: an expired offer can't be accepted", late);
   const yes = await call("me_respond_offer", { offerId: w2.id, accept: true }, (await call("me_login", { phone: chitra.phone, pin: "482915" })).token);
   check(yes.status === 202 && w2.offer_status === "accepted" && rows("student_requests").some((q) => q.kind === "waitlist_accept" && q.student_id === chitra.id), "N3: accepting goes to the owner's queue for the desk to finish", yes);
+  // Review 9: the accepted offer still holds the one free desk while the owner decides.
+  const w3 = insert("permanent_waitlist", { branch_id: b1.id, name: "Asha Rao", phone: asha.phone, status: "waiting", created_at: new Date().toISOString() });
+  const r3 = await run("cron_waitlist_offers");
+  check(r3.offered === 0 && !w3.offer_status, "R9: an accepted offer waiting for the owner keeps its desk — the same desk is not offered to the next person", r3);
+}
+
+// ── Review 10: an accept that can't be queued leaves the offer open ──
+await setup();
+{
+  const asha = await portalStudent("Asha Rao", "9100000001");
+  insert("desks", { branch_id: b1.id, label: "P1", status: "free", sort_order: 1 });
+  const w = insert("permanent_waitlist", { branch_id: b1.id, name: "Asha Rao", phone: asha.phone, status: "waiting" });
+  setSetting("pssai_waitlist_offers", "on");
+  await run("cron_waitlist_offers");
+  for (let i = 0; i < 5; i++) insert("student_requests", { student_id: asha.id, kind: "refund", status: "pending" });
+  const tA = (await call("me_login", { phone: asha.phone, pin: "482915" })).token;
+  const full = await call("me_respond_offer", { offerId: w.id, accept: true }, tA);
+  check(full.status === 400 && w.offer_status === "offered", "R10: when the request can't be queued (5 already open), the offer stays open to try again", { full, status: w.offer_status });
 }
 
 done();

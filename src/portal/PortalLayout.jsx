@@ -28,7 +28,7 @@ export default function PortalLayout() {
       document.head.appendChild(link)
     }
     if (import.meta.env.PROD && 'serviceWorker' in navigator) {
-      navigator.serviceWorker.register('/sw.js', { scope: '/me' }).catch(() => { /* the portal works without it */ })
+      navigator.serviceWorker.register('/sw.js', { scope: '/me/' }).catch(() => { /* the portal works without it */ })
     }
   }, [])
 

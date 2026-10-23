@@ -5,6 +5,7 @@
 import "./determinism.ts";
 import { call, insert, rows, reset, tokenFor, check, done, IST_TODAY, addDays, fake } from "./harness.ts";
 import { fakeAi, reply, text } from "./fake-anthropic.ts";
+import { sameRequest } from "../../supabase/functions/api/payments-lib.ts";
 const g = globalThis as any;
 let TODAY = IST_TODAY();
 const setSetting = (key: string, value: string) => {
@@ -164,6 +165,49 @@ await setup();
   check(img.status === 200 && img.url.includes(pl.image_path) && (await call("get_payment_proof_image", { proofId: pl.id }, tP)).status === 403, "U5: the owner opens the screenshot through a short-lived link; staff cannot", img);
   const lc = await call("confirm_payment_proof", { proofId: pl.id }, tO);
   check(l.amount === 150 && lc.action === "renew_locker" && locker.locker_due_date > addDays(TODAY, 1), "U5: a locker month is paid through renew_locker", { l: l.amount, lc, due: locker.locker_due_date });
+}
+
+// ── Review fixes: request reuse, UTR reuse, read once, the public cap ──
+await setup();
+{
+  // R6: Postgres hands jsonb keys back in its own order; reuse must not depend on it.
+  check(sameRequest({ months: 3, membershipId: "m1" }, { membershipId: "m1", months: 3 }) && !sameRequest({ months: 3, membershipId: "m1" }, { membershipId: "m1", months: 1 }), "R6: requests compare field by field");
+  const r = await pay("renewal", { months: 3 });
+  const stored = proofs()[0];
+  stored.request = { months: 3, membershipId: memA.id };   // the order a real database returns
+  const again = await pay("renewal", { months: 3 });
+  check(again.reference === r.reference && proofs().length === 1, "R6: asking again reuses the open request whatever the stored key order", proofs().length);
+
+  // R12: one UPI payment (one UTR) can confirm only one proof.
+  const f1 = await pay("food_pass", { amount: 500 });
+  const f2 = await pay("food_pass", { amount: 600 });
+  await call("me_submit_payment_proof", { reference: f1.reference, utr: "999900001111" }, tA);
+  await call("me_submit_payment_proof", { reference: f2.reference, utr: "999900001111" }, tA);
+  const c1 = await call("confirm_payment_proof", { proofId: proofs().find((x) => x.reference === f1.reference).id }, tO);
+  const c2 = await call("confirm_payment_proof", { proofId: proofs().find((x) => x.reference === f2.reference).id }, tO);
+  check(c1.status === 200 && c2.status === 409 && /already paid for/.test(c2.error) && Number(rows("food_passes")[0].balance) === 500, "R12: the second proof with the same UTR can't be confirmed — the pass is credited once", c2);
+
+  // R5 + R19: only a proof's first screenshot is read by itself; the proof is saved first.
+  setSetting("pssai_proof_reading", "on");
+  g.__FAKE_AI__ = () => reply([text(JSON.stringify({ is_payment_screenshot: true, status: "success", amount: 1250, utr: null, paid_at: null, payee_vpa: "pss.hall@okaxis", payee_name: null, confidence: "high" }))]);
+  const d = await pay("food_pass", { amount: 700 });
+  await call("me_submit_payment_proof", { reference: d.reference, image: { data: PNG } }, tA);
+  const reads = fakeAi.requests.length;
+  for (let i = 0; i < 3; i++) await call("me_submit_payment_proof", { reference: d.reference, image: { data: PNG } }, tA);
+  const pd = proofs().find((x) => x.reference === d.reference);
+  check(reads === 1 && fakeAi.requests.length === 1 && pd.ai_reading === null && pd.checks.some((c: string) => /press Read/.test(c)), "R5: sending new screenshots again doesn't spend the AI budget; the owner is asked to read the new one", { reads, now: fakeAi.requests.length });
+  const owned = await call("read_payment_proof", { proofId: pd.id }, tO);
+  check(owned.status === 200 && rows("agent_runs").at(-1).staff_id === owner.id, "R5: the owner's own Read still works and is logged as the owner's");
+  setSetting("pssai_public_ai_daily", "1");
+  const e = await pay("food_pass", { amount: 800 });
+  await call("me_submit_payment_proof", { reference: e.reference, image: { data: PNG } }, tA);
+  const pe = proofs().find((x) => x.reference === e.reference);
+  check(fakeAi.requests.length === 2 && pe.status === "submitted" && /limit/.test(pe.ai_reading?.unread ?? ""), "R5: past the daily cap for public-started reads, the proof is kept unread for the owner", pe.ai_reading);
+  setSetting("pssai_public_ai_daily", "40");
+  g.__FAKE_AI__ = () => { throw new Error("overloaded"); };
+  const h = await pay("food_pass", { amount: 900 });
+  const sentH = await call("me_submit_payment_proof", { reference: h.reference, utr: "123412341234", image: { data: PNG } }, tA);
+  check(sentH.status === 200 && proofs().find((x) => x.reference === h.reference).status === "submitted", "R19: when the AI read fails, the proof is still saved as sent", sentH);
 }
 
 done();

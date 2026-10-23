@@ -11,6 +11,8 @@ const FINDINGS = [
   ['membership_dates', 'membership end date matches neither its months nor its days — review it'],
   ['negative_food_pass', 'Food Pass balance below zero'],
   ['stale_active_bookings', 'session still open more than 24 hours after it started'],
+  ['proofs_without_transactions', 'UPI payment marked confirmed with no transaction recorded — check it in Approvals'],
+  ['stuck_agent_runs', 'AI run that never finished (its cost was not counted)'],
 ]
 
 export default function IntegrityReportCard() {
