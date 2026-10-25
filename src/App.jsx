@@ -21,6 +21,8 @@ import ApprovalsPage from './pages/ApprovalsPage'
 import ChatRepliesPage from './pages/ChatRepliesPage'
 import SendListPage from './pages/SendListPage'
 import GrowthPage from './pages/GrowthPage'
+import FoodQueuePage from './pages/FoodQueuePage'
+import TicketsPage from './pages/TicketsPage'
 import JoinPage from './pages/JoinPage'
 import { signupSiteUrl } from './lib/signupLink'
 
@@ -65,6 +67,8 @@ export default function App() {
             <Route path="enquiries" element={<EnquiriesPage />} />
             <Route path="students/:id" element={<StudentProfilePage />} />
             <Route path="food-menu" element={<FoodMenuPage />} />
+            <Route path="food-orders" element={<FoodQueuePage />} />
+            <Route path="tickets" element={<TicketsPage />} />
             <Route path="revenue" element={<OwnerRoute><RevenuePage /></OwnerRoute>} />
             <Route path="flags" element={<OwnerRoute><FlagsPage /></OwnerRoute>} />
             <Route path="analyst" element={<OwnerRoute><AnalystPage /></OwnerRoute>} />

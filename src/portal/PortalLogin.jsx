@@ -1,6 +1,7 @@
 import { useState } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
 import { portalApi, setStudentToken } from '../lib/api'
+import { nextPortalPath } from './portalUtils'
 
 // PSS-AI P2.1 SP1 — phone number + 6-digit PIN.
 export default function PortalLogin() {
@@ -19,7 +20,7 @@ export default function PortalLogin() {
     try {
       const res = await portalApi('me_login', { phone, pin })
       setStudentToken(res.token)
-      navigate('/me', { replace: true })
+      navigate(nextPortalPath(), { replace: true })
     } catch (err) {
       setError(err.message)
       setPin('')

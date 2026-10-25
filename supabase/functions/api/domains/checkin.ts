@@ -253,15 +253,19 @@ export function handlers(): Record<string, Handler> {
       return json({ ok: true, tags });
     },
 
-    get_checkin_settings: async (ctx: Ctx): Promise<Response | undefined> => {
+    get_checkin_settings: async (ctx: Ctx, payload: any): Promise<Response | undefined> => {
       const { db } = ctx;
       if (!isOwnerOrAdmin(ctx.staff!)) return err("Owner only", 403);
-      const [on, { data: branches }] = await Promise.all([
-        featureOn(db, "self_checkin"),
+      const branchId = typeof payload?.branchId === "string" && UUID.test(payload.branchId) ? payload.branchId : null;
+      const [on, seatMatching, { data: branches }, { data: desks }] = await Promise.all([
+        featureOn(db, "self_checkin"), featureOn(db, "seat_matching"),
         db.from("branches").select("id, name, latitude, longitude, checkin_key").eq("is_active", true).order("name"),
+        // I4: a branch's open seats with their tags, for the owner to set.
+        branchId ? db.from("desks").select("id, label, tags").eq("branch_id", branchId).eq("seat_type", "floating").order("sort_order").limit(500) : Promise.resolve({ data: null }),
       ]);
       return json({
-        on,
+        on, seatMatching, tags: DESK_TAGS,
+        ...(desks ? { desks: desks.map((d: any) => ({ id: d.id, label: d.label, tags: d.tags ?? [] })) } : {}),
         branches: (branches ?? []).map((b: any) => ({
           id: b.id, name: b.name, latitude: b.latitude, longitude: b.longitude,
           posterUrl: b.checkin_key ? posterUrl(b.id, b.checkin_key) : null,

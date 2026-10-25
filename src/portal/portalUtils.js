@@ -67,3 +67,11 @@ export async function shrinkImage(file, maxSide = 1600) {
 }
 
 export const PURPOSE_LABEL = { renewal: 'Renewal', dues: 'Dues', food_pass: 'Food Pass', locker: 'Locker', registration: 'Registration' }
+
+/** Where to go after logging in: the check-in poster page that sent the student here, else home.
+ * Only portal paths are followed. */
+export function nextPortalPath() {
+  let next = null
+  try { next = sessionStorage.getItem('pss_portal_next'); sessionStorage.removeItem('pss_portal_next') } catch { /* ignore */ }
+  return typeof next === 'string' && next.startsWith('/me/checkin?') ? next : '/me'
+}

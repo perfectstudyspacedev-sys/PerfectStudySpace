@@ -221,3 +221,51 @@ Rollback: set the switch back to `off`. Credits already given stay as pending ca
 cashback, they are paid out if the membership is closed — your decision, review item 19); prices
 return to fee_config at once. Hours already sold stay sold and a member arriving is still seated
 elsewhere; open releases are withdrawn within the hour.
+
+# Part 5 — switching Phase 4 on (self check-in pilot at Hopes)
+
+Only after Phases 2–3 have run for a while. Deploy order as always: migrations `068` and `069` →
+`supabase functions deploy api cron` → the website (the new `_headers` and `vercel.json` allow the
+browser's location for the site itself). Re-run `docs/ops/cron.sql` to add `pss_close_sessions`
+(23:30 IST) and `pss_supplier_drafts` (21:00 IST); both do nothing while switched off. Keep the desk
+staffed for the four weeks of the pilot. Every switch below is an `app_settings` row, as in Part 3.
+
+1. **Set up the poster at Hopes** — **Branches** → Hopes → *Self check-in*: stand inside the hall,
+   press "Use this device's location" (or type it from a map), **Save location**, then **Make the
+   check-in poster** and **Print poster**. Put it where students come in. Ram Nagar stays without
+   a poster, so self check-in works at Hopes only. "New poster" makes the old one stop working.
+2. **Self check-in and checkout** — `pssai_self_checkin` = `on`. Students scan the poster, read the
+   location notice once (D9), and check in within 100 m of the hall. They check out on the portal's
+   home page: overtime is added to their next renewal as at the desk; food that would need paying
+   (a Food Pass short, a bill over 3 days old) stays as dues (C14). Staff check-in still works.
+3. **Session watch** — `pssai_session_watch` = `on`. At 23:30 every session past its booked end is
+   closed at that end with no overtime (C15) and the student is told. **Flags** lists each one, and
+   any staff checkout moved back more than 10 minutes. The nightly check (Dashboard card) also
+   lists staff check-ins at Hopes, so each can be explained (exit gate).
+4. **Seat matching** — tag desks on **Branches** (window, power, quiet, AC), then
+   `pssai_seat_matching` = `on`. Self check-in seats a member at their favourite or best-matching
+   free desk; the desk's check-in and walk-in forms offer the same desk. Students choose under
+   More → *Where you like to sit*.
+5. **Live seats** — `pssai_live_seats` = `on`: free seats per branch on the portal's home page
+   (counts only).
+6. **Food ordering** — `pssai_food_orders` = `on`. Students order from the portal while checked in;
+   whoever makes the food works **Food orders** (accept, ready, delivered). Delivery bills it as at
+   the counter: the Food Pass if it covers it, else the tab, cash or UPI. A price changed since the
+   order is refused — cancel it and the student orders again.
+7. **Stock and supplier orders** — on **Food orders → Stock & suppliers**, link each menu item to
+   the stock it uses (and the supplier's phone), then `pssai_food_stock` = `on`. Bills take stock
+   off; each night a supplier draft covers 3 days of expected use; send it by WhatsApp and mark it
+   received (correcting what actually came).
+8. **Report a problem** — `pssai_tickets` = `on`. Reports arrive on **Problems**, urgent first
+   (fire, smoke, leaks, theft…). Marking one fixed tells the student.
+9. **Photo-proof cleaning** — `pssai_photo_tasks` = `on`. Daily cleaning tasks need a photo before
+   they can be ticked (C17); the owner opens it from the task. Photos are removed after
+   `task_photo_keep_days` (30).
+
+Phase 4 exit gate (you): four weeks at Hopes with staff present but not needed; every open session
+closed by the end of the day (`SELECT count(*) FROM bookings WHERE status = 'active' AND start_time
+< now() - interval '1 day'` stays 0); every staff check-in at Hopes explained; every member at
+Hopes checked in through the portal.
+
+Rollback: set the switch back to `off`. Sessions already closed stay closed; food left as dues stays
+on the student's tab and is settled at the desk or at closure as before.

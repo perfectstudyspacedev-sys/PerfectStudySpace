@@ -1,6 +1,7 @@
 import { useState } from 'react'
 import { Link, useNavigate, useSearchParams } from 'react-router-dom'
 import { portalApi, setStudentToken } from '../lib/api'
+import { nextPortalPath } from './portalUtils'
 import PrivacyNotice from './PrivacyNotice'
 
 // PSS-AI P2.1 SP1 — the desk's 6-digit setup code + a new PIN (also how a forgotten PIN is reset).
@@ -24,7 +25,7 @@ export default function PortalSetup() {
     try {
       const res = await portalApi('me_set_pin', { phone: form.phone, code: form.code, pin: form.pin, acceptPrivacy: true })
       setStudentToken(res.token)
-      navigate('/me', { replace: true })
+      navigate(nextPortalPath(), { replace: true })
     } catch (err) {
       setError(err.message)
     } finally {

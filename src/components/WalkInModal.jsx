@@ -78,6 +78,17 @@ export default function WalkInModal({ branchId, onClose, onDone }) {
   }, [flags.hourRelease, flags.overbooking, branchId, startTime, hours])
   const hm = (iso) => new Date(iso).toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit', hour12: false, timeZone: 'Asia/Kolkata' })
 
+  // PSS-AI Phase 4 (I4): with seat matching on, the best free desk for this person is offered.
+  const [suggested, setSuggested] = useState(null)
+  const [useSuggested, setUseSuggested] = useState(true)
+  const loadSuggestion = useCallback(() => {
+    if (!flags.seatMatching || !branchId) { setSuggested(null); return }
+    api('suggest_desk', { branchId, ...(selectedStudent?.id ? { studentId: selectedStudent.id } : {}) })
+      .then((r) => setSuggested(r.desk ? { ...r.desk, reason: r.reason } : null)).catch(() => setSuggested(null))
+  }, [flags.seatMatching, branchId, selectedStudent?.id])
+  useEffect(() => { loadSuggestion() }, [loadSuggestion])
+  const deskForWalkin = !releaseId && suggested && useSuggested ? suggested.id : null
+
   const lookupPhone = useCallback(async (p) => {
     if (p.length !== 10) return
     try {
@@ -125,6 +136,7 @@ export default function WalkInModal({ branchId, onClose, onDone }) {
         startTime: localTimeStrToISO(startTime),
         ...(hours in quotes ? { expectedAmount: quotes[hours] } : {}),
         ...(releaseId ? { releaseId } : {}),
+        ...(deskForWalkin ? { deskId: deskForWalkin } : {}),
       })
       setReceipt(result.booking)
       if (result.isNewStudent) {
@@ -135,7 +147,7 @@ export default function WalkInModal({ branchId, onClose, onDone }) {
     } catch (err) {
       setError(err.message)
       // A price or a released desk that changed meanwhile: show the current ones.
-      if (/price is now|walk-in price is|just sold|not available|no longer that member|booked in that cabin/.test(err.message)) { loadQuotes(); setReleaseId('') }
+      if (/price is now|walk-in price is|just sold|not available|no longer that member|booked in that cabin/.test(err.message)) { loadQuotes(); setReleaseId(''); loadSuggestion() }
     } finally {
       setLoading(false)
     }
@@ -241,6 +253,12 @@ export default function WalkInModal({ branchId, onClose, onDone }) {
                     A member's cabin, for these hours only. If they arrive, they are seated elsewhere.
                   </p>
                 </div>
+              )}
+              {suggested && !releaseId && (
+                <label style={{ display: 'flex', gap: '0.5rem', alignItems: 'center', fontSize: '0.85rem', marginBottom: '0.75rem' }} data-testid="suggested-desk">
+                  <input type="checkbox" checked={useSuggested} onChange={(e) => setUseSuggested(e.target.checked)} />
+                  Seat them at <strong>{suggested.label}</strong>{suggested.reason ? <span style={{ color: 'var(--text-muted)' }}>({suggested.reason})</span> : null}
+                </label>
               )}
               <div className="form-group">
                 <label>Payment Mode</label>

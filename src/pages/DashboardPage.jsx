@@ -6,6 +6,7 @@ import { nowTimeStr, localTimeStrToISO, formatCurrency, formatDate, todayISO } f
 import WalkInModal from '../components/WalkInModal'
 import IntegrityReportCard from '../components/IntegrityReportCard'
 import OwnerBriefCard from '../components/OwnerBriefCard'
+import { useFeatureFlags } from '../hooks/useFeatureFlags'
 
 // Every branch that appears in either list, even one with pending payments but nothing
 // expiring (or vice versa) — so that branch's card still shows up with a clear "none" for
@@ -329,6 +330,7 @@ function autoShift() {
 
 // Attendance modal — name/phone lookup + instant check-in, no desk selection
 function CheckInModal({ branchId, onClose, onDone }) {
+  const flags = useFeatureFlags()
   const [name, setName] = useState('')
   const [phone, setPhone] = useState('')
   const [selectedStudent, setSelectedStudent] = useState(null)
@@ -386,12 +388,26 @@ function CheckInModal({ branchId, onClose, onDone }) {
       if (!student) return setError('No student found')
       if (!student.is_member) return setError('This student does not have an active membership')
 
-      const result = await api('check_in_member', {
+      // PSS-AI Phase 4 (I4): with seat matching on, a member without a cabin here is seated at the
+      // best free desk for them (their favourites, then what they asked for, then what they use).
+      let suggestedDesk = null
+      if (flags.seatMatching) {
+        try { suggestedDesk = (await api('suggest_desk', { branchId, studentId: student.id })).desk } catch { /* no suggestion */ }
+      }
+      const checkIn = (deskId) => api('check_in_member', {
         branchId,
         studentId: student.id,
-        deskId: null, // desk auto-resolved by API for permanent; null for temporary
+        deskId, // desk auto-resolved by API for permanent; null for temporary unless seat matching picks one
         startTime: localTimeStrToISO(startTime),
       })
+      let result
+      try {
+        result = await checkIn(suggestedDesk?.id ?? null)
+      } catch (err) {
+        // The suggested desk was taken a moment ago: check in without one, as before.
+        if (!suggestedDesk || !/not available/.test(err.message)) throw err
+        result = await checkIn(null)
+      }
       const notices = []
       if (result.expiredMembership) {
         notices.push(`${student.name}'s membership has expired. They've been checked in for today — please prompt them to renew.`)
@@ -402,6 +418,7 @@ function CheckInModal({ branchId, onClose, onDone }) {
       if (result.isSplitSession) {
         notices.push(`This is a split session — ${result.sessionHours}h remaining of today's daily quota has been allotted for this check-in.`)
       }
+      if (suggestedDesk && result.deskLabel && result.deskLabel === suggestedDesk.label) notices.push(`Seat ${student.name} at ${result.deskLabel}.`)
       // PSS-AI Phase 3 (O1/SP10): their cabin was sold to a walk-in for these hours.
       if (result.collision) notices.push(`${student.name}: ${result.collision.message}`)
       if (notices.length) {

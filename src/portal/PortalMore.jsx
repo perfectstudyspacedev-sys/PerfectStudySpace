@@ -2,10 +2,13 @@ import { useEffect, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { portalApi } from '../lib/api'
 
-// PSS-AI P2.1 — everything that does not fit in the bottom tabs. Phase 3 pages show when the owner
-// has switched them on (me_profile's features).
+// PSS-AI P2.1 — everything that does not fit in the bottom tabs. Phase 3 and 4 pages show when the
+// owner has switched them on (me_profile's features).
 const LINKS = [['/me/receipts', 'Receipts'], ['/me/hold', 'Hold & requests'], ['/me/inbox', 'Notices'], ['/me/privacy', 'Privacy']]
-const PHASE3 = [['hourRelease', '/me/release', 'Not coming in? Release your hours'], ['waitlist', '/me/waitlist', 'Your own cabin (waitlist)'], ['referral', '/me/refer', 'Bring a friend & cashbacks'], ['nextExam', '/me/next', 'Your next exam']]
+const PHASE3 = [
+  ['foodOrders', '/me/food', 'Order food to your seat'], ['tickets', '/me/problem', 'Report a problem'], ['seatPrefs', '/me/seats', 'Where you like to sit'],
+  ['hourRelease', '/me/release', 'Not coming in? Release your hours'], ['waitlist', '/me/waitlist', 'Your own cabin (waitlist)'], ['referral', '/me/refer', 'Bring a friend & cashbacks'], ['nextExam', '/me/next', 'Your next exam'],
+]
 
 export default function PortalMore() {
   const [features, setFeatures] = useState({})

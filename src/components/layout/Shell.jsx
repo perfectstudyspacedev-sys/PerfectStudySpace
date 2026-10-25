@@ -370,6 +370,8 @@ export default function Shell() {
           <NavLink to="/students">Students</NavLink>
           <NavLink to="/enquiries">Enquiries</NavLink>
           <NavLink to="/food-menu">Food Menu</NavLink>
+          {(flags.foodOrders || (isOwner && flags.foodStock)) && <NavLink to="/food-orders">Food orders</NavLink>}
+          {flags.tickets && <NavLink to="/tickets">Problems</NavLink>}
           {isOwner && <NavLink to="/revenue">Revenue</NavLink>}
           {isOwner ? (
             <>
@@ -383,7 +385,7 @@ export default function Shell() {
             </>
           )}
           <NavLink to="/actions">Actions</NavLink>
-          {isOwner && flags.anomaly && <NavLink to="/flags">Flags</NavLink>}
+          {isOwner && (flags.anomaly || flags.sessionWatch) && <NavLink to="/flags">Flags</NavLink>}
           {isOwner && flags.analyst && <NavLink to="/analyst">Analyst</NavLink>}
           {isOwner && (flags.portal || flags.upiPay || flags.exceptionDesk || flags.referralLinks) && <NavLink to="/approvals">Approvals</NavLink>}
           {flags.portal && <NavLink to="/chat-replies">Chat replies</NavLink>}

@@ -11,6 +11,8 @@ const OFF = {
   // Phase 3
   hourRelease: false, overbooking: false, yieldPricing: false, enquiryChat: false, leadTools: false, referralLinks: false,
   examRadar: false, winback: false, nextExam: false, paylaterAdvice: false, exceptionDesk: false, portalR2: false,
+  // Phase 4
+  selfCheckin: false, sessionWatch: false, seatMatching: false, liveSeats: false, foodOrders: false, foodStock: false, tickets: false, photoTasks: false,
 }
 const MAX_AGE_MS = 10 * 60 * 1000
 let cached = null

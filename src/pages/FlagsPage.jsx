@@ -9,6 +9,8 @@ import { useFeatureFlags } from '../hooks/useFeatureFlags'
 const KIND_LABEL = {
   discount: 'Discount', cashback: 'Cashback', waiver: 'Waiver',
   attendance_edit: 'Attendance edit', overtime_exclusion: 'Overtime excluded',
+  // Phase 4 (A5 session watch)
+  session_auto_closed: 'Session closed at 23:30', checkout_corrected: 'Checkout time corrected',
 }
 const TABS = [['open', 'Open'], ['problem', 'Problem'], ['ok', 'OK'], ['all', 'All']]
 

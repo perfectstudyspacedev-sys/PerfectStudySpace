@@ -5,9 +5,12 @@ import { api } from '../lib/api'
 import { formatCurrency } from '../lib/utils'
 import ConfirmDialog from '../components/ConfirmDialog'
 import { signupLinkFor } from '../lib/signupLink'
+import { useFeatureFlags } from '../hooks/useFeatureFlags'
+import SelfCheckinCard from '../components/SelfCheckinCard'
 
 export default function BranchSettingsPage() {
   const { isOwner, branches, selectBranch, branchId } = useAuth()
+  const flags = useFeatureFlags()
   const [selectedBranch, setSelectedBranch] = useState('')
   const [seatMap, setSeatMap] = useState(null)
   const [newDeskLabel, setNewDeskLabel] = useState('')
@@ -191,6 +194,8 @@ export default function BranchSettingsPage() {
           </div>
         )}
       </div>
+
+      {(flags.selfCheckin || flags.seatMatching) && selectedBranch && <SelfCheckinCard branchId={selectedBranch} />}
 
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(320px, 1fr))', gap: '1rem', marginBottom: '1.5rem', alignItems: 'stretch' }}>
       <div className="card" data-testid="signup-link-card">

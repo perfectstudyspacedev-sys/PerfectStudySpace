@@ -1,16 +1,21 @@
 import { useEffect, useState } from 'react'
-import { NavLink, Outlet, useNavigate } from 'react-router-dom'
+import { NavLink, Outlet, useLocation, useNavigate } from 'react-router-dom'
 import { getStudentToken, portalApi, setStudentToken } from '../lib/api'
 
 // PSS-AI P2.1 — the student portal's frame: login guard, header with the inbox, bottom tabs, and
 // the installable-app hooks (manifest and service worker, only on these pages).
 export default function PortalLayout() {
   const navigate = useNavigate()
+  const location = useLocation()
   const [unread, setUnread] = useState(0)
   const [name, setName] = useState('')
 
   useEffect(() => {
-    if (!getStudentToken()) { navigate('/me/login', { replace: true }); return undefined }
+    if (!getStudentToken()) {
+      // Phase 4: a student scanning the check-in poster logs in and comes back to it.
+      if (location.pathname === '/me/checkin') { try { sessionStorage.setItem('pss_portal_next', `${location.pathname}${location.search}`) } catch { /* ignore */ } }
+      navigate('/me/login', { replace: true }); return undefined
+    }
     const onUnauthorized = () => { setStudentToken(null); navigate('/me/login', { replace: true }) }
     window.addEventListener('pss:portal-unauthorized', onUnauthorized)
     portalApi('me_profile').then((r) => setName(r.profile?.name?.split(' ')[0] ?? '')).catch(() => {})

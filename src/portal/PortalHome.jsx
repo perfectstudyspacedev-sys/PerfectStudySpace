@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { portalApi } from '../lib/api'
 import { fmtDate, fmtDateTime, PURPOSE_LABEL, rupees } from './portalUtils'
+import { HomeSession, LiveSeats } from './PortalSelf'
 
 // PSS-AI P2.1 SP2 — the student's home: plan, days left, dues, renewal, open payments, offers.
 export default function PortalHome() {
@@ -34,6 +35,8 @@ export default function PortalHome() {
   return (
     <>
       {error && <p className="error-msg" style={{ marginBottom: '0.75rem' }}>{error}</p>}
+      <HomeSession />
+      <LiveSeats />
       {data.waitlistOffer && (
         <div className="card" data-testid="waitlist-offer" style={{ borderColor: 'var(--accent)' }}>
           <h3>A permanent seat is free for you</h3>

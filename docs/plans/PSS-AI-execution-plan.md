@@ -873,6 +873,17 @@ Every piece has its own switch, off by default (R9). The switches are global, bu
 - More: seat preferences, food, report a problem.
 - `me_profile.features` tells the portal which of these are on.
 
+### Phase 4 as built (2026-10-25)
+
+✅ Every item in the table above is built, each behind its switch (all off). Server in `api/domains/{checkin,kitchen,tickets}.ts` and `_shared/{checkin,seatmatch,food,tickets}.ts`; changes to `checkout_booking` (the `foodAsDues` path only), `create_food_bill` (stock taken off after the bill, switch on only), `create_task` / `update_task_status` / the task lists (photos, switch on only), `cron_session_reminders` (wording) and `cron_purge_images` (task photos). UI: `src/portal/PortalSelf.jsx` (check-in page, home session card, live seats, seat preferences, food, report a problem), `src/pages/FoodQueuePage.jsx`, `src/pages/TicketsPage.jsx`, `src/components/SelfCheckinCard.jsx` (poster and desk tags on Branches), the suggested desk in the check-in and walk-in forms, photo proof on Actions, the two new flag kinds on Flags.
+
+- A student who scans the poster while logged out logs in and comes back to the check-in page (only `/me/checkin?…` is remembered).
+- `get_checkin_settings` returns a branch's open seats with their tags (the seat map is unchanged, so it still works before 068 is applied).
+- The poster prints from the owner's screen (the site's CSP allows no inline script in the print window).
+- `public/_headers` and `vercel.json` now allow `geolocation=(self)`; camera stays blocked (task photos use the phone's own camera through the file picker).
+- Tests: `tests/server/checkin_test.ts` (49 checks) and `kitchen_test.ts`, `tests/units/phase4.test.ts`, `tests/integration/phase4_test.ts` (real Postgres: relation hints, the conflict target, array columns and their CHECKs, the partial unique index, the food queue and the 23:30 close end to end). Browser QA: 33 checks on the new screens.
+- Found while testing: a checkout's real clock can add a minute (121 instead of 120 minutes of overtime) — the integration test allows both; a body field named `status` collided with the test harness, so the food and supplier answers say `orderStatus`.
+
 ## Phase 4 exit gate
 
 - [ ] Four weeks at the pilot branch with staff present but not needed

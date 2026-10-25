@@ -2,8 +2,27 @@ import { useState, useEffect, useCallback } from 'react'
 import { useAuth } from '../context/AuthContext'
 import { api } from '../lib/api'
 import { todayISO, formatDate } from '../lib/utils'
+import { useFeatureFlags } from '../hooks/useFeatureFlags'
+import { shrinkImage } from '../portal/portalUtils'
 
-function TaskTable({ tasks, allBranches, onToggle, currentStaffId, isOwner }) {
+// PSS-AI C17: every daily cleaning task needs a photo (the server applies the same rule).
+const CLEANING = /\b(clean(ing)?|sweep(ing)?|mop(ping)?|wash(ing)?|dust(ing)?|toilets?|washrooms?|restrooms?|bathrooms?|bins?|garbage|trash|dustbins?|saniti[sz](e|ing))\b/i
+const looksLikeCleaning = (title, repeat) => repeat === 'daily' && CLEANING.test(title)
+
+// The task's photo for today: take one (opens the camera on a phone), or see it.
+function PhotoCell({ t, canAct, onPhoto, onView }) {
+  if (!t.needs_photo) return null
+  if (t.photoTaken) return <button type="button" className="btn btn-ghost" style={{ padding: '0.25rem 0.5rem', fontSize: '0.75rem' }} onClick={() => onView(t)}>📷 ✓</button>
+  if (!canAct) return <span style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>📷 needed</span>
+  return (
+    <label className="btn btn-ghost" style={{ padding: '0.25rem 0.5rem', fontSize: '0.75rem', cursor: 'pointer' }}>
+      📷 Photo
+      <input type="file" accept="image/*" capture="environment" style={{ display: 'none' }} onChange={(e) => { const f = e.target.files?.[0]; e.target.value = ''; if (f) onPhoto(t, f) }} />
+    </label>
+  )
+}
+
+function TaskTable({ tasks, allBranches, onToggle, currentStaffId, isOwner, photoOn, onPhoto, onView }) {
   if (tasks.length === 0) return <p style={{ color: 'var(--text-muted)' }}>No tasks found.</p>
   return (
     <table className="data-table">
@@ -47,11 +66,15 @@ function TaskTable({ tasks, allBranches, onToggle, currentStaffId, isOwner }) {
               })()}
             </td>
             <td>
+              <div style={{ display: 'flex', gap: '0.3rem', alignItems: 'center', flexWrap: 'wrap' }}>
+              {photoOn && <PhotoCell t={t} canAct={t.assigned_to_staff_id === currentStaffId || isOwner} onPhoto={onPhoto} onView={onView} />}
               {t.assigned_to_staff_id === currentStaffId || isOwner ? (
                 <button
                   type="button"
                   className={t.completedToday ? 'btn btn-ghost' : 'btn btn-primary'}
                   style={{ padding: '0.25rem 0.5rem', fontSize: '0.75rem' }}
+                  disabled={photoOn && t.needs_photo && !t.completedToday && !t.photoTaken}
+                  title={photoOn && t.needs_photo && !t.photoTaken ? 'Add a photo of the finished task first' : undefined}
                   onClick={() => onToggle(t)}
                 >
                   {t.completedToday ? 'Undo' : 'Complete'}
@@ -59,6 +82,7 @@ function TaskTable({ tasks, allBranches, onToggle, currentStaffId, isOwner }) {
               ) : (
                 <span style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>—</span>
               )}
+              </div>
             </td>
           </tr>
         ))}
@@ -142,6 +166,12 @@ export default function TasksPage() {
   const [dueDate, setDueDate] = useState(todayISO())
   const [repeatInterval, setRepeatInterval] = useState('none')
   const [error, setError] = useState('')
+  const flags = useFeatureFlags()
+  const photoOn = flags.photoTasks
+  // null = follow the cleaning rule; true/false = the owner's own choice for this task.
+  const [needsPhoto, setNeedsPhoto] = useState(null)
+  const photoNeeded = needsPhoto ?? looksLikeCleaning(title, repeatInterval)
+  const [taskError, setTaskError] = useState('')
   const [saving, setSaving] = useState(false)
 
   const load = useCallback(async () => {
@@ -187,8 +217,9 @@ export default function TasksPage() {
       await api('create_task', {
         branchId: targetBranch, assignedToStaffIds: assignedTo, title: title.trim(),
         description: description.trim() || null, dueDate: dueDate || null, repeatInterval,
+        ...(photoOn ? { needsPhoto: photoNeeded } : {}),
       })
-      setTitle(''); setDescription(''); setDueDate(todayISO()); setRepeatInterval('none'); setAssignedTo([])
+      setTitle(''); setDescription(''); setDueDate(todayISO()); setRepeatInterval('none'); setAssignedTo([]); setNeedsPhoto(null)
       load()
     } catch (err) {
       setError(err.message)
@@ -198,10 +229,23 @@ export default function TasksPage() {
   }
 
   const toggleDone = async (task) => {
+    setTaskError('')
     try {
       await api('update_task_status', { taskId: task.id, done: !task.completedToday })
       load()
-    } catch { /* ignore */ }
+    } catch (err) { setTaskError(err.message) }
+  }
+  const addPhoto = async (task, file) => {
+    setTaskError('')
+    try {
+      const image = await shrinkImage(file)
+      await api('upload_task_photo', { taskId: task.id, image })
+      load()
+    } catch (err) { setTaskError(err.message) }
+  }
+  const viewPhoto = async (task) => {
+    setTaskError('')
+    try { const { url } = await api('get_task_photo', { taskId: task.id }); window.open(url, '_blank', 'noopener,noreferrer') } catch (err) { setTaskError(err.message) }
   }
 
   const completeMissed = async (missed) => {
@@ -321,17 +365,24 @@ export default function TasksPage() {
                 </p>
               )}
             </div>
+            {photoOn && (
+              <label style={{ display: 'flex', gap: '0.5rem', alignItems: 'center', fontSize: '0.85rem', marginBottom: '0.75rem' }}>
+                <input type="checkbox" checked={photoNeeded} onChange={(e) => setNeedsPhoto(e.target.checked)} />
+                Needs a photo when done{needsPhoto === null && looksLikeCleaning(title, repeatInterval) ? ' (every daily cleaning task does)' : ''}
+              </label>
+            )}
             {error && <p className="error-msg">{error}</p>}
             <button type="submit" className="btn btn-primary" disabled={saving}>{saving ? 'Assigning…' : 'Assign Task'}</button>
           </form>
         </div>
 
         <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
+          {taskError && <p className="error-msg" role="alert">{taskError}</p>}
           {isOwner && (
             <div className="card">
               <h3 style={{ color: 'var(--accent)', marginBottom: '0.75rem' }}>My Tasks (Owner)</h3>
               {loading ? <p>Loading…</p> : (
-                <TaskTable tasks={filteredOwnerTasks} allBranches={effectiveAllBranches} onToggle={toggleDone} currentStaffId={staff?.id} isOwner={isOwner} />
+                <TaskTable tasks={filteredOwnerTasks} allBranches={effectiveAllBranches} onToggle={toggleDone} currentStaffId={staff?.id} isOwner={isOwner} photoOn={photoOn} onPhoto={addPhoto} onView={viewPhoto} />
               )}
             </div>
           )}
@@ -351,7 +402,7 @@ export default function TasksPage() {
             </div>
 
             {loading ? <p>Loading…</p> : (
-              <TaskTable tasks={filteredTasks} allBranches={effectiveAllBranches} onToggle={toggleDone} currentStaffId={staff?.id} isOwner={isOwner} />
+              <TaskTable tasks={filteredTasks} allBranches={effectiveAllBranches} onToggle={toggleDone} currentStaffId={staff?.id} isOwner={isOwner} photoOn={photoOn} onPhoto={addPhoto} onView={viewPhoto} />
             )}
           </div>
 
