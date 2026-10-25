@@ -153,8 +153,10 @@ await setup();
   const tx = rows("transactions").filter((t) => t.booking_id === ok.booking?.id);
   check(q.amount === 70 && stale.status === 409 && /now ₹70/.test(stale.error) && ok.status === 200 && ok.booking.amount === 70 && Number(tx[0]?.amount) === 70,
     "Y2: +15% today makes a 4-hour walk-in ₹70; a modal still showing ₹60 is refused, not charged", { q, stale: stale.error, tx: tx.map((t) => t.amount) });
-  const split = await walkin({ hours: 4, paymentMode: "split", cashAmount: 30, upiAmount: 30 });
+  const split = await walkin({ hours: 4, paymentMode: "split", cashAmount: 30, upiAmount: 30, expectedAmount: q.amount });
   check(split.status === 400, "Y2: a split must add up to the new price", split.error);
+  const noPrice = await walkin({ hours: 4 });
+  check(noPrice.status === 409 && /₹70/.test(noPrice.error) && !rows("bookings").some((b) => b.id === noPrice.booking?.id), "Y2 (review 4): with a price change today a form that sent no price is refused, never charged the new price silently", noPrice.error);
 
   // The nightly job: busy weekdays go up; the owner's day is left alone.
   const b2 = insert("branches", { name: "Ram Nagar", is_active: true });
@@ -168,10 +170,22 @@ await setup();
   const d1 = rows("walkin_price_days").find((d) => d.branch_id === b1.id);
   check(job.written === 1 && job.keptOwnerPrices === 1 && Number(d2.change_pct) === 15 && /100% expected full/.test(d2.reason) && d1.source === "owner", "Y3: a branch full on this weekday for 4 weeks gets +15%; the owner's own price for the other branch stays", { job, d2 });
   insert("exam_notices", { source: "tnpsc", exam_name: "TNPSC Group 4", exam_family: "tnpsc-group-4", exam_date: addDays(TODAY, 10), status: "confirmed" });
+  // Review 16: the exam counts only where enough of the branch's members prepare for it.
+  const g4 = insert("students", { name: "Ganesh", phone: "9100000077", branch_id: b2.id, status: "active", course: "TNPSC Group 4" });
+  insert("memberships", { student_id: g4.id, branch_id: b2.id, category: "temporary", hours_per_day: 6, start_date: addDays(TODAY, -5), end_date: addDays(TODAY, 25), is_active: true, is_paused: false });
+  const b3 = insert("branches", { name: "Third", is_active: true });
+  const ssc = insert("students", { name: "Sana", phone: "9100000078", branch_id: b3.id, status: "active", course: "SSC CGL" });
+  insert("memberships", { student_id: ssc.id, branch_id: b3.id, category: "temporary", hours_per_day: 6, start_date: addDays(TODAY, -5), end_date: addDays(TODAY, 25), is_active: true, is_paused: false });
   await run("cron_yield_prices");
   check(Number(rows("walkin_price_days").find((d) => d.branch_id === b2.id).change_pct) === 20 && /TNPSC Group 4/.test(rows("walkin_price_days").find((d) => d.branch_id === b2.id).reason), "Y3: a confirmed exam within 30 days adds 5% (capped at +20%)");
+  const d3 = rows("walkin_price_days").find((d) => d.branch_id === b3.id);
+  check(Number(d3.change_pct) === 0 && !/TNPSC/.test(d3.reason ?? ""), "Y3 (review 16): a branch whose members prepare for other exams gets no exam rise", d3);
+  // Review 15: back to automatic for today gives today's automatic price at once.
+  const cleared = await call("set_walkin_price_day", { branchId: b1.id, date: TODAY, changePct: null }, tO);
+  const d1Now = rows("walkin_price_days").find((d) => d.branch_id === b1.id && d.price_date === TODAY);
+  check(cleared.cleared && d1Now?.source === "auto" && /TNPSC Group 4/.test(d1Now.reason), "Y3 (review 15): clearing the owner's price for today works out the automatic one now", d1Now);
   const prices = await call("list_walkin_prices", {}, tO);
-  check(prices.on && prices.days.length === 2 && (await call("list_walkin_prices", {}, tP)).status === 403, "Y4: the owner sees each branch's price days; staff can't");
+  check(prices.on && prices.days.length === 3 && (await call("list_walkin_prices", {}, tP)).status === 403, "Y4: the owner sees each branch's price days; staff can't");
 }
 
 // ── SP9: the waitlist from the portal ──
@@ -192,6 +206,121 @@ await setup();
   check((await call("me_join_waitlist", {}, tM)).status === 400, "W1: a member with a cabin can't join");
   const leave = await call("me_leave_waitlist", {}, tT);
   check(leave.status === 200 && rows("permanent_waitlist").find((w) => w.phone === temp.phone).status === "cancelled", "W1: they can leave the waitlist");
+}
+
+// ── Phase 3 review: resale fixes ──
+// 1 (High): a member who comes back for a second session during a resale is seated elsewhere again,
+// and a free day is given once, even with two check-ins at the same moment.
+await setup();
+{
+  setSetting("pssai_hour_release", "on");
+  const r = insert("seat_releases", { membership_id: mem.id, student_id: member.id, branch_id: b1.id, desk_id: cabin.id, starts_at: new Date(Date.now() - 600e3).toISOString(), ends_at: new Date(Date.now() + 4 * 3600e3).toISOString(), source: "member", status: "open" });
+  const sold = await walkin({ releaseId: r.id, hours: 3 });
+  spare.status = "free";
+  const first = await call("check_in_member", { branchId: b1.id, studentId: member.id }, tP);
+  const firstBk = rows("bookings").find((b) => b.student_id === member.id && b.status === "active");
+  await call("checkout_booking", { bookingId: firstBk.id, overtimeMinutes: 0 }, tP);
+  const second = await call("check_in_member", { branchId: b1.id, studentId: member.id }, tP);
+  const secondBk = rows("bookings").find((b) => b.student_id === member.id && b.status === "active");
+  check(sold.status === 200 && first.collision?.kind === "fallback_desk" && second.collision?.kind === "fallback_desk" && secondBk.desk_id === spare.id && cabin.current_booking_id === sold.booking.id,
+    "R1: the second arrival during the sale is seated at the free desk again; the walk-in keeps the cabin and its link", { first: first.collision, second: second.collision, desk: secondBk.desk_id });
+}
+await setup();
+{
+  setSetting("pssai_overbooking", "on");
+  const r = insert("seat_releases", { membership_id: mem.id, student_id: member.id, branch_id: b1.id, desk_id: cabin.id, starts_at: new Date(Date.now() - 600e3).toISOString(), ends_at: new Date(Date.now() + 3 * 3600e3).toISOString(), source: "predicted", probability: 0.9, status: "open" });
+  await walkin({ releaseId: r.id, hours: 2 });
+  const both = await Promise.all([call("check_in_member", { branchId: b1.id, studentId: member.id }, tP), call("check_in_member", { branchId: b1.id, studentId: member.id }, tP)]);
+  const credits = rows("cashbacks").filter((c) => c.student_id === member.id);
+  check(credits.length === 1 && Number(credits[0].cashback_value) === 70, "R2: two check-ins at the same moment give one free day, not two", { credits: credits.length, statuses: both.map((b) => b.status) });
+  const again = rows("bookings").find((b) => b.student_id === member.id && b.status === "active");
+  if (again) await call("checkout_booking", { bookingId: again.id, overtimeMinutes: 0 }, tP);
+  const later = await call("check_in_member", { branchId: b1.id, studentId: member.id }, tP);
+  check(later.collision?.kind === "free_day" && later.collision.credit === 0 && rows("cashbacks").filter((c) => c.student_id === member.id).length === 1, "R2: coming back later the same day adds no second free day", later.collision);
+}
+// 2: a release outlives its cabin; a booked cabin can't be sold; overlap across a renewal.
+await setup();
+{
+  setSetting("pssai_hour_release", "on");
+  const rel = await call("me_release_hours", { date: addDays(TODAY, 1), fromHour: 9, toHour: 17 }, tM);
+  mem.is_active = false;   // closed, moved or downgraded since
+  const startTime = istHour(addDays(TODAY, 1), 10);
+  const list = await call("list_resellable_desks", { branchId: b1.id, startTime, hours: 3 }, tP);
+  const sale = await walkin({ startTime, releaseId: rel.release.id });
+  check(list.desks.length === 0 && sale.status === 409 && rows("seat_releases")[0].status === "cancelled" && !rows("seat_resales").length, "R3: when the member no longer holds the cabin its release is neither listed nor sold (and is withdrawn)", sale.error);
+}
+await setup();
+{
+  setSetting("pssai_hour_release", "on");
+  const rel = await call("me_release_hours", { date: addDays(TODAY, 1), fromHour: 9, toHour: 17 }, tM);
+  const startTime = istHour(addDays(TODAY, 1), 10);
+  insert("bookings", { student_id: member.id, branch_id: b1.id, desk_id: cabin.id, booking_type: "permanent", start_time: istHour(addDays(TODAY, 1), 9), end_time: istHour(addDays(TODAY, 1), 12), status: "active", is_paused: false });
+  const sale = await walkin({ startTime, releaseId: rel.release.id });
+  check(sale.status === 409 && /booked in that cabin/.test(sale.error) && rows("seat_releases")[0].status === "open", "R4: a cabin someone is booked into for those hours can't be sold (the release stays on sale)", sale.error);
+  // Renewal: the new membership row must not allow releasing the same hours again.
+  mem.is_active = false;
+  const renewed = insert("memberships", { ...mem, id: crypto.randomUUID(), is_active: true, renewed_from_membership_id: mem.id, start_date: addDays(TODAY, -1), end_date: addDays(TODAY, 29) });
+  const dup = await call("me_release_hours", { date: addDays(TODAY, 1), fromHour: 12, toHour: 15 }, tM);
+  check(renewed && dup.status === 400 && /already released/.test(dup.error), "R5: after a renewal the same cabin hours can't be released twice", dup.error);
+}
+// 5: an early renewal still lets the member release days of the plan it continues.
+await setup();
+{
+  setSetting("pssai_hour_release", "on");
+  mem.is_active = false;
+  mem.end_date = addDays(TODAY, 2);
+  insert("memberships", { ...mem, id: crypto.randomUUID(), is_active: true, renewed_from_membership_id: mem.id, start_date: addDays(TODAY, 3), end_date: addDays(TODAY, 33) });
+  const ok = await call("me_release_hours", { date: addDays(TODAY, 1), fromHour: 9, toHour: 13 }, tM);
+  check(ok.status === 200, "R6: after an early renewal, tomorrow (still in the current paid period) can be released", ok.error);
+}
+// 3: time-aware collisions — a sale later today doesn't move the member now; an overstaying walk-in does not take the cabin.
+await setup();
+{
+  setSetting("pssai_hour_release", "on");
+  const later = insert("seat_releases", { membership_id: mem.id, student_id: member.id, branch_id: b1.id, desk_id: cabin.id, starts_at: new Date(Date.now() + 14 * 3600e3).toISOString(), ends_at: new Date(Date.now() + 18 * 3600e3).toISOString(), source: "member", status: "open" });
+  const sold = await walkin({ releaseId: later.id, hours: 2, startTime: new Date(Date.now() + 15 * 3600e3).toISOString() });
+  rows("memberships").find((m) => m.id === mem.id).hours_per_day = 2;
+  const inNow = await call("check_in_member", { branchId: b1.id, studentId: member.id }, tP);
+  check(sold.status === 200 && inNow.status === 200 && !inNow.collision && rows("bookings").find((b) => b.student_id === member.id).desk_id === cabin.id, "R7: hours sold for later than the member's session leave the member in their cabin now", inNow.collision);
+}
+await setup();
+{
+  setSetting("pssai_hour_release", "on");
+  const r = insert("seat_releases", { membership_id: mem.id, student_id: member.id, branch_id: b1.id, desk_id: cabin.id, starts_at: new Date(Date.now() - 600e3).toISOString(), ends_at: new Date(Date.now() + 4 * 3600e3).toISOString(), source: "member", status: "open" });
+  const sold = await walkin({ releaseId: r.id, hours: 1 });
+  const wb = rows("bookings").find((b) => b.id === sold.booking.id);
+  wb.end_time = new Date(Date.now() - 5 * 60e3).toISOString();   // their sold hour is over; they are still here
+  spare.status = "free";
+  const inNow = await call("check_in_member", { branchId: b1.id, studentId: member.id }, tP);
+  const mb = rows("bookings").find((b) => b.student_id === member.id);
+  check(inNow.collision?.kind === "walkin_overstay" && mb.desk_id === cabin.id && spare.status === "free" && cabin.current_booking_id === mb.id, "R8: a walk-in past their sold hours is the one asked to move; the member keeps the cabin", inNow.collision);
+  // The walk-in's checkout afterwards must not unlink the member.
+  await call("checkout_booking", { bookingId: wb.id, overtimeMinutes: 0 }, tP);
+  check(cabin.current_booking_id === mb.id, "R8: checking the walk-in out leaves the member linked to the cabin");
+}
+// 14: with both switches off a live resale is still handled, and open releases are withdrawn.
+await setup();
+{
+  setSetting("pssai_hour_release", "on");
+  const r = insert("seat_releases", { membership_id: mem.id, student_id: member.id, branch_id: b1.id, desk_id: cabin.id, starts_at: new Date(Date.now() - 600e3).toISOString(), ends_at: new Date(Date.now() + 4 * 3600e3).toISOString(), source: "member", status: "open" });
+  await walkin({ releaseId: r.id, hours: 1 });
+  const future = await call("me_release_hours", { date: addDays(TODAY, 2), fromHour: 9, toHour: 12 }, tM);
+  setSetting("pssai_hour_release", "off");
+  spare.status = "free";
+  const inNow = await call("check_in_member", { branchId: b1.id, studentId: member.id }, tP);
+  check(inNow.collision?.kind === "fallback_desk", "R9: after the switch goes off, a member arriving during a sale is still seated elsewhere (no double seat)", inNow.collision);
+  await run("cron_predict_releases");
+  check(rows("seat_releases").find((x) => x.id === future.release.id).status === "cancelled", "R9: the hourly job withdraws releases whose switch is off");
+}
+// 5: predictions follow renewals (history and eligibility are not reset by a monthly renewal).
+await setup();
+{
+  setSetting("pssai_overbooking", "on");
+  const old = rows("memberships").find((m) => m.id === mem.id);
+  old.is_active = false; old.start_date = addDays(TODAY, -60); old.end_date = addDays(TODAY, -6);
+  insert("memberships", { ...old, id: crypto.randomUUID(), is_active: true, renewed_from_membership_id: old.id, start_date: addDays(TODAY, -5), end_date: addDays(TODAY, 25) });
+  const job = await run("cron_predict_releases");
+  check(job.offered === 1 && rows("seat_releases").some((x) => x.source === "predicted" && x.student_id === member.id), "R10: a member who renewed 5 days ago still gets a prediction (history spans the renewal)", job);
 }
 
 done();

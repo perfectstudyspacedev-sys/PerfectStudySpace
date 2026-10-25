@@ -161,4 +161,48 @@ await setup();
   check((await call("list_approvals", {}, tO)).approvals.length === 0, "X2: the owner's decision is what counts");
 }
 
+// ── Phase 3 review 12: redirects re-check robots.txt and https; a huge page is not read whole ──
+await setup();
+{
+  const realFetch = globalThis.fetch;
+  const fetched: string[] = [];
+  let pulled = 0;
+  const filler = "<p>" + "notification text ".repeat(4000) + "</p>";
+  globalThis.fetch = (async (url: any) => {
+    const u = String(url);
+    fetched.push(u);
+    if (u.endsWith("/robots.txt")) return u.startsWith("https://b.example") ? new Response("User-agent: *\nDisallow: /\n") : new Response("", { status: 404 });
+    if (u === "https://a.example/page") return new Response(null, { status: 302, headers: { location: "https://b.example/page" } });
+    if (u === "https://c.example/page") return new Response(null, { status: 301, headers: { location: "http://c.example/page" } });
+    if (u === "https://d.example/big") {
+      const chunk = new TextEncoder().encode(filler);
+      return new Response(new ReadableStream({ pull(ctrl) { pulled++; if (pulled > 200) ctrl.close(); else ctrl.enqueue(chunk); } }));
+    }
+    return new Response("not found", { status: 404 });
+  }) as any;
+  setSetting("exam_sources", JSON.stringify([{ source: "tnpsc", url: "https://a.example/page" }, { source: "ssc", url: "https://c.example/page" }, { source: "upsc", url: "https://d.example/big" }]));
+  setSetting("pssai_exam_radar", "on");
+  g.__FAKE_AI__ = () => json({ exams: [] });
+  const r = await job("exam_radar");
+  const byS = Object.fromEntries(r.pages.map((p: any) => [p.source, p]));
+  check(/robots/.test(byS.tnpsc.error) && !fetched.includes("https://b.example/page"), "E3: a redirect to a site whose robots.txt forbids it is not followed", byS.tnpsc);
+  check(/not https/.test(byS.ssc.error) && !fetched.includes("http://c.example/page"), "E3: a redirect to plain http is not followed", byS.ssc);
+  check(!byS.upsc.error && pulled < 10, "E3: a 14 MB page is read only up to 400 KB", { pulled, upsc: byS.upsc });
+  globalThis.fetch = realFetch;
+}
+
+// ── Phase 3 review 17: a student already on today's Send list waits a day for the next-exam row ──
+await setup();
+{
+  const { s: meena } = member("Meena Raj", "9100000001", "TNPSC Group 4");
+  insert("exam_notices", { source: "tnpsc", exam_name: "TNPSC Group 2", exam_family: "tnpsc-group-2", exam_date: addDays(TODAY, 120), status: "confirmed" });
+  setSetting("pssai_next_exam", "on"); setSetting("pssai_portal", "on");
+  insert("send_list", { list_date: TODAY, branch_id: b1.id, student_id: meena.id, kind: "collections", reason: "Ends in 5 days", message: "Hi" });
+  const r = await run("cron_next_exam");
+  check(r.noticed === 0 && !rows("portal_notifications").some((n) => n.kind === "next_exam"), "N3: with a collections row already today, no next-exam notice is used up", r);
+  rows("send_list").splice(0);
+  const r2 = await run("cron_next_exam");
+  check(r2.noticed === 1 && rows("send_list").some((x) => x.kind === "next_exam" && x.student_id === meena.id), "N3: the next day (no row yet) the notice and the Send-list row go out together", r2);
+}
+
 done();

@@ -31,9 +31,14 @@ export function handlers(): Record<string, Handler> {
       // PSS-AI I3: with pssai_yield_pricing on, today's price change for this branch applies (always
       // within ±20% of fee_config, C8); off, this is the fee_config price exactly as before. The
       // modal sends the price it showed; a price that changed in between is refused, not charged.
-      const { amount } = await walkinPrice(db, branchId, Number(hours));
+      const { amount, pct } = await walkinPrice(db, branchId, Number(hours));
       if (payload.expectedAmount != null && Math.abs(Number(payload.expectedAmount) - amount) > 0.001) {
         return err(`The walk-in price is now ₹${amount} — check it and try again`, 409);
+      }
+      // Phase 3 review: with a price change today a form that didn't show the server's price (an
+      // old screen, a failed quote) is refused, so the desk never collects one price and records another.
+      if (payload.expectedAmount == null && pct !== 0) {
+        return err(`Today's walk-in price is ₹${amount} — refresh the form and try again`, 409);
       }
       const splitErr = splitPaymentError(paymentMode, amount, cashAmount, upiAmount);
       if (splitErr) return err(splitErr);
@@ -50,34 +55,45 @@ export function handlers(): Record<string, Handler> {
         release = claim.release;
       }
 
-      const { data: phoneOwner } = await db.from("students").select("id").eq("phone", phone).maybeSingle();
-      const { count: ownerActiveMemberships } = phoneOwner
-        ? await db.from("memberships").select("*", { count: "exact", head: true }).eq("student_id", phoneOwner.id).eq("is_active", true)
-        : { count: 0 };
-      const isExistingMember = !!phoneOwner && (ownerActiveMemberships ?? 0) > 0;
-      const { id: studentId, isNew: isNewStudent } = isExistingMember
-        ? { id: phoneOwner!.id, isNew: false }
-        : await upsertStudent(db, name, phone, branchId);
-
-      // Desk is optional for walk-ins — staff no longer assigns a desk
+      // Anything that fails between the release claim and the booking puts the release back.
+      let studentId: string, isNewStudent: boolean, isExistingMember: boolean, booking: { id: string } | null = null;
       let desk = null;
-      if (manualDeskId) {
-        const { data: d } = await db.from("desks").select("*").eq("id", manualDeskId).eq("branch_id", branchId).single();
-        if (!d || d.status !== "free") return err("Selected desk is not available");
-        desk = d;
-      }
+      try {
+        const { data: phoneOwner } = await db.from("students").select("id").eq("phone", phone).maybeSingle();
+        const { count: ownerActiveMemberships } = phoneOwner
+          ? await db.from("memberships").select("*", { count: "exact", head: true }).eq("student_id", phoneOwner.id).eq("is_active", true)
+          : { count: 0 };
+        isExistingMember = !!phoneOwner && (ownerActiveMemberships ?? 0) > 0;
+        ({ id: studentId, isNew: isNewStudent } = isExistingMember
+          ? { id: phoneOwner!.id, isNew: false }
+          : await upsertStudent(db, name, phone, branchId));
 
-      // startTimeStr is a full UTC ISO string sent by the frontend after local→UTC conversion
-      // (startTime and endTime are worked out above, before the release claim).
-      const { data: booking, error: bErr } = await db.from("bookings").insert({
-        student_id: studentId, branch_id: branchId, desk_id: desk?.id ?? release?.desk_id ?? null,
-        booking_type: "walkin", start_time: startTime, end_time: endTime,
-        hours: Number(hours), scheduled_hours: Number(hours), amount, status: "active",
-        payment_mode: storedPaymentMode(paymentMode), created_by_staff_id: staff.id,
-      }).select("id").single();
-      if (bErr) {
+        // Desk is optional for walk-ins — staff no longer assigns a desk
+        if (manualDeskId) {
+          const { data: d } = await db.from("desks").select("*").eq("id", manualDeskId).eq("branch_id", branchId).single();
+          if (!d || d.status !== "free") {
+            if (release) await unclaimRelease(db, release.id);
+            return err("Selected desk is not available");
+          }
+          desk = d;
+        }
+
+        // startTimeStr is a full UTC ISO string sent by the frontend after local→UTC conversion
+        // (startTime and endTime are worked out above, before the release claim).
+        const { data: created, error: bErr } = await db.from("bookings").insert({
+          student_id: studentId, branch_id: branchId, desk_id: desk?.id ?? release?.desk_id ?? null,
+          booking_type: "walkin", start_time: startTime, end_time: endTime,
+          hours: Number(hours), scheduled_hours: Number(hours), amount, status: "active",
+          payment_mode: storedPaymentMode(paymentMode), created_by_staff_id: staff.id,
+        }).select("id").single();
+        if (bErr) {
+          if (release) await unclaimRelease(db, release.id);
+          return err(bErr.message);
+        }
+        booking = created;
+      } catch (e) {
         if (release) await unclaimRelease(db, release.id);
-        return err(bErr.message);
+        throw e;
       }
 
       if (desk) {
@@ -211,8 +227,10 @@ export function handlers(): Record<string, Handler> {
       let collision: { kind: string; credit: number; message: string } | null = null;
       let fallbackDesk = false;
       if (desk && membership.category === "permanent" && !isCrossBranchVisit) {
-        const arrival = await memberArrives(ctx, membership, desk);
-        if (arrival?.collision) { collision = arrival.collision; desk = arrival.desk; fallbackDesk = !!arrival.desk; }
+        const sessionEnd = new Date((startTimeStr ? Date.parse(startTimeStr) : Date.now()) + remainingMinutes * 60_000).toISOString();
+        const ownDeskId = desk.id;
+        const arrival = await memberArrives(ctx, membership, desk, sessionEnd);
+        if (arrival?.collision) { collision = arrival.collision; desk = arrival.desk; fallbackDesk = !!arrival.desk && arrival.desk.id !== ownDeskId; }
       }
 
       // startTimeStr is a full UTC ISO string sent by the frontend after local→UTC conversion
@@ -633,7 +651,9 @@ export function handlers(): Record<string, Handler> {
         if (desk?.seat_type === "floating") {
           await db.from("desks").update({ status: "free", current_booking_id: null }).eq("id", booking.desk_id);
         } else {
-          await db.from("desks").update({ current_booking_id: null }).eq("id", booking.desk_id);
+          // A fixed cabin's link is cleared only if it still points at this session (a walk-in
+          // sold the member's hours must not unlink the member who came in after).
+          await db.from("desks").update({ current_booking_id: null }).eq("id", booking.desk_id).eq("current_booking_id", bookingId);
         }
       }
 

@@ -6,7 +6,7 @@
 // told the team will reply on WhatsApp. The visitor's words are data, never instructions.
 // deno-lint-ignore-file no-explicit-any
 import { err, json } from "../_shared/http.ts";
-import { adminClient } from "../_shared/auth.ts";
+import { adminClient, JWT_SECRET } from "../_shared/auth.ts";
 import { featureOn } from "../_shared/flags.ts";
 import { istDayStart, todayISO } from "../_shared/dates.ts";
 import { loggedStructuredCall, MODELS } from "../_shared/ai.ts";
@@ -16,15 +16,34 @@ import { walkinPrice } from "../api/domains/pricing.ts";
 import { randomCode, CODE_ALPHABET } from "../api/lib.ts";
 
 type Db = ReturnType<typeof adminClient>;
-export const LIMITS = { perChatDay: 20, perPhoneDay: 30, perIpHour: 40, globalDay: 400, maxMessage: 600 };
+export const LIMITS = { perChatDay: 20, perPhoneDay: 30, perIpHour: 40, newChatsPerIpHour: 3, globalDay: 400, maxMessage: 600 };
+// Phase 3 review: the chat's AI replies have their own daily cap, so a flood of messages can't
+// spend the month's budget shared with the analyst and the concierge. Past it, messages are still
+// kept and the team replies.
+export const CHAT_AI_KEY = "pssai_enquiry_ai_daily";
+export const CHAT_AI_DEFAULT = 150;
 const TEAM_WILL_REPLY = "Thanks! Our team will reply to you on WhatsApp soon.";
 const HISTORY = 10;
 
 const sha256 = async (s: string) => [...new Uint8Array(await crypto.subtle.digest("SHA-256", new TextEncoder().encode(s)))].map((b) => b.toString(16).padStart(2, "0")).join("");
-/** The IP, hashed with today's date, so counts work within a day but nothing links days or reveals the IP. */
-export async function ipHash(req: Request): Promise<string | null> {
-  const ip = req.headers.get("cf-connecting-ip") ?? req.headers.get("x-forwarded-for")?.split(",")[0]?.trim() ?? null;
-  return ip ? (await sha256(`pss-ip:${todayISO()}:${ip}`)).slice(0, 32) : null;
+/** The IP, keyed with a server secret and today's date (HMAC), so counts work within a day but
+ * nothing links days, and the IP can't be recovered from the stored value by trying addresses.
+ * The last X-Forwarded-For entry is the one the platform's proxy added (a visitor can put their
+ * own values before it). Without any IP all such visitors share one bucket, so the limits still apply. */
+export async function ipHash(req: Request): Promise<string> {
+  const forwarded = req.headers.get("x-forwarded-for")?.split(",").map((x) => x.trim()).filter(Boolean) ?? [];
+  const ip = forwarded[forwarded.length - 1] ?? req.headers.get("cf-connecting-ip") ?? "unknown";
+  const key = await crypto.subtle.importKey("raw", new TextEncoder().encode(JWT_SECRET || "pss-ip"), { name: "HMAC", hash: "SHA-256" }, false, ["sign"]);
+  const mac = new Uint8Array(await crypto.subtle.sign("HMAC", key, new TextEncoder().encode(`pss-ip:${todayISO()}:${ip}`)));
+  return [...mac].map((b) => b.toString(16).padStart(2, "0")).join("").slice(0, 32);
+}
+
+async function chatAiAllowed(db: Db): Promise<boolean> {
+  const { data: setting } = await db.from("app_settings").select("value").eq("key", CHAT_AI_KEY).maybeSingle();
+  const raw = Number(setting?.value);
+  const cap = setting?.value != null && setting.value !== "" && Number.isFinite(raw) && raw >= 0 ? raw : CHAT_AI_DEFAULT;
+  const { count } = await db.from("agent_runs").select("*", { count: "exact", head: true }).eq("agent", "enquiry").gte("started_at", istDayStart(todayISO()));
+  return (count ?? 0) < cap;
 }
 
 const agentCtx = (db: Db, action: string, runId?: string) => ({
@@ -84,6 +103,8 @@ export async function handleEnquiryChat(req: Request, body: any): Promise<Respon
   }
   if (op !== "send") return err("Unknown request");
 
+  // A field people never see: a form that fills it is a script. It is told nothing went wrong.
+  if (typeof body.website === "string" && body.website.trim()) return json({ pending: true, message: TEAM_WILL_REPLY });
   const message = typeof body.message === "string" ? body.message.trim() : "";
   if (!message || message.length > LIMITS.maxMessage) return err(`Write a message of up to ${LIMITS.maxMessage} characters`);
   const ip = await ipHash(req);
@@ -91,10 +112,8 @@ export async function handleEnquiryChat(req: Request, body: any): Promise<Respon
   // Limits first, before anything is stored.
   const { count: global } = await db.from("enquiry_chat_messages").select("*", { count: "exact", head: true }).eq("role", "visitor").gte("created_at", dayStart);
   if ((global ?? 0) >= LIMITS.globalDay) return err("The chat is busy today — please call or WhatsApp us.", 429);
-  if (ip) {
-    const { count } = await db.from("enquiry_chat_messages").select("*", { count: "exact", head: true }).eq("ip_hash", ip).gte("created_at", new Date(Date.now() - 3600e3).toISOString());
-    if ((count ?? 0) >= LIMITS.perIpHour) return err("Too many messages — please try again later.", 429);
-  }
+  const { data: fromIp } = await db.from("enquiry_chat_messages").select("chat_id").eq("ip_hash", ip).gte("created_at", new Date(Date.now() - 3600e3).toISOString()).limit(LIMITS.perIpHour + 1);
+  if ((fromIp?.length ?? 0) >= LIMITS.perIpHour) return err("Too many messages — please try again later.", 429);
 
   let chat = body.chatKey ? await chatByKey(db, body.chatKey) : null;
   let chatKey: string | null = null;
@@ -103,6 +122,8 @@ export async function handleEnquiryChat(req: Request, body: any): Promise<Respon
     const phone = String(body.phone ?? "").replace(/\D/g, "");
     const name = String(body.name ?? "").trim();
     if (body.consent !== true) return err("Please agree to us keeping your name, phone and messages so we can reply");
+    // Each new chat makes an enquiry and a staff notice: a few an hour from one place at most.
+    if (new Set((fromIp ?? []).map((m: any) => m.chat_id)).size >= LIMITS.newChatsPerIpHour) return err("Too many new chats — please try again later, or call or WhatsApp us.", 429);
     if (name.length < 2 || !/^\d{10}$/.test(phone) || typeof body.branchId !== "string") return err("Your name, a 10-digit phone number and a branch are needed");
     chatKey = randomCode(32, CODE_ALPHABET);
     open = { branchId: body.branchId, name, phone, keyHash: await sha256(chatKey), refCode: typeof body.ref === "string" ? body.ref : undefined };
@@ -123,6 +144,7 @@ export async function handleEnquiryChat(req: Request, body: any): Promise<Respon
   const chatId = saved.body.chatId as string;
   const waiting = { pending: true, message: TEAM_WILL_REPLY, ...(chatKey ? { chatKey } : {}) };
 
+  if (!(await chatAiAllowed(db))) return json(waiting);
   const { data: row } = await db.from("enquiry_chats").select("branch_id").eq("id", chatId).maybeSingle();
   const facts = await chatFacts(db, row!.branch_id);
   const { data: hist } = await db.from("enquiry_chat_messages").select("role, body").eq("chat_id", chatId).eq("status", "sent").order("created_at", { ascending: false }).limit(HISTORY);

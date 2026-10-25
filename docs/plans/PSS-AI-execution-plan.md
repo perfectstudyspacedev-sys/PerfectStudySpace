@@ -739,6 +739,34 @@ Tests: server suites for each item (fake Supabase, scripted Claude, stubbed web 
 - **Tests** — server suites `seats`, `leads`, `exams`; Vitest `tests/units/phase3.test.ts` (21 cases: prices, prediction, exam families, robots.txt, scores, risk); integration `tests/integration/phase3_test.ts` on Postgres 16 + PostgREST 12; browser QA of every new page (29 checks, phone width for the portal and `/ask`); eval sets `tests/agents/enquiry-eval.md` and `tests/agents/exception-desk-eval.md`.
 - Found while testing: the fake database follows relations only by naming convention, so queries that embed through `link_id`, `release_id` or `chat_id` name the column explicitly (`referral_links!link_id(...)`), which PostgREST accepts; `notifyStudent` now reports whether a notice was actually written (a repeat is skipped).
 
+### Independent review of Phase 3 (2026-10-25)
+
+One independent reviewer read the range `8bbe8a1..99a14f6`. Held up: one sale per release (one conditional open → sold update), the cabin stays reserved, prices clamped to ±20% and rounded to ₹5, unchanged prices with the switches off, `set_walkin_price_day` T3 and owner-only, referral rewards through Approvals, every `me_*` limited to the token's student, chat keys (160 bits, hash only), length-only chat events, numbers in replies checked against the facts, upsert targets and embeds. Fixed, each with a test (server suites; the Postgres-only ones in `tests/integration/phase4_test.ts` §6):
+
+| # | Finding | Fix |
+|---|---|---|
+| 1 | High: a member coming back for a second session during a resale was booked into the cabin the walk-in was using; two check-ins at once could give two free days | Every arrival during a sold window is handled, not only the first; the outcome is claimed with one conditional update and the free day is granted only by the claim that wins |
+| 2 | A release outlived the membership or cabin it was made for, and a sale never re-checked the cabin; a renewal (new membership row) let the same hours be released twice | A sale (and the list) needs an active permanent membership on that desk and no active booking in the cabin for those hours; releases are keyed on desk + student; a stale release is withdrawn |
+| 3 | Decision: collisions ignored time | Taken: a collision only when the walk-in's sold hours overlap the member's session and have not ended; a walk-in past their sold hours is asked to move and the member keeps the cabin; the cabin is still linked at sale time. A walk-in's checkout unlinks the cabin only if the link is still theirs |
+| 4 | A form that didn't send the shown price (an old screen, a failed quote) could charge the new price silently | With a price change today, `create_walkin` without `expectedAmount` is refused (409) with the current price; the walk-in form always asks for quotes and sends the shown price. Unchanged while yield pricing is off |
+| 5 | Predictions and releases used only the current membership row (renewals reset history; an early renewal blocked releasing days still paid for; old holds missed) | `permanentSpan()` follows `renewed_from_membership_id` on the same cabin for history, eligibility, holds (`resumed_at` null or in the window) and the release-day check |
+| 6 | Decision: renewals by existing members counted as referral joins; one join could reward several links | Taken: only a student with no membership before the link was used counts, and only the first link a phone came through is rewarded |
+| 7 | Pay-later and lead scores read memberships, activities and chat messages unpaged (cut at 1,000) | Paged reads within each chunk |
+| 8 | Decision: the public chat could be flooded (new chats, staff notices, AI cost) | Taken: a hidden field for scripts, at most 3 new chats an hour from one place, the IP taken from the proxy's own `X-Forwarded-For` entry (one shared bucket when none), and the chat's own daily AI cap (`pssai_enquiry_ai_daily`, default 150; past it messages are kept for the team) |
+| 9 | Decision: win-back, dedupe and exam radar had no eval sets | Written: `tests/agents/winback-eval.md`, `dedupe-eval.md`, `exam-radar-eval.md` (20 cases each, pass bar 18) |
+| 10 | The referrer got "your grant_cashback request was not approved" for something they never asked | Labelled "referral reward"; a denied system-queued reward sends no notice, an approved one thanks the referrer; the deny box says the student is not told |
+| 11 | The IP hash could be reversed by trying every address | HMAC with the server secret and the date |
+| 12 | The exam radar read whole pages and followed redirects without robots checks | Reads at most 400 KB; redirects followed by hand (3 at most), https only, robots.txt checked on each site |
+| 13 | A crash after the release claim left it sold with no booking | The claim is put back on any failure before the booking exists |
+| 14 | With both switches off a live resale double-seated the member; open releases waited forever | Arrivals are handled whatever the switches say; the hourly job withdraws open releases whose switch is off |
+| 15 | "Back to automatic" for today left today at 0% | Today's automatic price is worked out at once |
+| 16 | Decision: the exam +5% applied at every branch | Taken: only where at least 10% of the branch's active members prepare for that exam family |
+| 17 | Decision: next-exam Send-list rows were dropped when the 08:00 collections job already had the student | Taken: that student waits a day, with no notice used up |
+| 18 | UI gaps | Free-text reply in the website chat panel; the Exam calendar tab (and the Growth link) shows with next-exam, win-back or yield pricing too; a switched-off referral link says so; the release page no longer promises a seat; the calendar counts current members |
+| 19 | Decision: seat credits are pending cashbacks, so closure pays them out like any cashback | **Left for the owner:** changing it would alter the money paths of `close_membership`/`delete_membership` (R1). Until then a D7 credit behaves like every other pending cashback |
+
+The golden master was re-recorded once: two seeded desks no longer gain an always-null `current_booking_id` key at checkout (the walk-in unlink is now conditional); on Postgres the column is null either way.
+
 ## Phase 3 exit gate
 
 - [ ] A measurable revenue gain at the pilot branch compared with the control branch over a full month

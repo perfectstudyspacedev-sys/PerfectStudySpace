@@ -59,9 +59,10 @@ export function handlers(): Record<string, Handler> {
         .gte("created_at", new Date(Date.now() - 400 * 86400e3).toISOString());
       if (status) q = q.eq("status", status);
       const { data } = await q.order("exam_date", { ascending: true }).limit(300);
-      // How many current or recent students each exam concerns (their "preparing for" text).
-      const students = await fetchAllRows<any>(() => db.from("students").select("id, course").not("course", "is", null).order("id"));
-      const families = students.map((s) => examFamily(s.course)).filter(Boolean) as string[];
+      // How many current members each exam concerns (their "preparing for" text).
+      const members = await fetchAllRows<any>(() => db.from("memberships").select("id, student_id, students(course)").eq("is_active", true).order("id"));
+      const seen = new Set<string>();
+      const families = members.filter((m) => !seen.has(m.student_id) && seen.add(m.student_id)).map((m) => examFamily(m.students?.course)).filter(Boolean) as string[];
       return json({
         on: await featureOn(db, "exam_radar"),
         notices: (data ?? []).map((n: any) => ({ ...n, label: familyLabel(n.exam_family) || n.exam_name, students: n.exam_family ? families.filter((f) => familiesMatch(f, n.exam_family)).length : 0 })),
@@ -148,6 +149,10 @@ export function handlers(): Record<string, Handler> {
         if (!ending && !justPassed) continue;
         const offer = await nextExamOffer(db, m.student_id);
         if (!offer?.plan) continue;
+        // The Send list holds one row per student a day: when the 08:00 collections job already
+        // has one, this student waits for tomorrow (no notice yet, so nothing is lost).
+        const { data: listed } = await db.from("send_list").select("id").eq("list_date", today).eq("student_id", m.student_id).limit(1);
+        if (listed?.length) continue;
         const when = offer.examDate ? ` (exam on ${offer.examDate})` : "";
         const sent = await notifyStudent(db, m.student_id, {
           kind: "next_exam", title: `Next: ${offer.nextLabel}${when}`,
@@ -175,13 +180,14 @@ export function handlers(): Record<string, Handler> {
       let scored = 0;
       for (let i = 0; i < ids.length; i += 200) {
         const part = ids.slice(i, i + 200);
-        const [{ data: mems }, { data: churn }] = await Promise.all([
-          db.from("memberships").select("student_id, is_active, fee_due, renewed_from_membership_id").in("student_id", part),
+        // Every membership row of these students, paged (renewals make one row per period).
+        const [mems, { data: churn }] = await Promise.all([
+          fetchAllRows<any>(() => db.from("memberships").select("id, student_id, is_active, fee_due, renewed_from_membership_id").in("student_id", part).order("id")),
           db.from("student_scores").select("student_id, score").eq("model", "churn").in("student_id", part),
         ]);
         const churnOf = new Map<string, number>((churn ?? []).map((c: any) => [c.student_id, Number(c.score)]));
         const rows = part.map((sid) => {
-          const list = (mems ?? []).filter((m: any) => m.student_id === sid);
+          const list = mems.filter((m: any) => m.student_id === sid);
           const past = list.filter((m: any) => !m.is_active);
           const r = paylaterRisk({
             pastPlans: past.length, pastUnpaid: past.filter((m: any) => Number(m.fee_due) > 0).length,

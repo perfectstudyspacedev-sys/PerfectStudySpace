@@ -45,13 +45,14 @@ export default function WalkInModal({ branchId, onClose, onDone }) {
   }, [])
 
   const hourOptions = Object.keys(fees).map(Number).sort((a, b) => a - b)
-  // PSS-AI Phase 3 (I3): with yield pricing on, every price shown comes from the server's quote,
-  // and the price shown is sent back, so a price that changed meanwhile is refused, not charged.
+  // PSS-AI Phase 3 (I3): every price shown comes from the server's quote (the fee_config price while
+  // yield pricing is off), and the price shown is sent back, so a price that changed meanwhile is
+  // refused, not charged. Quotes are asked for whatever the cached switches say (review fix).
   const flags = useFeatureFlags()
   const [quotes, setQuotes] = useState({})
   const [priceNote, setPriceNote] = useState(null)
   const loadQuotes = useCallback(() => {
-    if (!flags.yieldPricing || !branchId) { setQuotes({}); setPriceNote(null); return }
+    if (!branchId) { setQuotes({}); setPriceNote(null); return }
     Promise.all(hourOptions.map((h) => api('quote_walkin', { branchId, hours: h }).then((q) => [h, q]).catch(() => null)))
       .then((list) => {
         const ok = list.filter(Boolean)
@@ -60,7 +61,7 @@ export default function WalkInModal({ branchId, onClose, onDone }) {
         setPriceNote(q && q.pct ? `Today's walk-in prices: ${q.pct > 0 ? '+' : ''}${q.pct}%${q.reason ? ` — ${q.reason}` : ''}` : null)
       })
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [flags.yieldPricing, branchId, hourOptions.join(',')])
+  }, [branchId, hourOptions.join(',')])
   useEffect(() => { loadQuotes() }, [loadQuotes])
   const walkinFee = (h) => quotes[h] ?? fees[h] ?? 0
 
@@ -122,7 +123,7 @@ export default function WalkInModal({ branchId, onClose, onDone }) {
         branchId, name, phone, hours, paymentMode: paymentMode.mode,
         cashAmount: paymentMode.cashAmount, upiAmount: paymentMode.upiAmount,
         startTime: localTimeStrToISO(startTime),
-        ...(flags.yieldPricing && hours in quotes ? { expectedAmount: quotes[hours] } : {}),
+        ...(hours in quotes ? { expectedAmount: quotes[hours] } : {}),
         ...(releaseId ? { releaseId } : {}),
       })
       setReceipt(result.booking)
@@ -134,7 +135,7 @@ export default function WalkInModal({ branchId, onClose, onDone }) {
     } catch (err) {
       setError(err.message)
       // A price or a released desk that changed meanwhile: show the current ones.
-      if (/price is now|just sold|not available/.test(err.message)) { loadQuotes(); setReleaseId('') }
+      if (/price is now|walk-in price is|just sold|not available|no longer that member|booked in that cabin/.test(err.message)) { loadQuotes(); setReleaseId('') }
     } finally {
       setLoading(false)
     }

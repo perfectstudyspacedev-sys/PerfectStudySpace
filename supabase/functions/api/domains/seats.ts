@@ -9,6 +9,10 @@
 //    pending fixed cashback, which the existing renewal code applies.
 //  - A member who arrives during a resale gets the first free desk, or (predicted release, no free
 //    desk) one free day as a credit (C7). Arriving while an unsold release covers now cancels it.
+//  - Phase 3 review: a release belongs to a cabin and its member (desk + student), not to one
+//    membership row, so renewals keep it; a sale re-checks that the member still holds the cabin
+//    and nobody has it booked then; every arrival during a sold window is handled (not only the
+//    first), the free day is granted once; arrivals are handled whatever the switches say.
 // deno-lint-ignore-file no-explicit-any
 import type { Ctx, Handler } from "../registry.ts";
 import { err, json } from "../../_shared/http.ts";
@@ -31,6 +35,22 @@ const dayLabel = (iso: string) => new Date(Date.parse(iso) + 5.5 * 3600e3).toLoc
 async function sourcesOn(db: Ctx["db"]) {
   const [member, predicted] = await Promise.all([featureOn(db, "hour_release"), featureOn(db, "overbooking")]);
   return { member, predicted, any: member || predicted, list: [...(member ? ["member"] : []), ...(predicted ? ["predicted"] : [])] };
+}
+
+/** The member's continuous run on this cabin: the membership and the renewals it continued (same
+ * cabin, permanent), so a monthly renewal neither resets their history nor their plan's span. */
+export async function permanentSpan(db: Ctx["db"], mem: any): Promise<{ start: string; ids: string[] }> {
+  let start = mem.start_date as string;
+  const ids = [mem.id as string];
+  let prevId = mem.renewed_from_membership_id ?? null;
+  for (let i = 0; i < 36 && prevId; i++) {
+    const { data: p } = await db.from("memberships").select("id, start_date, category, desk_id, renewed_from_membership_id").eq("id", prevId).maybeSingle();
+    if (!p || p.category !== "permanent" || p.desk_id !== mem.desk_id) break;
+    ids.push(p.id);
+    if (p.start_date < start) start = p.start_date;
+    prevId = p.renewed_from_membership_id;
+  }
+  return { start, ids };
 }
 
 /** Pending fixed cashback for a member's credit (the existing renewal code applies it). */
@@ -59,10 +79,26 @@ export async function claimRelease(ctx: Ctx, releaseId: unknown, branchId: strin
   if (Date.parse(startIso) < Date.parse(rel.starts_at) - 60e3 || Date.parse(endIso) > Date.parse(rel.ends_at) + 60e3) {
     return { error: `That desk is free only ${hm(rel.starts_at)}–${hm(rel.ends_at)} — choose fewer hours or another desk` };
   }
+  // The cabin must still be this member's (a closed, moved or downgraded membership leaves its
+  // releases behind), and nobody may have it booked for these hours (the member, or another sale).
+  if (!(await stillTheirCabin(db, rel))) {
+    await db.from("seat_releases").update({ status: "cancelled", closed_at: new Date().toISOString() }).eq("id", rel.id).eq("status", "open");
+    return { error: "That cabin is no longer that member's — choose another desk" };
+  }
+  const { data: busy } = await db.from("bookings").select("id").eq("desk_id", rel.desk_id).eq("status", "active")
+    .lt("start_time", endIso).gt("end_time", startIso).limit(1);
+  if (busy?.length) return { error: "Someone is booked in that cabin for those hours — choose another desk" };
   const { data: claimed } = await db.from("seat_releases").update({ status: "sold", closed_at: new Date().toISOString() })
     .eq("id", rel.id).eq("status", "open").select("id");
   if (!claimed?.length) return { error: "Those hours were just sold — choose another desk" };
   return { release: rel };
+}
+
+/** Whether a release's member still holds its cabin: an active permanent membership on that desk. */
+async function stillTheirCabin(db: Ctx["db"], rel: { student_id: string; desk_id: string }) {
+  const { data } = await db.from("memberships").select("id").eq("student_id", rel.student_id).eq("desk_id", rel.desk_id)
+    .eq("is_active", true).eq("category", "permanent").eq("is_paused", false).limit(1);
+  return !!data?.length;
 }
 
 /** Step 1 failed after the claim (the booking could not be written): put the release back. */
@@ -98,38 +134,56 @@ export async function recordResale(ctx: Ctx, rel: any, booking: { id: string; st
 
 /**
  * check_in_member, for a permanent member at their own desk: cancel their open releases that
- * cover now (they are here), and if their cabin is being used by a resale right now, give them
- * the first free desk — or, for a predicted release with no free desk, one free day (C7).
- * Returns the desk to use instead (null = no desk) and what happened, or null when nothing applies.
+ * cover now (they are here). If a walk-in's sold hours on the cabin overlap the member's session
+ * and have not ended, the member gets the first free desk — or, for a predicted release with no
+ * free desk, one free day as a credit (C7, granted once however often they come in). A walk-in
+ * whose sold hours are over is the one overstaying: the member keeps the cabin. Handled whatever
+ * the switches say, so switching them off never double-seats a cabin already sold.
+ * Returns the desk to use (null = no desk) and what happened, or null when nothing applies.
  */
-export async function memberArrives(ctx: Ctx, membership: any, desk: any): Promise<null | { desk: any | null; collision: { kind: string; credit: number; message: string } | null }> {
+export async function memberArrives(ctx: Ctx, membership: any, desk: any, sessionEndIso?: string): Promise<null | { desk: any | null; collision: { kind: string; credit: number; message: string } | null }> {
   const { db } = ctx;
-  const on = await sourcesOn(db);
-  if (!on.any || !desk) return null;
-  const now = new Date().toISOString();
+  if (!desk) return null;
+  const nowMs = Date.now();
+  const now = new Date(nowMs).toISOString();
   await db.from("seat_releases").update({ status: "cancelled", closed_at: now })
-    .eq("membership_id", membership.id).eq("status", "open").lte("starts_at", now).gt("ends_at", now);
-  if (!desk.current_booking_id) return null;
-  const { data: resale } = await db.from("seat_resales").select("id, release_id, booking_id, seat_releases!release_id(source)")
-    .eq("booking_id", desk.current_booking_id).is("collision", null).maybeSingle();
-  if (!resale) return null;
-  const { data: walkin } = await db.from("bookings").select("id, status").eq("id", resale.booking_id).maybeSingle();
-  if (walkin?.status !== "active") return null;
-  const source = (resale as any).seat_releases?.source ?? "predicted";
-  const { data: free } = await db.from("desks").select("*").eq("branch_id", membership.branch_id).eq("status", "free").order("sort_order").order("label").limit(1);
-  if (free?.length) {
-    await db.from("seat_resales").update({ collision: "fallback_desk", collision_at: now }).eq("id", resale.id);
-    return { desk: free[0], collision: { kind: "fallback_desk", credit: 0, message: `Their cabin is in use by a walk-in until later today — seat them at ${free[0].label}.` } };
+    .eq("desk_id", desk.id).eq("student_id", membership.student_id).eq("status", "open").lte("starts_at", now).gt("ends_at", now);
+  const { data: sales } = await db.from("seat_resales").select("id, collision, booking_id, seat_releases!release_id(source), bookings!booking_id(status, start_time, end_time)")
+    .eq("desk_id", desk.id).gte("created_at", new Date(nowMs - (RELEASE_AHEAD_DAYS + 1) * 86400e3).toISOString()).limit(100);
+  const live = (sales ?? []).filter((r: any) => r.bookings?.status === "active");
+  if (!live.length) return null;
+  const memberEnd = Date.parse(sessionEndIso ?? now);
+  const clash: any = live.find((r: any) => Date.parse(r.bookings.start_time) < memberEnd && Date.parse(r.bookings.end_time) > nowMs);
+  if (!clash) {
+    // Only walk-ins whose sold hours are over (still not checked out), or sold for later than this session.
+    if (!live.some((r: any) => Date.parse(r.bookings.end_time) <= nowMs)) return null;
+    return { desk, collision: { kind: "walkin_overstay", credit: 0, message: "A walk-in sold hours in this cabin is past their time — please move them; the member keeps the cabin." } };
   }
-  if (source === "predicted") {
+  const source = clash.seat_releases?.source ?? "predicted";
+  const { data: free } = await db.from("desks").select("*").eq("branch_id", membership.branch_id).eq("status", "free").neq("id", desk.id).order("sort_order").order("label").limit(1);
+  const outcome = free?.length ? "fallback_desk" : source === "predicted" ? "free_day" : "no_desk";
+  // The first arrival records what happened; a later one (a second session) is seated the same way.
+  const claim = async () => {
+    if (clash.collision) return false;
+    const { data } = await db.from("seat_resales").update({ collision: outcome, collision_at: now }).eq("id", clash.id).is("collision", null).select("id");
+    return !!data?.length;
+  };
+  const until = hm(clash.bookings.end_time);
+  if (outcome === "fallback_desk") {
+    await claim();
+    return { desk: free![0], collision: { kind: "fallback_desk", credit: 0, message: `Their cabin is in use by a walk-in until ${until} — seat them at ${free![0].label}.` } };
+  }
+  if (outcome === "free_day") {
+    const won = await claim();
+    if (!won) return { desk: null, collision: { kind: "free_day", credit: 0, message: `Their cabin is in use until ${until} and no desk is free; their free day was already given — offer the next free desk.` } };
     const credit = freeDayCredit(membership);
     const cashbackId = await grantCredit(db, membership.student_id, membership.branch_id, credit, "One free day: your cabin was in use when you arrived");
-    await db.from("seat_resales").update({ collision: "free_day", collision_at: now, collision_cashback_id: cashbackId }).eq("id", resale.id);
-    await notifyStudent(db, membership.student_id, { kind: "free_day", title: `Sorry — ₹${credit} credit (one free day)`, body: "Your cabin was in use when you arrived. The credit comes off your next renewal.", actionUrl: "/me/release", dedupeKey: `free-day:${resale.id}` });
-    return { desk: null, collision: { kind: "free_day", credit, message: `Their cabin is in use and no desk is free — they get one free day (₹${credit} credit), already added.` } };
+    await db.from("seat_resales").update({ collision_cashback_id: cashbackId }).eq("id", clash.id);
+    await notifyStudent(db, membership.student_id, { kind: "free_day", title: `Sorry — ₹${credit} credit (one free day)`, body: "Your cabin was in use when you arrived. The credit comes off your next renewal.", actionUrl: "/me/release", dedupeKey: `free-day:${clash.id}` });
+    return { desk: null, collision: { kind: "free_day", credit, message: `Their cabin is in use until ${until} and no desk is free — they get one free day (₹${credit} credit), already added.` } };
   }
-  await db.from("seat_resales").update({ collision: "no_desk", collision_at: now }).eq("id", resale.id);
-  return { desk: null, collision: { kind: "no_desk", credit: 0, message: "They released these hours and the cabin is in use; no desk is free — offer the next free one." } };
+  await claim();
+  return { desk: null, collision: { kind: "no_desk", credit: 0, message: `They released these hours and the cabin is in use until ${until}; no desk is free — offer the next free one.` } };
 }
 
 export function handlers(): Record<string, Handler> {
@@ -145,17 +199,18 @@ export function handlers(): Record<string, Handler> {
       const today = todayISO();
       const date = payload.date;
       if (!isISODate(date) || date < today || date > addDays(today, RELEASE_AHEAD_DAYS)) return err(`Choose a day from today to ${RELEASE_AHEAD_DAYS} days ahead`);
-      if (date > mem.end_date || date < mem.start_date) return err("That day is outside your plan");
+      // An early renewal starts later; the plan it continues still covers the days before it.
+      if (date > mem.end_date || date < (await permanentSpan(db, mem)).start) return err("That day is outside your plan");
       const from = Number(payload.fromHour), to = Number(payload.toHour);
       if (!Number.isInteger(from) || !Number.isInteger(to) || from < OPEN_HOUR || to > CLOSE_HOUR || to - from < MIN_WINDOW_HOURS) {
         return err(`Choose whole hours between ${OPEN_HOUR}:00 and ${CLOSE_HOUR}:00, at least ${MIN_WINDOW_HOURS} hours`);
       }
       const startsAt = istHour(date, from), endsAt = istHour(date, to);
       if (Date.parse(startsAt) < Date.now()) return err("Choose hours that have not started yet");
-      const { data: clash } = await db.from("seat_releases").select("id").eq("membership_id", mem.id).in("status", ["open", "sold"])
+      const { data: clash } = await db.from("seat_releases").select("id").eq("desk_id", mem.desk_id).eq("student_id", s.id).in("status", ["open", "sold"])
         .lt("starts_at", endsAt).gt("ends_at", startsAt).limit(1);
       if (clash?.length) return err("You have already released some of those hours");
-      const { count } = await db.from("seat_releases").select("*", { count: "exact", head: true }).eq("membership_id", mem.id).eq("status", "open").eq("source", "member");
+      const { count } = await db.from("seat_releases").select("*", { count: "exact", head: true }).eq("student_id", s.id).eq("status", "open").eq("source", "member");
       if ((count ?? 0) >= MAX_OPEN_RELEASES) return err("You have many releases waiting already");
       const { data, error } = await db.from("seat_releases").insert({
         membership_id: mem.id, student_id: s.id, branch_id: mem.branch_id, desk_id: mem.desk_id, starts_at: startsAt, ends_at: endsAt, source: "member",
@@ -202,12 +257,20 @@ export function handlers(): Record<string, Handler> {
       const hours = Number(payload.hours) > 0 ? Number(payload.hours) : 1;
       if (!Number.isFinite(start)) return err("Invalid start time");
       const end = start + hours * 3600e3;
-      const { data } = await db.from("seat_releases").select("id, starts_at, ends_at, source, probability, desks(label, current_booking_id)")
+      const { data } = await db.from("seat_releases").select("id, student_id, desk_id, starts_at, ends_at, source, probability, desks(label, current_booking_id)")
         .eq("branch_id", branchId).eq("status", "open").in("source", on.list)
         .lte("starts_at", new Date(start + 60e3).toISOString()).gte("ends_at", new Date(end - 60e3).toISOString()).order("starts_at").limit(50);
+      // The same checks the sale makes: still the member's cabin, and nobody booked in it then.
+      const sellable: any[] = [];
+      for (const r of data ?? []) {
+        if (!(await stillTheirCabin(db, r))) continue;
+        const { data: busy } = await db.from("bookings").select("id").eq("desk_id", r.desk_id).eq("status", "active")
+          .lt("start_time", new Date(end).toISOString()).gt("end_time", new Date(start).toISOString()).limit(1);
+        if (!busy?.length) sellable.push(r);
+      }
       return json({
         on: true,
-        desks: (data ?? []).filter((r: any) => !r.desks?.current_booking_id).map((r: any) => ({
+        desks: sellable.map((r: any) => ({
           releaseId: r.id, deskLabel: r.desks?.label ?? "?", from: r.starts_at, to: r.ends_at, source: r.source,
           probability: r.probability == null ? null : Number(r.probability),
         })),
@@ -241,15 +304,20 @@ export function handlers(): Record<string, Handler> {
       const nowIso = new Date().toISOString();
       // Releases whose time has passed unsold are closed (whatever the switches say).
       const { data: expired } = await db.from("seat_releases").update({ status: "expired", closed_at: nowIso }).eq("status", "open").lte("ends_at", nowIso).select("id");
-      if (!(await featureOn(db, "overbooking"))) return json({ skipped: "pssai_overbooking is off", expired: expired?.length ?? 0 });
+      // A switch turned off withdraws what its source still has on sale.
+      const on = await sourcesOn(db);
+      for (const source of ["member", "predicted"]) {
+        if (!on.list.includes(source)) await db.from("seat_releases").update({ status: "cancelled", closed_at: nowIso }).eq("status", "open").eq("source", source);
+      }
+      if (!on.predicted) return json({ skipped: "pssai_overbooking is off", expired: expired?.length ?? 0 });
       const today = todayISO();
       const { hour } = istParts(Date.now());
       const fromHour = Math.max(OPEN_HOUR, hour + 1);
       if (CLOSE_HOUR - fromHour < MIN_WINDOW_HOURS) return json({ ok: true, offered: 0, expired: expired?.length ?? 0 });
       const members = await fetchAllRows<any>(() => db.from("memberships")
-        .select("id, student_id, branch_id, desk_id, start_date, end_date, is_paused, category")
+        .select("id, student_id, branch_id, desk_id, start_date, end_date, is_paused, category, renewed_from_membership_id")
         .eq("is_active", true).eq("category", "permanent").eq("is_paused", false).not("desk_id", "is", null)
-        .lte("start_date", addDays(today, -MIN_HISTORY_DAYS)).gte("end_date", today).order("id"));
+        .gte("end_date", today).order("id"));
       if (!members.length) return json({ ok: true, offered: 0, expired: expired?.length ?? 0 });
       const since = new Date(Date.parse(istDayStart(addDays(today, -HISTORY_DAYS)))).toISOString();
       const days = Array.from({ length: HISTORY_DAYS }, (_, i) => addDays(today, -HISTORY_DAYS + i));
@@ -257,14 +325,19 @@ export function handlers(): Record<string, Handler> {
       for (const m of members) {
         // Already in today, or already releasing something today: leave them alone.
         const { data: todays } = await db.from("bookings").select("id").eq("student_id", m.student_id).gte("start_time", istDayStart(today)).limit(1);
-        const { data: hasRel } = await db.from("seat_releases").select("id").eq("membership_id", m.id).in("status", ["open", "sold"]).gte("ends_at", nowIso).lte("starts_at", istHour(today, CLOSE_HOUR)).limit(1);
+        const { data: hasRel } = await db.from("seat_releases").select("id").eq("desk_id", m.desk_id).eq("student_id", m.student_id).in("status", ["open", "sold"]).gte("ends_at", nowIso).lte("starts_at", istHour(today, CLOSE_HOUR)).limit(1);
         if (todays?.length || hasRel?.length) { skipped++; continue; }
+        // History across renewals on this cabin, not just the current membership row.
+        const span = await permanentSpan(db, m);
+        if (span.start > addDays(today, -MIN_HISTORY_DAYS)) { skipped++; continue; }
         const { data: hist } = await db.from("bookings").select("start_time, end_time").eq("student_id", m.student_id).neq("status", "cancelled").gte("start_time", since).limit(500);
-        const { data: holds } = await db.from("membership_holds").select("paused_at, resumed_at").eq("membership_id", m.id).gte("paused_at", since);
+        // Holds that overlap the window, including one that began before it and is still on.
+        const { data: holds } = await db.from("membership_holds").select("paused_at, resumed_at").in("membership_id", span.ids)
+          .or(`resumed_at.is.null,resumed_at.gte.${since}`);
         // Days on hold are left out: the member wasn't expected then.
         const away = new Set<string>();
         for (const h of holds ?? []) for (const d of days) if (d >= istParts(h.paused_at).date && (!h.resumed_at || d <= istParts(h.resumed_at).date)) away.add(d);
-        const usable = days.filter((d) => !away.has(d) && d >= m.start_date);
+        const usable = days.filter((d) => !away.has(d) && d >= span.start);
         if (usable.length < MIN_HISTORY_DAYS) { skipped++; continue; }
         const usage = hourlyUsage((hist ?? []).map((b: any) => ({ start: Date.parse(b.start_time), end: Date.parse(b.end_time ?? b.start_time) })), usable);
         const win = predictWindow(usage, fromHour, CLOSE_HOUR);

@@ -34,7 +34,7 @@ export function PortalRelease() {
     <>
       <div className="card">
         <h2 style={{ marginTop: 0 }}>Not coming in?</h2>
-        <p style={{ color: 'var(--text-muted)', fontSize: '0.9rem' }}>Release your cabin's hours. If a walk-in uses it, you get half of what they pay as credit on your next renewal. Your cabin stays yours — come in anyway and you'll be seated.</p>
+        <p style={{ color: 'var(--text-muted)', fontSize: '0.9rem' }}>Release your cabin's hours. If a walk-in uses it, you get half of what they pay as credit on your next renewal. Your cabin stays yours — if you come in anyway, we'll seat you at another desk when one is free.</p>
         <form onSubmit={release} style={{ display: 'grid', gap: '0.6rem' }}>
           <label>Day <input type="date" value={form.date} min={today} max={addDaysISO(today, data.hours.aheadDays)} onChange={(e) => setForm({ ...form, date: e.target.value })} /></label>
           <div style={{ display: 'flex', gap: '0.5rem' }}>
@@ -105,7 +105,9 @@ export function PortalRefer() {
   }
   return (
     <>
-      {ref.on ? (
+      {ref.on && ref.active === false ? (
+        <div className="card"><p>Your referral link is switched off for now — please ask the desk.</p></div>
+      ) : ref.on ? (
         <div className="card">
           <h2 style={{ marginTop: 0 }}>Bring a friend</h2>
           <p className="mono" style={{ wordBreak: 'break-all' }}>{ref.url}</p>

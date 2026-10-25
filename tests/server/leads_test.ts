@@ -118,8 +118,22 @@ await setup();
   for (let i = 0; i < 20; i++) insert("enquiry_chat_messages", { chat_id: rows("enquiry_chats")[0].id, role: "visitor", body: "x", status: "sent", created_at: new Date().toISOString() });
   const capped = await send({ chatKey: first.chatKey, message: "one more" });
   check(capped.status === 429, "C5: at most 20 messages per chat per day", capped);
-  const req = new Request("http://x", { headers: { "cf-connecting-ip": "1.2.3.4" } });
-  void req;
+
+  // Phase 3 review 8: a hidden field only scripts fill; a few new chats an hour from one place;
+  // the chat's own daily AI cap.
+  const before = rows("enquiry_chat_messages").length;
+  const bot = await send({ branchId: b1.id, name: "Bot Bot", phone: "9300000099", consent: true, message: "hello", website: "http://spam.example" });
+  check(bot.pending === true && rows("enquiry_chat_messages").length === before && rows("enquiries").length === 1, "C6: a form that fills the hidden field is told all is well, and nothing is stored");
+  setSetting("pssai_enquiry_ai_daily", "0");
+  const asked = fakeAi.requests.length;
+  advanceClock(60e3);
+  const second = await send({ branchId: b1.id, name: "Meera K", phone: "9300000002", consent: true, message: "Timings?" });
+  check(second.pending === true && fakeAi.requests.length === asked && rows("enquiries").length === 2, "C8: past the chat's daily AI cap the message is kept for the team and no AI is called", second);
+  advanceClock(60e3);
+  const third = await send({ branchId: b1.id, name: "Nila S", phone: "9300000003", consent: true, message: "Fees?" });
+  advanceClock(60e3);
+  const fourth = await send({ branchId: b1.id, name: "Oviya R", phone: "9300000004", consent: true, message: "Seats?" });
+  check(third.status === 200 && fourth.status === 429 && rows("enquiries").length === 3, "C7: a fourth new chat within an hour from the same place is refused", fourth.error);
 }
 
 // ── AI follow-up drafts for enquiries ──
@@ -183,6 +197,26 @@ await setup();
   check(ok.status === 200 && cbs.cashbacks.length === 1 && cbs.pendingFixed === 100 && /Divya/.test(cbs.cashbacks[0].note), "R5: approved, Arun sees the ₹100 cashback in the portal", cbs);
   const dup = await run("cron_referral_conversions");
   check(dup.converted === 0 && rows("approvals").filter((a) => a.action === "grant_cashback").length === 1, "R5: the nightly job never rewards the same friend twice");
+  check(rows("portal_notifications").some((n) => n.student_id === st.id && n.kind === "cashback" && /next renewal/.test(n.body)), "R5 (review 10): the referrer is thanked when the owner approves");
+
+  // Phase 3 review 6: a renewal by someone who was already a member is not a join; one join rewards one link.
+  const old = insert("students", { name: "Old Member", phone: "9400000005", branch_id: b1.id, status: "active" });
+  insert("memberships", { student_id: old.id, branch_id: b1.id, category: "temporary", start_date: addDays(TODAY, -40), end_date: addDays(TODAY, -10), is_active: false, created_at: new Date(Date.now() - 40 * 86400e3).toISOString() });
+  await call("public_signup_submit", { code: "hopes0000002", ref: fcode, name: "Old Member", phone: "9400000005", emergencyContact: "9400000006", referralSource: "" });
+  insert("memberships", { student_id: old.id, branch_id: b1.id, category: "temporary", start_date: TODAY, end_date: addDays(TODAY, 29), is_active: true, created_at: new Date(Date.now() + 60e3).toISOString() });
+  const second = insert("referral_links", { code: "zzzz9999", channel: "friend", branch_id: b1.id, referrer_student_id: friend.id, is_active: true });
+  insert("referral_attributions", { link_id: second.id, branch_id: b1.id, phone: "9400000004", kind: "signup", created_at: new Date(Date.now() - 3600e3).toISOString() });
+  await call("public_signup_submit", { code: "hopes0000002", ref: fcode, name: "Hari Ram", phone: "9400000004", emergencyContact: "9400000006", referralSource: "" });
+  const hari = insert("students", { name: "Hari Ram", phone: "9400000004", branch_id: b1.id, status: "active" });
+  insert("memberships", { student_id: hari.id, branch_id: b1.id, category: "temporary", start_date: TODAY, end_date: addDays(TODAY, 29), is_active: true, created_at: new Date(Date.now() + 60e3).toISOString() });
+  await run("cron_referral_conversions");
+  const rewards = rows("approvals").filter((a) => a.action === "grant_cashback");
+  check(rewards.length === 2 && !rewards.some((a) => /Old/.test(a.payload.notes)) && rewards.filter((a) => /Hari/.test(a.payload.notes)).length === 1 && rewards.find((a) => /Hari/.test(a.payload.notes)).student_id === friend.id,
+    "R6 (review 6): a returning member's renewal earns no reward; a phone that came through two links rewards only the first", rewards.map((a) => [a.student_id === friend.id ? "Divya" : "Arun", a.payload.notes]));
+  const hariReward = rewards.find((a) => /Hari/.test(a.payload.notes));
+  const notesBefore = rows("portal_notifications").filter((n) => n.student_id === friend.id).length;
+  await call("decide_approval", { approvalId: hariReward.id, decision: "deny", reason: "Same family" }, tO);
+  check(rows("portal_notifications").filter((n) => n.student_id === friend.id).length === notesBefore, "R7 (review 10): denying a reward the system queued tells the referrer nothing (they never asked)");
 }
 
 done();

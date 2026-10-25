@@ -10,11 +10,13 @@ import { isOwnerOrAdmin, requireBranch } from "../../_shared/auth.ts";
 import { featureOn } from "../../_shared/flags.ts";
 import { addDays, istDayEnd, istDayStart, todayISO } from "../../_shared/dates.ts";
 import { EXAM_WINDOW_DAYS, peakConcurrency, yieldChange, yieldLimits, yieldPrice } from "../../_shared/yield.ts";
-import { familyLabel } from "../../_shared/exams.ts";
-import { getWalkinFee, isISODate } from "../lib.ts";
+import { examFamily, familiesMatch, familyLabel } from "../../_shared/exams.ts";
+import { fetchAllRows, getWalkinFee, isISODate } from "../lib.ts";
 
 const LOOKBACK_WEEKS = 4;
 const AHEAD_DAYS = 14;
+// Phase 3 review: an exam lifts a branch's price only if at least this share of its members prepare for it.
+const EXAM_SHARE = 0.1;
 
 async function limits(db: Ctx["db"]) {
   const { data } = await db.from("app_settings").select("key, value").in("key", ["yield_floor_pct", "yield_ceiling_pct"]);
@@ -47,12 +49,27 @@ export async function forecastOccupancy(db: Ctx["db"], branchId: string, date: s
   return Math.min(1, peaks.reduce((a, b) => a + b, 0) / peaks.length / desks);
 }
 
-/** A confirmed exam within EXAM_WINDOW_DAYS of the date, as words for the reason, or null. */
-async function examSoon(db: Ctx["db"], date: string): Promise<string | null> {
+/** A confirmed exam within EXAM_WINDOW_DAYS of the date that at least EXAM_SHARE of the branch's
+ * active members prepare for (their "preparing for" text), as words for the reason, or null. */
+async function examSoon(db: Ctx["db"], date: string, branchId: string): Promise<string | null> {
   const { data } = await db.from("exam_notices").select("exam_name, exam_family, exam_date").eq("status", "confirmed")
-    .gte("exam_date", date).lte("exam_date", addDays(date, EXAM_WINDOW_DAYS)).order("exam_date").limit(1);
-  const e = data?.[0];
+    .gte("exam_date", date).lte("exam_date", addDays(date, EXAM_WINDOW_DAYS)).not("exam_family", "is", null).order("exam_date").limit(20);
+  if (!data?.length) return null;
+  const members = await fetchAllRows<any>(() => db.from("memberships").select("id, students(course)").eq("branch_id", branchId).eq("is_active", true).order("id"));
+  if (!members.length) return null;
+  const families = members.map((m) => examFamily(m.students?.course)).filter(Boolean) as string[];
+  const e = data.find((n: any) => families.filter((f) => familiesMatch(f, n.exam_family)).length / members.length >= EXAM_SHARE);
   return e ? `${familyLabel(e.exam_family) || e.exam_name} on ${e.exam_date}` : null;
+}
+
+/** The automatic price row for a branch and day. */
+async function autoRow(db: Ctx["db"], branchId: string, date: string, lim: { floor: number; ceiling: number }) {
+  const [occupancy, exam] = await Promise.all([forecastOccupancy(db, branchId, date), examSoon(db, date, branchId)]);
+  const { pct, reason } = yieldChange(occupancy, exam, lim);
+  return {
+    branch_id: branchId, price_date: date, change_pct: pct, occupancy: occupancy === null ? null : Math.round(occupancy * 10000) / 10000,
+    reason, source: "auto", set_by_staff_id: null, computed_at: new Date().toISOString(),
+  };
 }
 
 export function handlers(): Record<string, Handler> {
@@ -92,8 +109,12 @@ export function handlers(): Record<string, Handler> {
       const today = todayISO();
       if (!isISODate(date) || date < today || date > addDays(today, AHEAD_DAYS)) return err(`Pick a day from today to ${AHEAD_DAYS} days ahead`);
       if (payload.changePct === null) {
-        // Back to the automatic price (the nightly job writes it).
+        // Back to the automatic price: worked out now for today (the nightly job has already run);
+        // a later day gets it from the nightly job on that day.
         await db.from("walkin_price_days").delete().eq("branch_id", branchId).eq("price_date", date).eq("source", "owner");
+        if (date === today && (await featureOn(db, "yield_pricing"))) {
+          await db.from("walkin_price_days").upsert(await autoRow(db, branchId, date, await limits(db)), { onConflict: "branch_id,price_date" });
+        }
         return json({ ok: true, cleared: true });
       }
       const pct = Number(payload.changePct);
@@ -113,19 +134,14 @@ export function handlers(): Record<string, Handler> {
       const { db } = ctx;
       if (!(await featureOn(db, "yield_pricing"))) return json({ skipped: "pssai_yield_pricing is off" });
       const date = todayISO();
-      const [{ data: branches }, lim, exam] = await Promise.all([
-        db.from("branches").select("id").eq("is_active", true), limits(db), examSoon(db, date),
+      const [{ data: branches }, lim] = await Promise.all([
+        db.from("branches").select("id").eq("is_active", true), limits(db),
       ]);
       let written = 0, kept = 0;
       for (const b of branches ?? []) {
         const { data: existing } = await db.from("walkin_price_days").select("source").eq("branch_id", b.id).eq("price_date", date).maybeSingle();
         if (existing?.source === "owner") { kept++; continue; }
-        const occupancy = await forecastOccupancy(db, b.id, date);
-        const { pct, reason } = yieldChange(occupancy, exam, lim);
-        const { error } = await db.from("walkin_price_days").upsert({
-          branch_id: b.id, price_date: date, change_pct: pct, occupancy: occupancy === null ? null : Math.round(occupancy * 10000) / 10000,
-          reason, source: "auto", set_by_staff_id: null, computed_at: new Date().toISOString(),
-        }, { onConflict: "branch_id,price_date" });
+        const { error } = await db.from("walkin_price_days").upsert(await autoRow(db, b.id, date, lim), { onConflict: "branch_id,price_date" });
         if (!error) written++;
       }
       return json({ ok: true, date, written, keptOwnerPrices: kept });

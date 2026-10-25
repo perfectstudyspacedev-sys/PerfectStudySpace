@@ -388,7 +388,7 @@ export default function Shell() {
           {isOwner && (flags.portal || flags.upiPay || flags.exceptionDesk || flags.referralLinks) && <NavLink to="/approvals">Approvals</NavLink>}
           {flags.portal && <NavLink to="/chat-replies">Chat replies</NavLink>}
           {isOwner && (flags.collections || flags.winback || flags.nextExam) && <NavLink to="/send-list">Send list</NavLink>}
-          {isOwner && (flags.yieldPricing || flags.hourRelease || flags.overbooking || flags.referralLinks || flags.examRadar) && <NavLink to="/growth">Growth</NavLink>}
+          {isOwner && (flags.yieldPricing || flags.hourRelease || flags.overbooking || flags.referralLinks || flags.examRadar || flags.nextExam || flags.winback) && <NavLink to="/growth">Growth</NavLink>}
           {isOwner && (
             <>
               <NavLink to="/settings/branches">Branches</NavLink>

@@ -23,15 +23,50 @@ const SCHEMA = {
   } } } },
 };
 
+const MAX_REDIRECTS = 3;
+
+/** The body, reading no more than `max` bytes (a huge page is never held in memory whole). */
+async function readCapped(res: Response, max: number): Promise<Uint8Array> {
+  const reader = res.body?.getReader();
+  if (!reader) return new Uint8Array();
+  const parts: Uint8Array[] = [];
+  let size = 0;
+  while (size < max) {
+    const { done, value } = await reader.read();
+    if (done || !value) break;
+    parts.push(value);
+    size += value.length;
+  }
+  await reader.cancel().catch(() => {});
+  const out = new Uint8Array(Math.min(size, max));
+  let at = 0;
+  for (const p of parts) { const take = p.slice(0, out.length - at); out.set(take, at); at += take.length; if (at >= out.length) break; }
+  return out;
+}
+
+async function robotsOk(fetchImpl: typeof fetch, u: URL) {
+  const robots = await fetchImpl(`${u.origin}/robots.txt`, { headers: { "user-agent": USER_AGENT }, signal: AbortSignal.timeout(TIMEOUT_MS) }).catch(() => null);
+  return !(robots?.ok && !robotsAllows(await robots.text(), u.pathname));
+}
+
 async function fetchText(fetchImpl: typeof fetch, url: string): Promise<{ text: string } | { error: string }> {
   try {
-    const u = new URL(url);
-    const robots = await fetchImpl(`${u.origin}/robots.txt`, { headers: { "user-agent": USER_AGENT }, signal: AbortSignal.timeout(TIMEOUT_MS) }).catch(() => null);
-    if (robots?.ok && !robotsAllows(await robots.text(), u.pathname)) return { error: "the site's robots.txt does not allow reading this page" };
-    const res = await fetchImpl(url, { headers: { "user-agent": USER_AGENT, accept: "text/html" }, signal: AbortSignal.timeout(TIMEOUT_MS), redirect: "follow" });
-    if (!res.ok) return { error: `the page answered HTTP ${res.status}` };
-    const buf = new Uint8Array(await res.arrayBuffer());
-    const text = pageText(new TextDecoder().decode(buf.slice(0, MAX_BYTES)));
+    // Redirects are followed by hand, a few at most, each only to https and only where that
+    // site's robots.txt allows it (Phase 3 review).
+    let u = new URL(url);
+    let res: Response | null = null;
+    for (let hop = 0; hop <= MAX_REDIRECTS; hop++) {
+      if (u.protocol !== "https:") return { error: "the page moved to an address that is not https" };
+      if (!(await robotsOk(fetchImpl, u))) return { error: "the site's robots.txt does not allow reading this page" };
+      res = await fetchImpl(u.href, { headers: { "user-agent": USER_AGENT, accept: "text/html" }, signal: AbortSignal.timeout(TIMEOUT_MS), redirect: "manual" });
+      const to = res.status >= 300 && res.status < 400 ? res.headers.get("location") : null;
+      if (!to) break;
+      await res.body?.cancel().catch(() => {});
+      if (hop === MAX_REDIRECTS) return { error: "the page redirects too many times" };
+      u = new URL(to, u);
+    }
+    if (!res || !res.ok) return { error: `the page answered HTTP ${res?.status ?? "?"}` };
+    const text = pageText(new TextDecoder().decode(await readCapped(res, MAX_BYTES)));
     if (text.length < 200) return { error: "the page has almost no text (it may need a browser to show)" };
     return { text };
   } catch (e) {

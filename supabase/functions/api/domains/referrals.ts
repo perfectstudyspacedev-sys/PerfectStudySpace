@@ -119,6 +119,13 @@ export function handlers(): Record<string, Handler> {
       for (const a of open) {
         const { data: s } = await db.from("students").select("id, name").eq("phone", a.phone).maybeSingle();
         if (!s) continue;
+        // Phase 3 review: only a new joiner counts — someone who was already a member before the
+        // link was used is renewing, not joining — and one join rewards one link: the first this
+        // phone came through.
+        const { data: before } = await db.from("memberships").select("id").eq("student_id", s.id).lt("created_at", a.created_at).limit(1);
+        if (before?.length) continue;
+        const { data: first } = await db.from("referral_attributions").select("id").eq("phone", a.phone).order("created_at").order("id").limit(1);
+        if (first?.[0]?.id !== a.id) continue;
         const { data: mem } = await db.from("memberships").select("id, created_at").eq("student_id", s.id).gte("created_at", a.created_at).order("created_at").limit(1);
         if (!mem?.length) continue;
         const { data: done } = await db.from("referral_attributions").update({ converted_student_id: s.id, converted_at: mem[0].created_at })

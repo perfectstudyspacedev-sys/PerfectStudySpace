@@ -22,6 +22,8 @@ const REQUEST_KINDS = ["plan_change", "refund", "privacy_download", "privacy_del
 const KIND_LABEL: Record<string, string> = {
   hold: "hold", plan_change: "plan change", refund: "refund", privacy_download: "copy of your data",
   privacy_delete: "deletion of your data", waitlist_accept: "permanent seat",
+  // Queued by the referral job (requested_by_type 'system'), not asked for by the student.
+  grant_cashback: "referral reward",
 };
 
 const me = (ctx: Ctx) => ctx.student!;
@@ -150,7 +152,8 @@ export function handlers(): Record<string, Handler> {
       if (decision === "deny") {
         await setRequest("denied");
         if (a.action === "waitlist_accept" && a.payload?.waitlistId) await db.from("permanent_waitlist").update({ offer_status: "declined" }).eq("id", a.payload.waitlistId);
-        if (a.student_id) await notifyStudent(db, a.student_id, { kind: "request_denied", title: `Your ${label} request was not approved`, body: reason, dedupeKey: `approval:${a.id}` });
+        // Something the system queued (a referral reward) was never the student's request: no notice.
+        if (a.student_id && a.requested_by_type !== "system") await notifyStudent(db, a.student_id, { kind: "request_denied", title: `Your ${label} request was not approved`, body: reason, dedupeKey: `approval:${a.id}` });
         return json({ ok: true, decision: "denied" });
       }
 
@@ -177,7 +180,10 @@ export function handlers(): Record<string, Handler> {
       // student it is being done.
       await db.from("approvals").update({ result }).eq("id", a.id);
       await setRequest("approved");
-      if (a.student_id) {
+      if (a.student_id && a.requested_by_type === "system" && a.action === "grant_cashback") {
+        const amount = Number(a.payload?.cashbackValue) || 0;
+        await notifyStudent(db, a.student_id, { kind: "cashback", title: "Thank you for bringing a friend", body: `₹${amount} comes off your next renewal.`, actionUrl: "/me/refer", dedupeKey: `approval:${a.id}` });
+      } else if (a.student_id) {
         const body = a.action === "hold" ? `Your hold has started and ends on ${result.resumesOn}.`
           : a.kind === "t3_action" ? "It has been done." : "The desk will complete it and let you know.";
         await notifyStudent(db, a.student_id, { kind: "request_approved", title: `Your ${label} request was approved`, body: reason ? `${body} ${reason}` : body, dedupeKey: `approval:${a.id}` });

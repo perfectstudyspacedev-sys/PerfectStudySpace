@@ -15,7 +15,8 @@ export default function GrowthPage() {
     flags.yieldPricing && ['prices', 'Walk-in prices'],
     (flags.hourRelease || flags.overbooking) && ['resales', 'Seat resales'],
     flags.referralLinks && ['referrals', 'Referral links'],
-    flags.examRadar && ['exams', 'Exam calendar'],
+    // Hand-entered exams drive prices, win-back and next-exam plans too, not only the radar.
+    (flags.examRadar || flags.nextExam || flags.winback || flags.yieldPricing) && ['exams', 'Exam calendar'],
   ].filter(Boolean)
   const [tab, setTab] = useState(null)
   const current = tab && tabs.some(([k]) => k === tab) ? tab : tabs[0]?.[0]

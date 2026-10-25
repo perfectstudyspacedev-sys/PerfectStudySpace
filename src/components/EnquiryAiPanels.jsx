@@ -51,6 +51,7 @@ export function DedupePanel({ branchId, enquiries, onReview }) {
 export function EnquiryChatPanel({ enquiryId, phone }) {
   const [chats, setChats] = useState([])
   const [edit, setEdit] = useState({})
+  const [own, setOwn] = useState({})
   const [error, setError] = useState('')
   const load = useCallback(() => {
     api('list_enquiry_chat', { enquiryId }).then((r) => setChats(r.chats ?? [])).catch(() => setChats([]))
@@ -67,6 +68,18 @@ export function EnquiryChatPanel({ enquiryId, phone }) {
     } catch (e) { setError(e.message) }
   }
   const discard = async (m) => { try { await api('discard_enquiry_chat_draft', { draftId: m.id }); load() } catch (e) { setError(e.message) } }
+  // A reply written by staff, when the AI wrote none (or it was discarded).
+  const sendOwn = async (chatId, viaWhatsApp) => {
+    const body = (own[chatId] ?? '').trim()
+    if (!body) return
+    setError('')
+    try {
+      if (viaWhatsApp && phone) openWhatsApp(phone, body)
+      await api('send_enquiry_chat_reply', { chatId, body })
+      setOwn((x) => ({ ...x, [chatId]: '' }))
+      load()
+    } catch (e) { setError(e.message) }
+  }
   return (
     <div className="drw-field" data-testid="enquiry-chat" style={{ marginTop: '0.75rem' }}>
       <div className="drw-lbl">💬 Website chat</div>
@@ -86,6 +99,15 @@ export function EnquiryChatPanel({ enquiryId, phone }) {
           ) : <div style={{ whiteSpace: 'pre-wrap' }}>{m.body}</div>}
         </div>
       )))}
+      {chats.filter((c) => !c.messages.some((m) => m.status === 'draft')).map((c) => (
+        <div key={`reply-${c.id}`} style={{ marginTop: '0.4rem' }}>
+          <textarea rows={2} aria-label="Write a reply" placeholder="Write a reply…" value={own[c.id] ?? ''} onChange={(e) => setOwn((x) => ({ ...x, [c.id]: e.target.value }))} style={{ width: '100%' }} />
+          <div style={{ display: 'flex', gap: '0.4rem', marginTop: '0.3rem', flexWrap: 'wrap' }}>
+            <button type="button" className="btn btn-primary" disabled={!(own[c.id] ?? '').trim()} onClick={() => sendOwn(c.id, false)}>Send in chat</button>
+            {phone && <button type="button" className="btn btn-ghost" disabled={!(own[c.id] ?? '').trim()} onClick={() => sendOwn(c.id, true)}>💬 WhatsApp too</button>}
+          </div>
+        </div>
+      ))}
     </div>
   )
 }

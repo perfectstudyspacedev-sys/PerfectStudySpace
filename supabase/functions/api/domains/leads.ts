@@ -32,10 +32,11 @@ export function handlers(): Record<string, Handler> {
       const all = await fetchAllRows<any>(() => db.from("enquiries").select("id, branch_id, name, phone, source, status, created_at, score").gte("created_at", since).order("id"));
       const open = all.filter((e) => OPEN_STATUSES.includes(e.status ?? "new"));
       const ids = open.map((e) => e.id);
-      const acts = await inChunks(ids, async (part) => (await db.from("enquiry_activities").select("enquiry_id").in("enquiry_id", part)).data ?? []);
-      const fus = await inChunks(ids, async (part) => (await db.from("enquiry_followups").select("enquiry_id").in("enquiry_id", part).eq("done", false)).data ?? []);
-      const chats = await inChunks(ids, async (part) => (await db.from("enquiry_chats").select("id, enquiry_id").in("enquiry_id", part)).data ?? []);
-      const msgs = await inChunks(chats.map((c: any) => c.id), async (part) => (await db.from("enquiry_chat_messages").select("chat_id").in("chat_id", part).eq("role", "visitor")).data ?? []);
+      // Paged within each chunk: one chunk's rows can pass the 1,000-row page (Phase 3 review).
+      const acts = await inChunks(ids, (part) => fetchAllRows<any>(() => db.from("enquiry_activities").select("id, enquiry_id").in("enquiry_id", part).order("id")));
+      const fus = await inChunks(ids, (part) => fetchAllRows<any>(() => db.from("enquiry_followups").select("id, enquiry_id").in("enquiry_id", part).eq("done", false).order("id")));
+      const chats = await inChunks(ids, (part) => fetchAllRows<any>(() => db.from("enquiry_chats").select("id, enquiry_id").in("enquiry_id", part).order("id")));
+      const msgs = await inChunks(chats.map((c: any) => c.id), (part) => fetchAllRows<any>(() => db.from("enquiry_chat_messages").select("id, chat_id").in("chat_id", part).eq("role", "visitor").order("id")));
       const count = (rows: any[], key: string) => rows.reduce((m, r) => m.set(r[key], (m.get(r[key]) ?? 0) + 1), new Map<string, number>());
       const actN = count(acts, "enquiry_id"), fuN = count(fus, "enquiry_id"), msgByChat = count(msgs, "chat_id");
       const chatN = new Map<string, number>();

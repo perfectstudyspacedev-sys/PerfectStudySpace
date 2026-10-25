@@ -14,6 +14,8 @@ export default function AskPage() {
   const [branches, setBranches] = useState(null)
   const [closed, setClosed] = useState('')
   const [form, setForm] = useState({ branchId: '', name: '', phone: '', consent: false })
+  // A field people never see (off-screen, skipped by Tab): scripts that fill every field fill it.
+  const [website, setWebsite] = useState('')
   const [chatKey, setChatKey] = useState(() => { try { return localStorage.getItem(KEY) } catch { return null } })
   const [messages, setMessages] = useState([])
   const [text, setText] = useState('')
@@ -50,7 +52,7 @@ export default function AskPage() {
     setMessages((m) => [...m, { role: 'visitor', body: message, at: new Date().toISOString() }])
     setText('')
     try {
-      const r = await publicAgent({ agent: 'enquiry', op: 'send', message, ...(chatKey ? { chatKey } : { ...form, ref }) })
+      const r = await publicAgent({ agent: 'enquiry', op: 'send', message, website, ...(chatKey ? { chatKey } : { ...form, ref }) })
       if (r.chatKey) { try { localStorage.setItem(KEY, r.chatKey) } catch { /* the chat works for this visit */ } setChatKey(r.chatKey) }
       setMessages((m) => [...m, { role: 'team', body: r.reply ?? r.message, at: new Date().toISOString(), pending: !!r.pending }])
     } catch (err) {
@@ -70,6 +72,7 @@ export default function AskPage() {
       <div className="card login-card" data-testid="ask-card">
         {closed ? <p className="error-msg">{closed}</p> : !branches ? <p style={{ color: 'var(--text-muted)' }}>Loading…</p> : (
           <form onSubmit={send}>
+            <input type="text" name="website" value={website} onChange={(e) => setWebsite(e.target.value)} tabIndex={-1} autoComplete="off" aria-hidden="true" style={{ position: 'absolute', left: '-10000px', width: 1, height: 1, opacity: 0 }} />
             {!chatKey && (
               <>
                 <div className="form-group">

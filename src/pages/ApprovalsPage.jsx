@@ -106,7 +106,7 @@ function RequestCard({ a, busy, onDecide, onSuggest, canSuggest }) {
         {!denying && <button type="button" className="btn btn-ghost" disabled={busy} onClick={() => setDenying(true)}>Deny</button>}
         {canSuggest && <button type="button" className="btn btn-ghost" disabled={busy} onClick={() => onSuggest(a)}>{a.ai_note ? '✨ Ask the AI again' : '✨ AI suggestion'}</button>}
       </div>
-      {denying && <ReasonBox label="Why? The student sees this." busy={busy} onCancel={() => setDenying(false)} onSubmit={(reason) => onDecide(a, 'deny', reason)} />}
+      {denying && <ReasonBox label={a.requested_by_type === 'system' ? 'Why? (for your records — the student is not told)' : 'Why? The student sees this.'} busy={busy} onCancel={() => setDenying(false)} onSubmit={(reason) => onDecide(a, 'deny', reason)} />}
     </div>
   )
 }
