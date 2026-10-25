@@ -120,10 +120,17 @@ const LENGTH_ONLY: Record<string, string[]> = {
   me_chat_send: ["body"], save_chat_reply: ["body"], send_chat_reply: ["body"],
   me_update_contact: ["emergencyContact"],
   save_enquiry_chat: ["message"], save_enquiry_chat_reply: ["reply"], send_enquiry_chat_reply: ["body"],
+  // Phase 4: a reported problem and a food order note are the student's own words.
+  me_report_problem: ["details"], me_food_order: ["note"],
 };
 // Fields left out entirely: the enquiry chat's opening details (a visitor's name and phone) and
 // hashes that would only help link visitors together.
-const OMIT: Record<string, string[]> = { save_enquiry_chat: ["open", "ipHash"] };
+// Phase 4: a self check-in keeps only the distance and accuracy (in checkin_records), never where
+// the phone was, and the poster key is a secret of the poster.
+const OMIT: Record<string, string[]> = {
+  save_enquiry_chat: ["open", "ipHash"],
+  me_check_in: ["latitude", "longitude", "accuracy", "key"],
+};
 function lengthOnly(action: string, payload: Record<string, unknown>) {
   const fields = LENGTH_ONLY[action], omit = OMIT[action];
   if (!fields && !omit) return payload;

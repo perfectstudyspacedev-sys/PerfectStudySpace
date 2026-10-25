@@ -13,6 +13,10 @@ const FINDINGS = [
   ['stale_active_bookings', 'session still open more than 24 hours after it started'],
   ['proofs_without_transactions', 'UPI payment marked confirmed with no transaction recorded — check it in Approvals'],
   ['stuck_agent_runs', 'AI run that never finished (its cost was not counted)'],
+  // Phase 4 (O2 part 2)
+  ['selfcheckins_without_session', 'self check-in that opened no session'],
+  ['staff_checkins_at_poster_branches', 'check-in made by staff at a branch with self check-in — note why'],
+  ['walkins_without_payment', 'paid walk-in with no desk payment recorded'],
 ]
 
 export default function IntegrityReportCard() {

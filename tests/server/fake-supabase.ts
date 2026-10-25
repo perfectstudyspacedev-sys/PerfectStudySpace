@@ -42,11 +42,20 @@ const DEFAULTS: Record<string, Row> = {
   referral_links: { is_active: true, label: null, referrer_student_id: null, created_by_staff_id: null },
   referral_attributions: { converted_student_id: null, converted_at: null, reward_approval_id: null },
   exam_notices: { status: "suggested", exam_family: null, notified_on: null, apply_by: null, exam_date: null, url: null, run_id: null, created_by_staff_id: null, reviewed_by_staff_id: null, reviewed_at: null },
+  // PSS-AI Phase 4 (068–069)
+  checkin_records: { booking_id: null, distance_m: null, accuracy_m: null, detail: null },
+  seat_preferences: { desk_ids: [], tags: [] },
+  anomaly_flags: { status: "open", score: null, reviewed_by_staff_id: null, branch_id: null },
+  food_orders: { status: "placed", note: null, food_bill_id: null, cancel_reason: null, handled_by_staff_id: null, booking_id: null },
+  supplier_orders: { status: "draft", decided_by_staff_id: null, decided_at: null },
+  tickets: { priority: "normal", status: "open", desk_label: null, resolution: null, handled_by_staff_id: null, resolved_at: null },
+  tasks: { needs_photo: false, status: "pending", description: null, due_date: null, completed_at: null, repeat_interval: "none" },
+  task_photos: { uploaded_by_staff_id: null },
 };
 
 function uuid() { return crypto.randomUUID(); }
 // Tables whose primary key is not a generated id; a second insert with the same key fails like Postgres.
-const PRIMARY_KEY: Record<string, string> = { idempotency_keys: "key", focus_ratings: "booking_id", fingerprints: "student_id", student_credentials: "student_id", student_setup_codes: "student_id" };
+const PRIMARY_KEY: Record<string, string> = { idempotency_keys: "key", focus_ratings: "booking_id", fingerprints: "student_id", student_credentials: "student_id", student_setup_codes: "student_id", checkin_consents: "student_id", seat_preferences: "student_id" };
 // events has a BIGSERIAL id and occurred_at (migration 052), so it takes no uuid from the seeded counter.
 function baseRow(table: string): Row {
   if (table === "events") return { id: tbl(table).reduce((m, r) => Math.max(m, r.id), 0) + 1, occurred_at: new Date().toISOString() };

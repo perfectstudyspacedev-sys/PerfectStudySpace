@@ -26,11 +26,15 @@ export function handlers(): Record<string, Handler> {
       const { data: sessions } = await db.from("bookings").select("id, student_id, end_time, desks!desk_id(label)")
         .eq("status", "active").eq("is_paused", false).gte("end_time", new Date(now).toISOString()).lte("end_time", new Date(now + REMINDER_MINUTES * 60e3).toISOString()).limit(500);
       const withPortal = await portalStudents(db, [...new Set((sessions ?? []).map((s: any) => s.student_id))]);
+      // Phase 4: with self check-in on, students check out in the portal themselves.
+      const how = (await featureOn(db, "self_checkin"))
+        ? "Check out on time in the portal (Home → Check out) — overtime is charged after the grace period."
+        : "Please check out at the desk on time — overtime is charged after the grace period.";
       let sent = 0;
       for (const s of sessions ?? []) {
         if (!withPortal.has(s.student_id)) continue;
         const mins = Math.max(1, Math.round((new Date(s.end_time).getTime() - now) / 60e3));
-        if (await notifyStudent(db, s.student_id, { kind: "session_end", title: `Your session ends in ${mins} minute${mins === 1 ? "" : "s"}`, body: "Please check out at the desk on time — overtime is charged after the grace period.", dedupeKey: `session-end:${s.id}` })) sent++;
+        if (await notifyStudent(db, s.student_id, { kind: "session_end", title: `Your session ends in ${mins} minute${mins === 1 ? "" : "s"}`, body: how, dedupeKey: `session-end:${s.id}` })) sent++;
       }
       return json({ ok: true, sessions: (sessions ?? []).length, sent });
     },

@@ -8,6 +8,8 @@ import { err, json } from "../../_shared/http.ts";
 import { isOwnerOrAdmin } from "../../_shared/auth.ts";
 import { writeEvent } from "../../_shared/audit.ts";
 import { fetchAllRows, membershipDateDrift, purgeExpiredSignups, remindExpiringMembers } from "../lib.ts";
+import { selfCheckinFindings } from "./checkin.ts";
+import { TASK_PHOTO_KEEP_DAYS } from "../../_shared/tickets.ts";
 
 export const IDEMPOTENCY_KEY_HOURS = 48;
 export const STALE_SESSION_HOURS = 24;
@@ -32,11 +34,19 @@ export async function integrityFindings(db: Ctx["db"]) {
   const noTx = confirmed.filter((p) => !Array.isArray(p.transaction_ids) || p.transaction_ids.length === 0);
   // 5. AI runs that never finished (the function was stopped mid-call): their cost is not counted.
   const stuck = await fetchAllRows<any>(() => db.from("agent_runs").select("id, agent, started_at").eq("status", "running").lt("started_at", settled).order("id"));
+  // 6–8. Phase 4 (O2 part 2): self check-ins with no session, staff check-ins at branches with a
+  //      poster, and paid walk-ins with no desk payment.
+  const self = await selfCheckinFindings(db);
   return {
     counts: {
       membership_dates: membershipDates.length, negative_food_pass: passes.length, stale_active_bookings: stale.length,
       proofs_without_transactions: noTx.length, stuck_agent_runs: stuck.length,
+      selfcheckins_without_session: self.orphan.length, staff_checkins_at_poster_branches: self.staffIns.length,
+      walkins_without_payment: self.unpaid.length,
     },
+    selfcheckins_without_session: self.orphan.slice(0, LIST_LIMIT).map((r) => ({ record_id: r.id, student_id: r.student_id, branch_id: r.branch_id, at: r.created_at })),
+    staff_checkins_at_poster_branches: self.staffIns.slice(0, LIST_LIMIT).map((e) => ({ event_id: e.id, branch_id: e.branch_id, student_id: e.student_id, staff_id: e.actor_id, at: e.occurred_at })),
+    walkins_without_payment: self.unpaid.slice(0, LIST_LIMIT).map((w) => ({ booking_id: w.id, student_id: w.student_id, branch_id: w.branch_id, amount: w.amount, at: w.created_at })),
     proofs_without_transactions: noTx.slice(0, LIST_LIMIT).map((p) => ({ proof_id: p.id, reference: p.reference, student_id: p.student_id, branch_id: p.branch_id, amount: p.amount_expected, decided_at: p.decided_at })),
     stuck_agent_runs: stuck.slice(0, LIST_LIMIT).map((r) => ({ run_id: r.id, agent: r.agent, started_at: r.started_at })),
     checked: { memberships: checked },
@@ -86,7 +96,20 @@ export function handlers(): Record<string, Handler> {
         await db.from("payment_proofs").update({ image_path: null }).in("id", batch.map((p) => p.id));
         removed += batch.length;
       }
-      return json({ ok: true, removed, keepDays: days });
+      // Phase 4 (C17): housekeeping task photos, after task_photo_keep_days (default 30).
+      const { data: taskSetting } = await db.from("app_settings").select("value").eq("key", "task_photo_keep_days").maybeSingle();
+      const taskDays = Number(taskSetting?.value) >= 7 ? Number(taskSetting!.value) : TASK_PHOTO_KEEP_DAYS;
+      const oldPhotos = await fetchAllRows<any>(() => db.from("task_photos").select("id, photo_path")
+        .lt("created_at", new Date(Date.now() - taskDays * 86400e3).toISOString()).order("id"));
+      let taskPhotos = 0;
+      for (let i = 0; i < oldPhotos.length; i += 100) {
+        const batch = oldPhotos.slice(i, i + 100);
+        const removedBatch: { error: { message: string } | null } = await db.storage.from("task-photos").remove(batch.map((p) => p.photo_path));
+        if (removedBatch.error) return err(removedBatch.error.message, 500);
+        await db.from("task_photos").delete().in("id", batch.map((p) => p.id));
+        taskPhotos += batch.length;
+      }
+      return json({ ok: true, removed, keepDays: days, taskPhotos, taskKeepDays: taskDays });
     },
     // Hourly: idempotency keys are only needed while a retry is likely.
     cron_purge_idempotency: async (ctx: Ctx): Promise<Response | undefined> => {

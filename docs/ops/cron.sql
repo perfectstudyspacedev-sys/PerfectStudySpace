@@ -87,6 +87,10 @@ SELECT cron.schedule('pss_exam_radar',        '0 1 * * *',   $$SELECT pss_run_ag
 SELECT cron.schedule('pss_winback',           '30 3 * * 1',  $$SELECT pss_run_agent_job('winback')$$);               -- Mondays 09:00 IST (pssai_winback)
 SELECT cron.schedule('pss_exception_desk',    '*/30 * * * *', $$SELECT pss_run_agent_job('exception_desk')$$);       -- every 30 min (pssai_exception_desk)
 
+-- Phase 4 (each does nothing while its switch is off):
+SELECT cron.schedule('pss_close_sessions',    '0 18 * * *',  $$SELECT pss_run_cron_job('cron_close_forgotten_sessions')$$); -- 23:30 IST (pssai_session_watch, C15)
+SELECT cron.schedule('pss_supplier_drafts',   '30 15 * * *', $$SELECT pss_run_cron_job('cron_supplier_drafts')$$);   -- 21:00 IST (pssai_food_stock)
+
 -- ── 4. Check ──
 -- Run one job now and look at the answer a few seconds later:
 --   SELECT pss_run_cron_job('cron_integrity_report');

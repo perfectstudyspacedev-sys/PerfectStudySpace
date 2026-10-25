@@ -6,6 +6,18 @@ import { addDays, toISTDateStr, todayISO } from "../../_shared/dates.ts";
 import { err, json } from "../../_shared/http.ts";
 import { isAdmin, isOwnerOrAdmin, requireBranch } from "../../_shared/auth.ts";
 import { getOwnerStaffIds, isTaskDueOn } from "../lib.ts";
+import { featureOn } from "../../_shared/flags.ts";
+import { needsPhotoByDefault } from "../../_shared/tickets.ts";
+import { photosFor } from "./tickets.ts";
+
+// PSS-AI C17: with pssai_photo_tasks on, the tasks a day's list returns say whether that day's
+// photo is in (photoTaken), for tasks that need one.
+async function withPhotos(db: Ctx["db"], tasks: any[], date: string) {
+  const need = tasks.filter((t) => t.needs_photo).map((t) => t.id);
+  if (!need.length || !(await featureOn(db, "photo_tasks"))) return tasks;
+  const have = await photosFor(db, need, date);
+  return tasks.map((t) => (t.needs_photo ? { ...t, photoTaken: have.has(t.id) } : t));
+}
 
 export function handlers(): Record<string, Handler> {
   const h: Record<string, Handler> = {
@@ -121,10 +133,14 @@ export function handlers(): Record<string, Handler> {
           && assignees.every(a => a.role === "owner" || a.branch_id === staff.branch_id);
         if (!allValid) return err("Can only assign tasks to staff in your branch, or the owner");
       }
+      // PSS-AI C17: a daily cleaning task needs a photo unless the owner says otherwise.
+      const photoOn = await featureOn(db, "photo_tasks");
+      const needsPhoto = photoOn && (typeof payload.needsPhoto === "boolean" ? payload.needsPhoto : needsPhotoByDefault({ title, repeatInterval }));
       const rows = staffIds.map(sid => ({
         branch_id: targetBranchId, assigned_by_staff_id: staff.id, assigned_to_staff_id: sid,
         title, description: description ?? null, due_date: dueDate ?? null,
         repeat_interval: repeatInterval ?? "none",
+        ...(needsPhoto ? { needs_photo: true } : {}),
       }));
       const { data: tasks, error: tErr } = await db.from("tasks").insert(rows).select("*");
       if (tErr) return err(tErr.message);
@@ -161,7 +177,7 @@ export function handlers(): Record<string, Handler> {
         completedToday: t.repeat_interval === "none" ? t.status === "done" : completedSet.has(t.id),
       }));
 
-      return json({ tasks });
+      return json({ tasks: await withPhotos(db, tasks, targetDate) });
     },
     update_task_status: async (ctx: Ctx, payload: any): Promise<Response | undefined> => {
       const { db } = ctx;
@@ -175,6 +191,11 @@ export function handlers(): Record<string, Handler> {
       // items in the Incomplete Tasks list).
       if (task.assigned_to_staff_id !== staff.id && !isOwnerOrAdmin(staff)) {
         return err("Only the person a task is assigned to can complete it", 403);
+      }
+      // PSS-AI C17: a task that needs a photo is ticked only once that day's photo is in.
+      if (done && task.needs_photo && (await featureOn(db, "photo_tasks"))) {
+        const have = await photosFor(db, [task.id], targetDate);
+        if (!have.has(task.id)) return err("Add a photo of the finished task first");
       }
       if (task.repeat_interval === "none") {
         await db.from("tasks").update({
@@ -205,7 +226,7 @@ export function handlers(): Record<string, Handler> {
         ...t,
         completedToday: t.repeat_interval === "none" ? t.status === "done" : completedSet.has(t.id),
       }));
-      return json({ tasks });
+      return json({ tasks: await withPhotos(db, tasks, today) });
     },
     get_task_completion_report: async (ctx: Ctx, payload: any): Promise<Response | undefined> => {
       const { db } = ctx;
@@ -237,7 +258,7 @@ export function handlers(): Record<string, Handler> {
         completedToday: t.repeat_interval === "none" ? t.status === "done" : completedSet.has(t.id),
       }));
 
-      return json({ date: targetDate, tasks });
+      return json({ date: targetDate, tasks: await withPhotos(db, tasks, targetDate) });
     },
     list_incomplete_tasks: async (ctx: Ctx, payload: any): Promise<Response | undefined> => {
       const { db } = ctx;

@@ -764,9 +764,86 @@ Tests: server suites for each item (fake Supabase, scripted Claude, stubbed web 
 | Portal R3 | SP13 self check-in, SP14 live seats (counts only, no names), SP15 seat preferences, SP16 food ordering, SP17 report a problem | — |
 | Config | `public/_headers` (Cloudflare Pages): change `Permissions-Policy` from `geolocation=()` to `geolocation=(self)` | — |
 
-**Questions to settle with the owner while refining Phase 4:**
-1. Self checkout when a Food Pass shortfall must be collected: block checkout until a UPI proof is confirmed, or allow checkout and carry the amount as dues?
-2. The forgotten-session rule: at what time is an open session closed, at what end time, and is any overtime charged?
+**Questions to settle with the owner while refining Phase 4:** answered as C14 (self checkout with a Food Pass shortfall is allowed; the amount stays as dues) and C15 (forgotten sessions close at 23:30 IST at the booked end time, no overtime).
+
+### Build level (2026-10-25)
+
+Every piece has its own switch, off by default (R9). The switches are global, but self check-in works only at a branch whose owner has saved its location and printed a poster, so turning it on and setting up Hopes alone is the pilot (A5). Students reach only `me_*` actions (S12); every money path runs through the existing staff action with a branch-limited portal scope (`portalScope`), as the self-hold already does.
+
+| Switch | Turns on |
+|---|---|
+| `pssai_self_checkin` | `me_check_in`, `me_check_out`, the portal check-in page, the poster settings |
+| `pssai_session_watch` | The 23:30 IST close of forgotten sessions and the review flags for corrected checkout times |
+| `pssai_seat_matching` | A desk chosen from preferences and history for temporary members at self check-in; the suggested desk in the staff check-in and walk-in forms; seat preferences in the portal |
+| `pssai_live_seats` | Free-seat counts in the portal |
+| `pssai_food_orders` | Ordering food in the portal and the fulfilment queue |
+| `pssai_food_stock` | Stock taken off linked inventory when food is billed; the demand forecast and supplier order drafts |
+| `pssai_tickets` | "Report a problem" in the portal and the tickets page |
+| `pssai_photo_tasks` | A photo needed before a housekeeping task can be ticked |
+
+**Migrations** (append-only; Appendix B renumbered): `068_checkin_location` and `069_food_queue_and_tickets`.
+- `068`: `branches.latitude`, `branches.longitude`, `branches.checkin_key`; `checkin_records` (student, branch, booking, `in`/`out`, result, distance and accuracy in metres only: raw coordinates are never stored); `checkin_consents` (student, consent version, time); `desks.tags` (window, power, quiet, AC); `seat_preferences` (student, up to 3 favourite desks, wanted tags).
+- `069`: `food_orders` (the queue: placed → accepted → ready → delivered, or cancelled; items with the prices shown); `food_items.inventory_item_id` and `inventory_per_unit`; `inventory_items.supplier_phone`; `inventory_logs` action `sold`; `supplier_orders` (owner drafts); `tickets` (C16 categories, priority, status); `tasks.needs_photo`; `task_photos` and a private `task-photos` bucket.
+
+**Self check-in (SP13).**
+- `me_checkin_info` (T0): the student's open session, whether consent is still needed (with the D9 consent text) and the branch name for the poster's `b`.
+- `me_check_in` (T1): checks the switch, the poster key (`k`), consent, then the phone's location: refused when the accuracy is worse than 100 m or the distance is more than 100 m (D9). Ten tries in ten minutes at most. Then it runs `check_in_member` unchanged, as the student, with a desk from seat matching for temporary members (switch on and a free floating desk; otherwise no desk, as staff check-in does today). Every try writes a `checkin_records` row. The coordinates are left out of the event log.
+- `me_check_out` (T2): the student's own open member session. The server works out the overtime minutes from the clock, the same way the checkout form does (booked end, plus a break still in progress), and runs `checkout_booking` with Pay Later overtime, so overtime is billed at renewal or closure as today.
+- **C14 in `checkout_booking`:** a new `foodAsDues` input, honoured only for student and system callers. With it, a Food Pass shortfall or a member's food bill older than 3 days no longer blocks the checkout: the bills stay unpaid (they are the dues) and the answer says how much. Every existing path is unchanged; staff calls never reach it (R1, R6).
+- Owner: `get_checkin_settings` (T0), `set_branch_location` (T3) and `rotate_checkin_key` (T3: a new key, so old posters stop working). Branch settings show the poster with a QR code for `https://join.perfectstudyspace.in/me/checkin?b=<branch>&k=<key>`.
+- `public/_headers`: `geolocation=(self)`.
+
+**A5 Session watch.**
+- `cron_session_reminders` tells students to check out in the portal when self check-in is on.
+- `cron_close_forgotten_sessions` (23:30 IST): every open session whose booked end has passed is closed through `checkout_booking`. It is closed at the booked end, or when its break began if it is on a break, with no overtime (C15) and food as dues. The student is told in the portal, and each close is an `anomaly_flags` row (`session_auto_closed`) for the owner. Sessions booked past 23:30 are left alone until the next night.
+- The same job flags (`checkout_corrected`) staff checkouts from the last day whose checkout time was moved more than 10 minutes back. This makes "Correct checkout time" an exception path.
+- O2 part 2 (integrity report):
+  - successful self check-ins with no session;
+  - staff check-ins at branches that have a poster (the exit-gate item "every staff-only call is logged and explained");
+  - paid walk-ins with no desk payment.
+
+**I4 Seat matching and SP15.**
+- `rankDesks()` (`_shared/seatmatch.ts`, pure) orders the free floating desks by:
+  1. favourite desks;
+  2. wanted tags;
+  3. the desks the student used most in the last 60 days;
+  4. the desk order.
+- `suggest_desk` (T0, staff): the WalkInModal and the check-in form pre-select the suggested desk.
+- `me_seat_prefs` (T0) and `me_set_seat_prefs` (T1) let the student pick desks and tags from their own branch.
+- `set_desk_tags` (T1, owner).
+
+**SP14 Live seats.** `me_live_seats` (T0): per active branch, free floating seats = floating desks minus open sessions not on a fixed cabin. Counts only, no names.
+
+**I20/I21 Food (D10).**
+- **Ordering.**
+  - `me_food_menu` (T0) shows the menu.
+  - `me_food_order` (T1) needs an open session and checks stock; the server computes the total.
+  - `me_cancel_food_order` (T1) works only while the order is still placed.
+- **Fulfilment.**
+  - Anyone working the queue uses `list_food_orders` (T0, staff) and `update_food_order` (T1: accept, ready, cancel). That can be the kitchen person, an outside vendor's staff login or the owner restocking a vending shelf.
+  - `deliver_food_order` (T2) claims the order once, then runs `create_food_bill` unchanged with the order's items. The Food Pass pays when it covers the bill; otherwise the fulfiller picks cash, UPI or the member's tab. If the price changed since the order, the delivery is refused rather than charged.
+- **Stock.** With `pssai_food_stock` on, a bill takes `quantity × inventory_per_unit` off the linked inventory item and logs it as `sold`. `set_food_item_stock_link` (T1, owner) sets the link.
+- **Forecast.** `forecastDemand()` (`_shared/fooddemand.ts`, pure) uses each weekday's average over the last 4 weeks, falling back to the daily average. `get_food_forecast` (T0, owner) shows it.
+- **Supplier drafts.** `cron_supplier_drafts` (21:00 IST) writes one draft per branch covering 3 days of forecast use × 1.2, minus stock. The owner sends a draft by WhatsApp with `openWhatsApp()`; marking it received adds the stock through `add_inventory_item`. `list_supplier_orders` (T0) and `update_supplier_order` (T1) are owner-only.
+
+**I22 Complaints to tickets (SP17).**
+- `me_report_problem` (T1) takes a C16 category and details. At most 3 a day and 5 open per student.
+- Priority comes from rules in code, not AI: urgent words (fire, smoke, shock, leak, injury, theft, harassment) make a ticket urgent; Wi-Fi and seat problems are high; the rest are normal.
+- `me_tickets` (T0) is the student's own list; `list_tickets` (T0, staff) and `update_ticket` (T1) work the queue. The student is told when a ticket is resolved.
+- The ticket text is stored in its table and logged as its length only.
+
+**Photo-proof tasks (C17).**
+- `create_task` takes `needsPhoto`. With the switch on, a daily task whose title is about cleaning (clean, sweep, mop, wash, dust, toilet, washroom, bin, garbage) needs a photo unless the owner unticks it.
+- `upload_task_photo` (T1) stores the photo in the private bucket, one per task per day.
+- `update_task_status` refuses "done" without that day's photo.
+- `get_task_photo` (T0) gives a 5-minute link.
+- `cron_purge_images` also removes task photos after `task_photo_keep_days` (default 30).
+
+**Portal R3.**
+- Home: the open session with Check out, and live seats.
+- `/me/checkin`: the poster page, with consent first, then location.
+- More: seat preferences, food, report a problem.
+- `me_profile.features` tells the portal which of these are on.
 
 ## Phase 4 exit gate
 
@@ -790,7 +867,7 @@ Tests: server suites for each item (fake Supabase, scripted Claude, stubbed web 
 | O7 Space-yield optimiser | Occupancy heat-maps suggest which zones become premium cabins, group rooms or extra seats |
 | I13, I10 | Study Wrapped card and exam coach in the portal |
 | Portal R4 | SP18 focus profile, SP19 exam coach, SP20 Study Wrapped, SP21 study buddy (opt-in) |
-| S1 Retire desk-staff modules | Migration `069_deprecate_staff_ops` marks tables deprecated; a later migration drops them after the data is archived. Remove: `markAttendanceIfNeeded` on every request; `staff_attendance` reads, `list_staff_attendance`, `end_staff_session` and the logout cut-off in `authStaff`; `assign_staff_override`, `clear_staff_override`; `list_branch_staff`, `get_staff_grid`; staff-to-staff `list_messages`, `send_message`, `MessagesPage`; `StaffPage`; `TasksPage` unless housekeeping still uses it. `create_staff` and `update_staff` shrink to owner, admin and kitchen/housekeeping accounts. Do this only after the staff modules sit unused for a full month. |
+| S1 Retire desk-staff modules | Migration `070_deprecate_staff_ops` marks tables deprecated; a later migration drops them after the data is archived. Remove: `markAttendanceIfNeeded` on every request; `staff_attendance` reads, `list_staff_attendance`, `end_staff_session` and the logout cut-off in `authStaff`; `assign_staff_override`, `clear_staff_override`; `list_branch_staff`, `get_staff_grid`; staff-to-staff `list_messages`, `send_message`, `MessagesPage`; `StaffPage`; `TasksPage` unless housekeeping still uses it. `create_staff` and `update_staff` shrink to owner, admin and kitchen/housekeeping accounts. Do this only after the staff modules sit unused for a full month. |
 
 ## Phase 5 exit gate
 
@@ -895,10 +972,11 @@ Values marked "pinned" record what the code returns today. If one looks wrong, r
 | 065 | `065_referral_links.sql` | P3 | Tracked referral links and attributions |
 | 066 | `066_exam_notices.sql` | P3 | Exam notices; Send list kinds |
 | 067 | `067_phase2_hardening.sql` | P2 review | Sign-up pay key; one confirmed proof per UTR |
-| 068 | `068_checkin_location.sql` | P4 | Branch location, check-in key, check-in records |
-| 069 | `069_deprecate_staff_ops.sql` | P5 | Marks desk-staff tables deprecated |
+| 068 | `068_checkin_location.sql` | P4 | Branch location, check-in key, check-in records and consents, desk tags, seat preferences |
+| 069 | `069_food_queue_and_tickets.sql` | P4 | Food order queue, stock links, supplier drafts, tickets, task photos |
+| 070 | `070_deprecate_staff_ops.sql` | P5 | Marks desk-staff tables deprecated |
 
-Numbers are indicative. Because phases ship in order, the migration owner may renumber unbuilt ones so files are applied in the order they ship; update this table in the same commit. *Renumbered on 2026-10-20 (P1.8) and 2026-10-23 (Phase 3 and the Phase 2 review) into build order.*
+Numbers are indicative. Because phases ship in order, the migration owner may renumber unbuilt ones so files are applied in the order they ship; update this table in the same commit. *Renumbered on 2026-10-20 (P1.8), 2026-10-23 (Phase 3 and the Phase 2 review) and 2026-10-25 (Phase 4) into build order.*
 
 ---
 
@@ -926,10 +1004,10 @@ Every implementer runs `/freeze <glob>` on their paths first (see `.claude/rules
 |---|---|---|---|
 | T0 | Reads: `list_*`, `get_*`, `lookup_*`, `search_*`, `whoami`, `me_*` reads | Allowed | Own data only |
 | T1 | Messages, notes, enquiries, follow-ups, tasks, alerts, focus ratings, waitlist joins, session pause/resume, check-in, holds within policy, contact-detail updates | Allowed | Own requests only |
-| T2 | Money comes in, with amounts calculated by code: `record_payment`, `record_locker_payment`, `add_manual_payment`, `topup_food_pass`, `create_food_bill`, `collect_food_bill_shortfall`, `create_walkin`, `create_membership`, `renew_membership`, `renew_locker`, `add_locker`, `checkout_booking`, payment requests and proofs | Allowed | Own payments only |
+| T2 | Money comes in, with amounts calculated by code: `record_payment`, `record_locker_payment`, `add_manual_payment`, `topup_food_pass`, `create_food_bill`, `collect_food_bill_shortfall`, `create_walkin`, `create_membership`, `renew_membership`, `renew_locker`, `add_locker`, `checkout_booking`, `deliver_food_order` (Phase 4: bills a portal food order through `create_food_bill`), payment requests and proofs | Allowed | Own payments only |
 | T3 | Money goes out, records are destroyed or policy changes. Always the owner's approval queue for agents and students. | Approval only | Approval only |
 
-**Explicit T3 list:** `delete_membership`, `close_membership`, `cancel_early_renewal`, `change_membership_plan`, `change_membership_cabin`, `transfer_student_branch`, `apply_loyalty_discount`, `grant_cashback`, `redeem_cashback_now`, `set_overtime_excluded`, `add_attendance`, `update_attendance`, `fix_membership_dates`, `fix_negative_food_pass_balances`, `update_fee_config`, `update_welcome_template`, `update_branch`, `add_desk`, `remove_desk`, `remove_locker`, `update_locker_due_date`, `update_locker_number`, `create_food_item`, `update_food_item`, `create_staff`, `update_staff`, `assign_staff_override`, `clear_staff_override`, `end_staff_session`, `delete_enquiries`, `rotate_signup_link`, `set_walkin_price_day` (Phase 3: the owner's own walk-in price for a day).
+**Explicit T3 list:** `delete_membership`, `close_membership`, `cancel_early_renewal`, `change_membership_plan`, `change_membership_cabin`, `transfer_student_branch`, `apply_loyalty_discount`, `grant_cashback`, `redeem_cashback_now`, `set_overtime_excluded`, `add_attendance`, `update_attendance`, `fix_membership_dates`, `fix_negative_food_pass_balances`, `update_fee_config`, `update_welcome_template`, `update_branch`, `add_desk`, `remove_desk`, `remove_locker`, `update_locker_due_date`, `update_locker_number`, `create_food_item`, `update_food_item`, `create_staff`, `update_staff`, `assign_staff_override`, `clear_staff_override`, `end_staff_session`, `delete_enquiries`, `rotate_signup_link`, `set_walkin_price_day` (Phase 3: the owner's own walk-in price for a day), `set_branch_location`, `rotate_checkin_key` (Phase 4: where self check-in is allowed, and the poster key).
 
 When unsure, choose the higher tier. Tiers do not change what staff, owner and admin can do today (R6).
 

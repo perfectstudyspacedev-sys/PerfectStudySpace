@@ -148,10 +148,12 @@ export function handlers(): Record<string, Handler> {
       const { data: s } = await ctx.db.from("students").select("name, phone, course, emergency_contact, status, branches(name)").eq("id", me(ctx).id).maybeSingle();
       if (!s) return err("Student not found", 404);
       // Phase 3: which portal pages are switched on (release hours, waitlist and referral, next exam).
-      const [hourRelease, portalR2, nextExam, referral] = await Promise.all(["hour_release", "portal_r2", "next_exam", "referral_links"].map((f) => featureOn(ctx.db, f)));
+      // Phase 4: self check-in, live seats, seat preferences, food ordering, report a problem.
+      const [hourRelease, portalR2, nextExam, referral, selfCheckin, liveSeats, seatPrefs, foodOrders, tickets] = await Promise.all(
+        ["hour_release", "portal_r2", "next_exam", "referral_links", "self_checkin", "live_seats", "seat_matching", "food_orders", "tickets"].map((f) => featureOn(ctx.db, f)));
       return json({
         profile: { name: s.name, phone: s.phone, course: s.course, emergencyContact: s.emergency_contact, status: s.status, branch: (s.branches as any)?.name ?? null },
-        features: { hourRelease, waitlist: portalR2, cashbacks: portalR2, referral: portalR2 && referral, nextExam },
+        features: { hourRelease, waitlist: portalR2, cashbacks: portalR2, referral: portalR2 && referral, nextExam, selfCheckin, liveSeats, seatPrefs, foodOrders, tickets },
       });
     },
 

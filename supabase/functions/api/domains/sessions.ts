@@ -552,6 +552,11 @@ export function handlers(): Record<string, Handler> {
 
       const isMember = booking.booking_type !== "walkin";
       const FOOD_CARRY_DAYS = 3;
+      // PSS-AI Phase 4 (C14, C15): a self checkout (student) or a forgotten session closed at night
+      // (system) cannot collect money, so food that would have to be collected stays unpaid on the
+      // student's tab as dues, and the answer says how much. Staff calls never take this path.
+      const foodAsDues = !!payload.foodAsDues && (ctx.actor.type === "student" || ctx.actor.type === "system");
+      let foodDue = 0;
 
       // A Food Pass holder never pays cash for food at checkout — any bill still marked
       // unpaid (e.g. from before the pass existed) is deducted from the pass automatically.
@@ -574,7 +579,13 @@ export function handlers(): Record<string, Handler> {
         const resultingBalance = Number(foodPass.balance) - passTotal;
         if (resultingBalance < 0) {
           foodPassShortfall = -resultingBalance;
-          if (!foodPassPaymentMode) {
+          if (!foodPassPaymentMode && foodAsDues) {
+            // The bills stay unpaid and the pass untouched; the next checkout at the desk (or the
+            // membership's closure) settles them as it always does.
+            foodDue = foodPassShortfall;
+            passUnpaidBillIds = [];
+            foodPassShortfall = 0;
+          } else if (!foodPassPaymentMode) {
             return json({ needsFoodPassCollection: true, shortfall: foodPassShortfall });
           }
           // The shortfall is collected as cash/UPI below, so the pass itself settles at 0
@@ -598,7 +609,8 @@ export function handlers(): Record<string, Handler> {
         const overdue = memberUnpaidBills.filter(b => new Date(b.created_at).getTime() < cutoff);
         if (overdue.length) {
           const overdueTotal = overdue.reduce((s, b) => s + Number(b.total), 0);
-          return err(`Food bill of ₹${overdueTotal} is more than ${FOOD_CARRY_DAYS} days old — settle it before checking out.`);
+          if (foodAsDues) foodDue += overdueTotal;
+          else return err(`Food bill of ₹${overdueTotal} is more than ${FOOD_CARRY_DAYS} days old — settle it before checking out.`);
         }
       }
 
@@ -652,8 +664,12 @@ export function handlers(): Record<string, Handler> {
         const unpaidBillsQuery = isMember
           ? db.from("food_bills").select("id, total").eq("student_id", booking.student_id).eq("paid", false)
           : db.from("food_bills").select("id, total").eq("booking_id", bookingId).eq("paid", false);
-        const shouldSettleNow = !isMember || settleFoodNow;
+        const shouldSettleNow = (!isMember || settleFoodNow) && !foodAsDues;
         const { data: unpaidBills } = shouldSettleNow ? await unpaidBillsQuery : { data: null };
+        if (foodAsDues && !isMember) {
+          const { data: due } = await unpaidBillsQuery;
+          foodDue += (due ?? []).reduce((s: number, b: { total: number }) => s + Number(b.total), 0);
+        }
         if (unpaidBills?.length) {
           const settleMode = overtimePaymentMode ?? booking.payment_mode ?? "cash";
           for (const bill of unpaidBills) {
@@ -732,7 +748,7 @@ export function handlers(): Record<string, Handler> {
         }
       }
 
-      return json({ ok: true });
+      return json(foodAsDues ? { ok: true, foodDue: Math.round(foodDue * 100) / 100 } : { ok: true });
     },
     // ─── TODAY'S BOOKINGS ───
     list_today_bookings: async (ctx: Ctx, payload: any): Promise<Response | undefined> => {

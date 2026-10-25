@@ -6,6 +6,8 @@ import { istDayEnd, istDayStart } from "../../_shared/dates.ts";
 import { err, json } from "../../_shared/http.ts";
 import { isOwnerOrAdmin, requireBranch } from "../../_shared/auth.ts";
 import { recordTransaction } from "../lib.ts";
+import { featureOn } from "../../_shared/flags.ts";
+import { takeStock } from "./kitchen.ts";
 
 export function handlers(): Record<string, Handler> {
   const h: Record<string, Handler> = {
@@ -98,6 +100,9 @@ export function handlers(): Record<string, Handler> {
       for (const li of lineItems) {
         await db.from("food_bill_items").insert({ food_bill_id: bill!.id, ...li });
       }
+      // PSS-AI I20: with pssai_food_stock on, the packets a linked menu item uses come off its
+      // inventory item (logged as 'sold'). The bill itself is unchanged.
+      if (lineItems.length && (await featureOn(db, "food_stock"))) await takeStock(db, branchId, lineItems, staff.id ?? null);
 
       if (isPaid && !payFromPass) {
         await recordTransaction(db, {

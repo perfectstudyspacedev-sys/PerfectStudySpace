@@ -19,6 +19,10 @@ const FLAGS = {
   enquiryChat: "pssai_enquiry_chat", leadTools: "pssai_lead_tools", referralLinks: "pssai_referral_links",
   examRadar: "pssai_exam_radar", winback: "pssai_winback", nextExam: "pssai_next_exam",
   paylaterAdvice: "pssai_paylater_advice", exceptionDesk: "pssai_exception_desk", portalR2: "pssai_portal_r2",
+  // Phase 4
+  selfCheckin: "pssai_self_checkin", sessionWatch: "pssai_session_watch", seatMatching: "pssai_seat_matching",
+  liveSeats: "pssai_live_seats", foodOrders: "pssai_food_orders", foodStock: "pssai_food_stock",
+  tickets: "pssai_tickets", photoTasks: "pssai_photo_tasks",
 } as const;
 const DISCOUNT_CONFIRM_KEY = "pssai_discount_confirm_over";
 export const DISCOUNT_CONFIRM_DEFAULT = 1000;

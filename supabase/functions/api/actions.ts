@@ -21,6 +21,9 @@ import { handlers as seatsHandlers } from "./domains/seats.ts";
 import { handlers as leadsHandlers } from "./domains/leads.ts";
 import { handlers as referralsHandlers } from "./domains/referrals.ts";
 import { handlers as examsHandlers } from "./domains/exams.ts";
+import { handlers as checkinHandlers } from "./domains/checkin.ts";
+import { handlers as kitchenHandlers } from "./domains/kitchen.ts";
+import { handlers as ticketsHandlers } from "./domains/tickets.ts";
 import { handlers as reportsHandlers } from "./domains/reports.ts";
 import { handlers as sessionsHandlers } from "./domains/sessions.ts";
 import { handlers as signupHandlers } from "./domains/signup.ts";
@@ -28,7 +31,7 @@ import { handlers as staffHandlers } from "./domains/staff.ts";
 import { handlers as systemHandlers } from "./domains/system.ts";
 
 const all: Record<string, Handler> = {};
-for (const set of [authHandlers(), branchesHandlers(), enquiriesHandlers(), foodHandlers(), membersHandlers(), moneyHandlers(), reportsHandlers(), sessionsHandlers(), signupHandlers(), staffHandlers(), systemHandlers(), insightsHandlers(), portalHandlers(), paymentsHandlers(), requestsHandlers(), onboardingHandlers(), chatHandlers(), outreachHandlers(), noticesHandlers(), pricingHandlers(), seatsHandlers(), leadsHandlers(), referralsHandlers(), examsHandlers()]) {
+for (const set of [authHandlers(), branchesHandlers(), enquiriesHandlers(), foodHandlers(), membersHandlers(), moneyHandlers(), reportsHandlers(), sessionsHandlers(), signupHandlers(), staffHandlers(), systemHandlers(), insightsHandlers(), portalHandlers(), paymentsHandlers(), requestsHandlers(), onboardingHandlers(), chatHandlers(), outreachHandlers(), noticesHandlers(), pricingHandlers(), seatsHandlers(), leadsHandlers(), referralsHandlers(), examsHandlers(), checkinHandlers(), kitchenHandlers(), ticketsHandlers()]) {
   for (const [name, handler] of Object.entries(set)) {
     if (all[name]) throw new Error(`Action ${name} is handled twice`);
     all[name] = handler;
