@@ -302,6 +302,7 @@ export const ACTION_META: ActionMeta[] = ([
   ["set_desk_tags", "T1", OWNER, true, false],
   ["set_food_item_stock_link", "T1", OWNER, true, false],
   ["set_overtime_excluded", "T3", STAFF, true, false],
+  ["set_task_needs_photo", "T1", OWNER, true, false],
   ["set_walkin_price_day", "T3", OWNER, true, false],
   ["simulate_policy", "T0", OWNER, false, true],
   ["suggest_desk", "T0", STAFF, false, true],

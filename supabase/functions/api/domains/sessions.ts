@@ -11,6 +11,19 @@ import { claimRelease, memberArrives, recordResale, unclaimRelease } from "./sea
 import { walkinPrice } from "./pricing.ts";
 import { STUDY_REPORT_MAX_DAYS, fetchAllRows, findOverlappingSession, formatISTSession, insertPaymentTransactions, isISODate, recordTransaction, splitPaymentError, storedPaymentMode, upsertStudent } from "../lib.ts";
 
+/**
+ * Claims a free floating desk in one conditional step (PSS-AI Phase 4 review): two check-ins at
+ * the same moment can no longer both be given it. The booking is linked once it exists.
+ */
+async function claimFreeDesk(db: Ctx["db"], deskId: string): Promise<boolean> {
+  const { data } = await db.from("desks").update({ status: "occupied", current_booking_id: null }).eq("id", deskId).eq("status", "free").select("id");
+  return !!data?.length;
+}
+/** Gives back a desk claimed for a booking that was then not made. */
+async function unclaimDesk(db: Ctx["db"], deskId: string) {
+  await db.from("desks").update({ status: "free" }).eq("id", deskId).eq("status", "occupied").is("current_booking_id", null);
+}
+
 export function handlers(): Record<string, Handler> {
   const h: Record<string, Handler> = {
     // ─── WALK-IN ───
@@ -71,7 +84,7 @@ export function handlers(): Record<string, Handler> {
         // Desk is optional for walk-ins — staff no longer assigns a desk
         if (manualDeskId) {
           const { data: d } = await db.from("desks").select("*").eq("id", manualDeskId).eq("branch_id", branchId).single();
-          if (!d || d.status !== "free") {
+          if (!d || d.status !== "free" || !(await claimFreeDesk(db, d.id))) {
             if (release) await unclaimRelease(db, release.id);
             return err("Selected desk is not available");
           }
@@ -88,11 +101,13 @@ export function handlers(): Record<string, Handler> {
         }).select("id").single();
         if (bErr) {
           if (release) await unclaimRelease(db, release.id);
+          if (desk) await unclaimDesk(db, desk.id);
           return err(bErr.message);
         }
         booking = created;
       } catch (e) {
         if (release) await unclaimRelease(db, release.id);
+        if (desk) await unclaimDesk(db, desk.id);
         throw e;
       }
 
@@ -238,6 +253,13 @@ export function handlers(): Record<string, Handler> {
       const sessionHours = remainingMinutes / 60;
       const endTime = new Date(new Date(checkInTime).getTime() + remainingMinutes * 60_000).toISOString();
       const bookingType = membership.category === "permanent" ? "permanent" : "temporary";
+      // A floating desk (or a cabin member's fallback desk) is claimed in one step before the booking.
+      const claimed = !!desk && (membership.category !== "permanent" || fallbackDesk);
+      if (claimed && !(await claimFreeDesk(db, desk.id))) {
+        if (!fallbackDesk) return err("Selected desk is not available");
+        desk = null; fallbackDesk = false;
+        collision = { kind: "no_desk", credit: 0, message: "Their cabin is in use and the free desk was just taken — offer the next free one." };
+      }
 
       const { data: booking, error: bErr } = await db.from("bookings").insert({
         student_id: studentId, branch_id: branchId, desk_id: desk?.id ?? null,
@@ -246,7 +268,10 @@ export function handlers(): Record<string, Handler> {
         hours: sessionHours, scheduled_hours: sessionHours, amount: 0, status: "active",
         created_by_staff_id: staff.id,
       }).select("id").single();
-      if (bErr) return err(bErr.message);
+      if (bErr) {
+        if (claimed && desk) await unclaimDesk(db, desk.id);
+        return err(bErr.message);
+      }
 
       // Update desk status if a desk was assigned
       if (desk) {
@@ -649,7 +674,8 @@ export function handlers(): Record<string, Handler> {
       if (booking.desk_id) {
         const { data: desk } = await db.from("desks").select("seat_type").eq("id", booking.desk_id).single();
         if (desk?.seat_type === "floating") {
-          await db.from("desks").update({ status: "free", current_booking_id: null }).eq("id", booking.desk_id);
+          // Freed only while it still belongs to this session, never under a later occupant.
+          await db.from("desks").update({ status: "free", current_booking_id: null }).eq("id", booking.desk_id).eq("current_booking_id", bookingId);
         } else {
           // A fixed cabin's link is cleared only if it still points at this session (a walk-in
           // sold the member's hours must not unlink the member who came in after).

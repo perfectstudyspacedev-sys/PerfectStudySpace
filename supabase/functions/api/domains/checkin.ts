@@ -14,7 +14,7 @@ import { err, json } from "../../_shared/http.ts";
 import { isOwnerOrAdmin, requireBranch } from "../../_shared/auth.ts";
 import { featureOn } from "../../_shared/flags.ts";
 import { toISTDateStr } from "../../_shared/dates.ts";
-import { notifyStudent } from "../../_shared/notify.ts";
+import { alertDesk, notifyStudent } from "../../_shared/notify.ts";
 import { portalScope } from "../../_shared/student.ts";
 import { computeOvertimeCharge } from "../../_shared/overtime.ts";
 import {
@@ -60,6 +60,30 @@ async function openSession(db: Ctx["db"], studentId: string) {
   return data ?? null;
 }
 
+/** Cancels food orders still open more than two hours after they were placed (the nightly job). */
+async function cancelStaleOrders(db: Ctx["db"]): Promise<number> {
+  const before = new Date(Date.now() - 2 * 3600e3).toISOString();
+  const { data } = await db.from("food_orders").update({ status: "cancelled", cancel_reason: "Not delivered before closing — cancelled; nothing was charged", updated_at: new Date().toISOString() })
+    .in("status", ["placed", "accepted", "ready"]).lt("created_at", before).select("id, student_id");
+  for (const o of data ?? []) await notifyStudent(db, o.student_id, { kind: "food", title: "Your food order was cancelled", body: "It wasn't delivered before closing, so it was cancelled. Nothing was charged.", dedupeKey: `food-cancel:${o.id}` });
+  return (data ?? []).length;
+}
+
+/** What the student is told about a cabin collision (the desk gets the staff wording). */
+function studentCollisionText(c: { kind: string; credit: number }, deskLabel: string | null): string {
+  if (c.kind === "walkin_overstay") return "Someone is still in your cabin past their time — the desk has been told and will move them. Your cabin is yours.";
+  if (c.kind === "fallback_desk") return `Your cabin is in use by someone else for now — please sit at ${deskLabel ?? "the desk shown"} today.`;
+  if (c.kind === "free_day" && c.credit > 0) return `Your cabin is in use and no desk is free — sorry! You get a free day (₹${c.credit} off your next renewal), and the desk has been told.`;
+  return "Your cabin is in use and no desk is free right now — the desk has been told and will find you a seat.";
+}
+
+/** Branches with a check-in poster (a key and a saved location): the only ones where self check-in and checkout run. */
+export async function posterBranchIds(db: Ctx["db"], ids: string[]): Promise<Set<string>> {
+  if (!ids.length) return new Set();
+  const { data } = await db.from("branches").select("id, is_active, latitude, checkin_key").in("id", ids);
+  return new Set((data ?? []).filter((b: any) => b.is_active && b.checkin_key && b.latitude != null).map((b: any) => b.id));
+}
+
 async function record(db: Ctx["db"], row: Record<string, unknown>) {
   const { error } = await db.from("checkin_records").insert(row);
   if (error) console.error("checkin_records insert failed:", error.message);
@@ -89,12 +113,14 @@ export function handlers(): Record<string, Handler> {
         const { data: b } = await db.from("branches").select("id, name, is_active, latitude, longitude, checkin_key").eq("id", payload.branchId).maybeSingle();
         if (b) branch = { id: b.id, name: b.name, ready: !!(b.is_active && b.checkin_key && b.latitude != null) };
       }
+      // Self checkout runs only where self check-in does (a branch with a poster): elsewhere the desk checks out.
+      const canSelfCheckout = !!session && on && (await posterBranchIds(db, [session.branch_id])).has(session.branch_id);
       return json({
         on, seatMatching, branch,
         consentNeeded: consent?.version !== CONSENT_VERSION, consentText: CONSENT_TEXT, consentVersion: CONSENT_VERSION,
         session: session ? {
           bookingId: session.id, start: session.start_time, end: session.end_time, paused: !!session.is_paused,
-          desk: (session.desks as any)?.label ?? null, branch: (session.branches as any)?.name ?? null,
+          desk: (session.desks as any)?.label ?? null, branch: (session.branches as any)?.name ?? null, canSelfCheckout,
         } : null,
       });
     },
@@ -150,10 +176,14 @@ export function handlers(): Record<string, Handler> {
         return err(ran.body?.error ?? "Could not check you in — please ask at the desk", ran.status);
       }
       await record(db, { ...base, ...where, result: "ok", booking_id: ran.body.bookingId });
+      // A cabin collision (O1): the desk's wording is for staff, so the student gets their own,
+      // and the desk is told when a person is needed (nobody reads the portal's answer for them).
+      const c = ran.body.collision as { kind: string; credit: number; message: string } | undefined;
+      if (c && c.kind !== "fallback_desk") await alertDesk(db, branch.id, `Self check-in: ${s.name ?? "A member"} — ${c.message}`);
       return json({
         ok: true, branch: branch.name, bookingId: ran.body.bookingId, deskLabel: ran.body.deskLabel ?? null, deskReason: ran.body.deskLabel ? reason : null,
         endTime: ran.body.endTime, sessionHours: ran.body.sessionHours, expiredMembership: !!ran.body.expiredMembership,
-        ...(ran.body.collision ? { collision: ran.body.collision } : {}),
+        ...(c ? { collision: { kind: c.kind, credit: c.credit, message: studentCollisionText(c, ran.body.deskLabel ?? null) } } : {}),
       });
     },
 
@@ -163,6 +193,7 @@ export function handlers(): Record<string, Handler> {
       if (!(await featureOn(db, "self_checkin"))) return err("Self checkout is not open yet — please check out at the desk", 403);
       const session = await openSession(db, s.id);
       if (!session) return err("You have no open session to check out of");
+      if (!(await posterBranchIds(db, [session.branch_id])).has(session.branch_id)) return err("Self checkout isn't available at this branch — please check out at the desk", 403);
       const now = Date.now();
       const overtimeMinutes = overtimeMinutesAt(session, now);
       const ran = await runNested(actionDef("checkout_booking"), ctx, { staff: portalScope(session.branch_id) }, {
@@ -183,16 +214,16 @@ export function handlers(): Record<string, Handler> {
       const { data: branches } = await db.from("branches").select("id, name").eq("is_active", true).order("name");
       const ids = (branches ?? []).map((b: any) => b.id);
       if (!ids.length) return json({ on: true, branches: [] });
-      const [{ data: desks }, { data: open }] = await Promise.all([
-        db.from("desks").select("branch_id").in("branch_id", ids).eq("seat_type", "floating").limit(5000),
-        db.from("bookings").select("branch_id, desks!desk_id(seat_type)").in("branch_id", ids).eq("status", "active").limit(5000),
+      const [desks, open] = await Promise.all([
+        fetchAllRows<any>(() => db.from("desks").select("id, branch_id").in("branch_id", ids).eq("seat_type", "floating").order("id")),
+        fetchAllRows<any>(() => db.from("bookings").select("id, branch_id, desks!desk_id(seat_type)").in("branch_id", ids).eq("status", "active").order("id")),
       ]);
       return json({
         on: true, at: new Date().toISOString(),
         branches: (branches ?? []).map((b: any) => ({
           id: b.id, name: b.name,
-          ...freeSeats((desks ?? []).filter((d: any) => d.branch_id === b.id).length,
-            (open ?? []).filter((o: any) => o.branch_id === b.id).map((o: any) => ({ deskSeatType: o.desks?.seat_type ?? null }))),
+          ...freeSeats(desks.filter((d: any) => d.branch_id === b.id).length,
+            open.filter((o: any) => o.branch_id === b.id).map((o: any) => ({ deskSeatType: o.desks?.seat_type ?? null }))),
         })),
       });
     },
@@ -277,8 +308,12 @@ export function handlers(): Record<string, Handler> {
     set_branch_location: async (ctx: Ctx, payload: any): Promise<Response | undefined> => {
       const { db } = ctx;
       if (!isOwnerOrAdmin(ctx.staff!)) return err("Owner only", 403);
+      // Clearing needs clear: true; otherwise both must be real numbers (review #11: text that the
+      // browser sent as null must never become 0, or wipe the location).
+      const clear = payload.clear === true;
+      const isNum = (v: unknown) => (typeof v === "number" && Number.isFinite(v)) || (typeof v === "string" && v.trim() !== "" && Number.isFinite(Number(v)));
+      if (!clear && (!isNum(payload.latitude) || !isNum(payload.longitude))) return err("Enter the latitude and longitude as numbers, e.g. 11.0168 and 76.9558");
       const lat = Number(payload.latitude), lng = Number(payload.longitude);
-      const clear = payload.latitude == null && payload.longitude == null;
       if (!clear && !validCoords(lat, lng)) return err("Enter a latitude between -90 and 90 and a longitude between -180 and 180");
       const { data } = await db.from("branches").update(clear ? { latitude: null, longitude: null } : { latitude: lat, longitude: lng })
         .eq("id", payload.branchId).select("id");
@@ -298,7 +333,10 @@ export function handlers(): Record<string, Handler> {
     // ─── A5 session watch: 23:30 IST ───
     cron_close_forgotten_sessions: async (ctx: Ctx): Promise<Response | undefined> => {
       const { db } = ctx;
-      if (!(await featureOn(db, "session_watch"))) return json({ skipped: "pssai_session_watch is off" });
+      // The kitchen is closed by 23:30: food orders still open are cancelled (nothing was billed),
+      // so a forgotten order never blocks the student's next ones (review fix #12).
+      const ordersCancelled = (await featureOn(db, "food_orders")) ? await cancelStaleOrders(db) : 0;
+      if (!(await featureOn(db, "session_watch"))) return json({ skipped: "pssai_session_watch is off", ordersCancelled });
       const now = Date.now();
       const open = await fetchAllRows<any>(() => db.from("bookings").select("id, student_id, branch_id, booking_type, start_time, end_time, is_paused, paused_at")
         .eq("status", "active").lt("start_time", new Date(now).toISOString()).order("start_time").order("id"));
@@ -314,11 +352,14 @@ export function handlers(): Record<string, Handler> {
         closed++;
         const due = Number(ran.body?.foodDue ?? 0);
         const day = toISTDateStr(b.start_time);
+        const atBreak = !!b.is_paused && b.paused_at && Date.parse(at) < Date.parse(b.end_time ?? at);
+        const where = atBreak ? "when its break began" : "at its booked end";
         await flag(db, "session_auto_closed", b.id, b.branch_id,
-          `No checkout by 23:30 IST: closed at its booked end, ${hm(at)} on ${day}, with no overtime${due > 0 ? `; ₹${due} of food left as dues` : ""}.`);
+          `No checkout by 23:30 IST: closed ${where}, ${hm(at)} on ${day}, with no overtime${due > 0 ? `; ₹${due} of food left as dues` : ""}.`);
+        // C15 (review #7): the notice doesn't advertise that no overtime was charged, and asks for a checkout.
         await notifyStudent(db, b.student_id, {
           kind: "session_closed", title: "Your session was closed for you",
-          body: `You didn't check out on ${day}, so your session was closed at its booked end time, ${hm(at)}. No overtime was charged.${due > 0 ? ` ₹${due} of food is still due — please pay at the desk.` : ""}`,
+          body: `You didn't check out on ${day}, so your session was closed ${where === "at its booked end" ? "at its booked end time" : "when your break began"}, ${hm(at)}. Please check out every time you leave — sessions closed this way are reviewed.${due > 0 ? ` ₹${due} of food is still due — please pay at the desk.` : ""}`,
           dedupeKey: `auto-close:${b.id}`,
         });
       }
@@ -327,9 +368,11 @@ export function handlers(): Record<string, Handler> {
       const since = new Date(now - 26 * 3600e3).toISOString();
       const events = await fetchAllRows<any>(() => db.from("events").select("id, occurred_at, actor_type, actor_id, payload")
         .eq("action", "checkout_booking").eq("ok", true).in("actor_type", ["staff", "owner", "admin"]).gte("occurred_at", since).order("id"));
+      // Only a time the staff member changed by hand (the form sends endTimeEdited): a form left
+      // open, or the Food Pass prompt re-sending the first time, is not a correction (review fix).
       const moved = events.filter((e) => {
         const at = Date.parse(e.payload?.actualEndTime ?? "");
-        return typeof e.payload?.bookingId === "string" && Number.isFinite(at) && Date.parse(e.occurred_at) - at > CORRECTION_FLAG_MIN * 60e3;
+        return e.payload?.endTimeEdited === true && typeof e.payload?.bookingId === "string" && Number.isFinite(at) && Date.parse(e.occurred_at) - at > CORRECTION_FLAG_MIN * 60e3;
       });
       let corrected = 0;
       const branchOf = new Map<string, string>();
@@ -354,7 +397,8 @@ export async function selfCheckinFindings(db: Ctx["db"]) {
   const now = Date.now();
   const since48 = new Date(now - 48 * 3600e3).toISOString(), since24 = new Date(now - 24 * 3600e3).toISOString();
   const settled = new Date(now - 15 * 60e3).toISOString();
-  // A successful self check-in always opens a session; one without is a crash between the two.
+  // A self check-in recorded "ok" always carries the session it opened; one without is a bug in
+  // the recording (a crash before the session leaves no record at all, so it can't show here).
   const orphan = await fetchAllRows<any>(() => db.from("checkin_records").select("id, student_id, branch_id, created_at")
     .eq("kind", "in").eq("result", "ok").is("booking_id", null).gte("created_at", since48).order("id"));
   // Staff check-ins at branches with a poster: each should have a reason (exit gate, Phase 4).
@@ -372,5 +416,13 @@ export async function selfCheckinFindings(db: Ctx["db"]) {
     for (const t of data ?? []) paid.add(t.booking_id);
   }
   const unpaid = walkins.filter((w) => !paid.has(w.id));
-  return { orphan, staffIns, unpaid };
+  // Review #14: food left unpaid on a finished walk-in (e.g. closed at 23:30) — nothing collects it later.
+  const closedWalkins = await fetchAllRows<any>(() => db.from("bookings").select("id").eq("booking_type", "walkin").eq("status", "completed").gte("created_at", since48).order("id"));
+  const foodUnpaid: any[] = [];
+  for (let i = 0; i < closedWalkins.length; i += 200) {
+    const ids = closedWalkins.slice(i, i + 200).map((w) => w.id);
+    const { data } = await db.from("food_bills").select("id, booking_id, student_id, branch_id, total, created_at").in("booking_id", ids).eq("paid", false);
+    foodUnpaid.push(...(data ?? []));
+  }
+  return { orphan, staffIns, unpaid, foodUnpaid };
 }

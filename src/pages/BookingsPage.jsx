@@ -168,6 +168,8 @@ function CheckoutModal({ booking, onConfirm, onCancel, loading }) {
   // out promptly — overtime below recalculates live off whatever this is set to, and it's
   // what actually gets stamped as the booking's end_time on submit.
   const [checkoutAt, setCheckoutAt] = useState(() => new Date())
+  // PSS-AI A5: only a time the staff member actually changed counts as a corrected checkout.
+  const [timeEdited, setTimeEdited] = useState(false)
 
   // end_time already includes finished breaks (resume_session extends it). A break still in
   // progress hasn't been added yet, so it's counted here — otherwise checking someone out
@@ -242,10 +244,10 @@ function CheckoutModal({ booking, onConfirm, onCancel, loading }) {
             <input
               type="datetime-local"
               value={toLocalDateTimeInput(checkoutAt)}
-              onChange={(e) => { if (e.target.value) setCheckoutAt(new Date(e.target.value)) }}
+              onChange={(e) => { if (e.target.value) { setCheckoutAt(new Date(e.target.value)); setTimeEdited(true) } }}
               style={{ flex: 1 }}
             />
-            <button type="button" className="btn btn-ghost" onClick={() => setCheckoutAt(new Date())}>Now</button>
+            <button type="button" className="btn btn-ghost" onClick={() => { setCheckoutAt(new Date()); setTimeEdited(false) }}>Now</button>
           </div>
           {checkoutBeforeStart && (
             <p className="error-msg" style={{ marginTop: '0.3rem' }}>Can't be before this session's check-in time.</p>
@@ -361,7 +363,7 @@ function CheckoutModal({ booking, onConfirm, onCancel, loading }) {
         <div className="modal-actions">
           <button type="button" className="btn btn-ghost" onClick={onCancel}>Cancel</button>
           <button type="button" className="btn btn-primary" disabled={loading || checkoutBeforeStart}
-            onClick={() => onConfirm({ overtimeMinutes, overtimeCharge, overtimePaymentMode: payMode, overtimePayNow, settleFoodNow, actualEndTime: checkoutAt.toISOString() })}
+            onClick={() => onConfirm({ overtimeMinutes, overtimeCharge, overtimePaymentMode: payMode, overtimePayNow, settleFoodNow, actualEndTime: checkoutAt.toISOString(), endTimeEdited: timeEdited })}
           >
             {loading ? 'Checking out…'
               : isWalkin && remainingDue > 0 ? `Collect ₹${remainingDue.toLocaleString('en-IN')} & Check Out`
@@ -756,16 +758,16 @@ export default function BookingsPage() {
   // (no foodPassPaymentMode given yet), nothing was mutated server-side; this just swaps the
   // checkout modal for a compulsory collect-now prompt (no skip option) and resubmits once
   // a payment mode is picked.
-  const confirmCheckout = async (bookingId, { overtimeMinutes, overtimePaymentMode, overtimePayNow, settleFoodNow, foodPassPaymentMode, actualEndTime }) => {
+  const confirmCheckout = async (bookingId, { overtimeMinutes, overtimePaymentMode, overtimePayNow, settleFoodNow, foodPassPaymentMode, actualEndTime, endTimeEdited }) => {
     setActionLoading(bookingId + ':checkout')
     try {
       const res = await withCheckoutKey((idempotencyKey) => api('checkout_booking', {
-        bookingId, overtimeMinutes, overtimePaymentMode, overtimePayNow, settleFoodNow, foodPassPaymentMode, actualEndTime,
+        bookingId, overtimeMinutes, overtimePaymentMode, overtimePayNow, settleFoodNow, foodPassPaymentMode, actualEndTime, endTimeEdited: !!endTimeEdited,
       }, { idempotencyKey }), bookingId)
       if (res?.needsFoodPassCollection) {
         setCheckoutBooking(null)
         setFoodPassCollectMode('cash')
-        setFoodPassPrompt({ bookingId, shortfall: res.shortfall, overtimeMinutes, overtimePaymentMode, overtimePayNow, settleFoodNow, actualEndTime })
+        setFoodPassPrompt({ bookingId, shortfall: res.shortfall, overtimeMinutes, overtimePaymentMode, overtimePayNow, settleFoodNow, actualEndTime, endTimeEdited })
         return
       }
       const done = bookings.find(b => b.id === bookingId)
@@ -1073,6 +1075,7 @@ export default function BookingsPage() {
                   settleFoodNow: foodPassPrompt.settleFoodNow,
                   foodPassPaymentMode: foodPassCollectMode,
                   actualEndTime: foodPassPrompt.actualEndTime,
+                  endTimeEdited: foodPassPrompt.endTimeEdited,
                 })}
               >
                 {actionLoading === foodPassPrompt.bookingId + ':checkout' ? 'Collecting…' : `Collect ${formatCurrency(foodPassPrompt.shortfall)} & Check Out`}

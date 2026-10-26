@@ -236,11 +236,14 @@ staffed for the four weeks of the pilot. Every switch below is an `app_settings`
    a poster, so self check-in works at Hopes only. "New poster" makes the old one stop working.
 2. **Self check-in and checkout** — `pssai_self_checkin` = `on`. Students scan the poster, read the
    location notice once (D9), and check in within 100 m of the hall. They check out on the portal's
-   home page: overtime is added to their next renewal as at the desk; food that would need paying
-   (a Food Pass short, a bill over 3 days old) stays as dues (C14). Staff check-in still works.
+   home page (only at a branch with a poster — elsewhere the desk checks out): overtime is added
+   to their next renewal as at the desk; food that would need paying (a Food Pass short, a bill
+   over 3 days old) stays as dues (C14). Staff check-in still works. When a cabin member's cabin is
+   in use, the desk gets a "Needs the desk" alert.
 3. **Session watch** — `pssai_session_watch` = `on`. At 23:30 every session past its booked end is
-   closed at that end with no overtime (C15) and the student is told. **Flags** lists each one, and
-   any staff checkout moved back more than 10 minutes. The nightly check (Dashboard card) also
+   closed at that end (or when its break began) with no overtime (C15) and the student is asked to
+   check out next time. Sessions booked past 23:30 are left alone. **Flags** lists each one, and
+   any staff checkout whose time was changed by hand to more than 10 minutes earlier. The nightly check (Dashboard card) also
    lists staff check-ins at Hopes, so each can be explained (exit gate).
 4. **Seat matching** — tag desks on **Branches** (window, power, quiet, AC), then
    `pssai_seat_matching` = `on`. Self check-in seats a member at their favourite or best-matching
@@ -250,17 +253,22 @@ staffed for the four weeks of the pilot. Every switch below is an `app_settings`
    (counts only).
 6. **Food ordering** — `pssai_food_orders` = `on`. Students order from the portal while checked in;
    whoever makes the food works **Food orders** (accept, ready, delivered). Delivery bills it as at
-   the counter: the Food Pass if it covers it, else the tab, cash or UPI. A price changed since the
-   order is refused — cancel it and the student orders again.
+   the counter: a student with money on a Food Pass pays from it only (never cash or UPI as well;
+   a shortfall is collected at checkout), anyone else on the tab, cash or UPI. A price changed
+   since the order is refused — cancel it and the student orders again. Orders still open at 23:30
+   are cancelled (nothing is charged).
 7. **Stock and supplier orders** — on **Food orders → Stock & suppliers**, link each menu item to
    the stock it uses (and the supplier's phone), then `pssai_food_stock` = `on`. Bills take stock
-   off; each night a supplier draft covers 3 days of expected use; send it by WhatsApp and mark it
-   received (correcting what actually came).
+   off; each night a supplier draft covers 3 days of expected use; press each supplier's WhatsApp
+   button, **Mark as sent**, and later mark it received (correcting what actually came).
 8. **Report a problem** — `pssai_tickets` = `on`. Reports arrive on **Problems**, urgent first
-   (fire, smoke, leaks, theft…). Marking one fixed tells the student.
-9. **Photo-proof cleaning** — `pssai_photo_tasks` = `on`. Daily cleaning tasks need a photo before
-   they can be ticked (C17); the owner opens it from the task. Photos are removed after
-   `task_photo_keep_days` (30).
+   (fire, smoke, leaks, theft…); an urgent one also pops up as "Needs the desk". Marking one fixed
+   tells the student.
+9. **Photo-proof cleaning** — `pssai_photo_tasks` = `on`, then on **Actions** press *Ask for
+   photos on existing daily cleaning tasks* (tasks made before the switch don't ask otherwise).
+   Daily cleaning tasks need a photo before they can be ticked (C17), a missed day needs that day's
+   photo; the owner opens it from the task and can turn the photo on or off per task. Photos are
+   removed after `task_photo_keep_days` (30).
 
 Phase 4 exit gate (you): four weeks at Hopes with staff present but not needed; every open session
 closed by the end of the day (`SELECT count(*) FROM bookings WHERE status = 'active' AND start_time

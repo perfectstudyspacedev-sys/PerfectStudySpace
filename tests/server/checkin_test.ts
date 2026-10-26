@@ -211,16 +211,19 @@ await setup();
   f1.status = "occupied"; f1.current_booking_id = forgot.id;
   const late = insert("bookings", { student_id: meena.id, branch_id: b1.id, desk_id: cabin.id, booking_type: "permanent", start_time: new Date(now - 3600e3).toISOString(), end_time: new Date(now + 2 * 3600e3).toISOString(), hours: 3, amount: 0, status: "active", is_paused: false, paused_at: null, total_pause_minutes: 0 });
   const walk = insert("students", { name: "Walk In", phone: "9800000009", branch_id: b1.id, status: "active" });
-  const onBreak = insert("bookings", { student_id: walk.id, branch_id: b1.id, desk_id: null, booking_type: "walkin", start_time: new Date(now - 5 * 3600e3).toISOString(), end_time: new Date(now + 3600e3).toISOString(), hours: 6, scheduled_hours: 6, amount: 60, payment_mode: "cash", status: "active", is_paused: true, paused_at: new Date(now - 4 * 3600e3).toISOString(), total_pause_minutes: 0 });
+  const onBreak = insert("bookings", { student_id: walk.id, branch_id: b1.id, desk_id: null, booking_type: "walkin", start_time: new Date(now - 5 * 3600e3).toISOString(), end_time: new Date(now - 1800e3).toISOString(), hours: 4.5, scheduled_hours: 4.5, amount: 60, payment_mode: "cash", status: "active", is_paused: true, paused_at: new Date(now - 4 * 3600e3).toISOString(), total_pause_minutes: 0 });
+  // Review #8: on a break but booked past now — left alone.
+  const walk2 = insert("students", { name: "Late Break", phone: "9800000008", branch_id: b1.id, status: "active" });
+  const breakAhead = insert("bookings", { student_id: walk2.id, branch_id: b1.id, desk_id: null, booking_type: "walkin", start_time: new Date(now - 2 * 3600e3).toISOString(), end_time: new Date(now + 3 * 3600e3).toISOString(), hours: 5, scheduled_hours: 5, amount: 50, payment_mode: "cash", status: "active", is_paused: true, paused_at: new Date(now - 3600e3).toISOString(), total_pause_minutes: 0 });
   const walkBill = insert("food_bills", { branch_id: b1.id, student_id: walk.id, booking_id: onBreak.id, subtotal: 25, total: 25, paid: false, payment_mode: null });
   const r = await run("cron_close_forgotten_sessions");
-  check(r.closed === 2 && r.leftOpen === 1 && late.status === "active", "W2: two forgotten sessions are closed; one still within its booked time is left open", r);
+  check(r.closed === 2 && r.leftOpen === 2 && late.status === "active" && breakAhead.status === "active", "W2: two forgotten sessions are closed; one within its booked time and one on a break booked past now are left open", r);
   check(forgot.status === "completed" && forgot.end_time === new Date(now - 2 * 3600e3).toISOString() && !rows("overtime_sessions").length && f1.status === "free",
     "W2: closed at the booked end, no overtime (C15), the desk freed", forgot.end_time);
   check(onBreak.status === "completed" && onBreak.end_time === new Date(now - 4 * 3600e3).toISOString() && walkBill.paid === false && !rows("transactions").some((t) => t.category === "food"),
     "W2: a session left on a break closes when the break began; the walk-in's unpaid food stays unpaid (nobody collected it)", onBreak.end_time);
   const flags = rows("anomaly_flags").filter((f) => f.kind === "session_auto_closed");
-  check(flags.length === 2 && flags.some((f) => /₹25 of food/.test(f.explanation)) && rows("portal_notifications").some((n) => n.kind === "session_closed" && n.student_id === arun.id),
+  check(flags.length === 2 && flags.some((f) => /₹25 of food/.test(f.explanation) && /when its break began/.test(f.explanation)) && rows("portal_notifications").some((n) => n.kind === "session_closed" && n.student_id === arun.id && !/No overtime/.test(n.body) && /Please check out/.test(n.body)),
     "W2: each close is a flag for the owner, and the student is told in the portal", flags.map((f) => f.explanation));
   check(rows("events").some((e) => e.action === "checkout_booking" && e.actor_type === "system" && e.ok), "W2: each close is logged as checkout_booking by the system");
   const again = await run("cron_close_forgotten_sessions");
@@ -228,14 +231,17 @@ await setup();
 
   // Staff corrections of the checkout time.
   const moved = insert("bookings", { student_id: arun.id, branch_id: b1.id, desk_id: null, booking_type: "temporary", start_time: new Date(now - 5 * 3600e3).toISOString(), end_time: new Date(now - 3600e3).toISOString(), hours: 4, amount: 0, status: "active", is_paused: false, paused_at: null, total_pause_minutes: 0 });
-  await call("checkout_booking", { bookingId: moved.id, overtimeMinutes: 0, actualEndTime: new Date(now - 50 * 60e3).toISOString() }, tP);
+  await call("checkout_booking", { bookingId: moved.id, overtimeMinutes: 0, actualEndTime: new Date(now - 50 * 60e3).toISOString(), endTimeEdited: true }, tP);
+  // Review #13: a form left open 40 minutes (time not edited) is not a correction.
+  const leftOpen = insert("bookings", { student_id: walk.id, branch_id: b1.id, desk_id: null, booking_type: "temporary", start_time: new Date(now - 5 * 3600e3).toISOString(), end_time: new Date(now - 3600e3).toISOString(), hours: 4, amount: 0, status: "active", is_paused: false, paused_at: null, total_pause_minutes: 0 });
+  await call("checkout_booking", { bookingId: leftOpen.id, overtimeMinutes: 0, actualEndTime: new Date(now - 40 * 60e3).toISOString(), endTimeEdited: false }, tP);
   const small = insert("bookings", { student_id: meena.id, branch_id: b1.id, desk_id: null, booking_type: "permanent", start_time: new Date(now - 4 * 3600e3).toISOString(), end_time: new Date(now - 3600e3).toISOString(), hours: 3, amount: 0, status: "active", is_paused: false, paused_at: null, total_pause_minutes: 0 });
   late.status = "completed";
-  await call("checkout_booking", { bookingId: small.id, overtimeMinutes: 0, actualEndTime: new Date(now - 5 * 60e3).toISOString() }, tP);
+  await call("checkout_booking", { bookingId: small.id, overtimeMinutes: 0, actualEndTime: new Date(now - 5 * 60e3).toISOString(), endTimeEdited: true }, tP);
   const r2 = await run("cron_close_forgotten_sessions");
   const corr = rows("anomaly_flags").filter((f) => f.kind === "checkout_corrected");
   check(r2.corrected === 1 && corr.length === 1 && corr[0].ref_id === moved.id && corr[0].branch_id === b1.id && /50 minutes before/.test(corr[0].explanation),
-    "W4: a staff checkout moved back 50 minutes is flagged; one moved back 5 minutes is not", corr.map((f) => f.explanation));
+    "W4: a staff checkout moved back 50 minutes is flagged; one moved back 5 minutes, or a form left open, is not", corr.map((f) => f.explanation));
 }
 
 // ── SP14 live seats; session reminders; O2 part 2 ──
@@ -253,9 +259,12 @@ await setup();
   setSetting("pssai_self_checkin", "on");
   rows("bookings")[0].end_time = new Date(Date.now() + 5 * 60e3).toISOString();
   await run("cron_session_reminders");
-  check(rows("portal_notifications").some((n) => n.kind === "session_end" && /in the portal/.test(n.body)), "L2: with self check-in on the reminder says to check out in the portal");
-
+  check(rows("portal_notifications").some((n) => n.kind === "session_end" && /at the desk/.test(n.body)), "L2: at a branch without a poster the reminder says to check out at the desk (review #2)");
+  rows("portal_notifications").length = 0;
   await setUpPoster();
+  await run("cron_session_reminders");
+  check(rows("portal_notifications").some((n) => n.kind === "session_end" && /in the portal/.test(n.body)), "L2: at a poster branch with self check-in on it says to check out in the portal");
+
   insert("checkin_records", { student_id: arun.id, branch_id: b1.id, kind: "in", result: "ok", booking_id: null });
   await call("check_in_member", { branchId: b1.id, studentId: arun.id }, tP).catch(() => null);
   rows("bookings")[0].status = "completed";
@@ -266,6 +275,75 @@ await setup();
   const f = await integrityFindings(adminClient());
   check(atDesk.status === 200 && f.counts.selfcheckins_without_session === 1 && f.counts.staff_checkins_at_poster_branches >= 1 && f.counts.walkins_without_payment === 1,
     "I1: the nightly check lists a self check-in with no session, a staff check-in at a poster branch and a paid walk-in with no payment", f.counts);
+}
+
+// ── Phase 4 review fixes ──
+await setup();
+{
+  setSetting("pssai_self_checkin", "on");
+  await setUpPoster();
+  // #11: bad coordinates never save as 0 or wipe the location.
+  const bad = await Promise.all([
+    call("set_branch_location", { branchId: b1.id, latitude: null, longitude: HALL.lng }, tO),
+    call("set_branch_location", { branchId: b1.id, latitude: "13.08° N", longitude: HALL.lng }, tO),
+    call("set_branch_location", { branchId: b1.id, latitude: null, longitude: null }, tO),
+  ]);
+  check(bad.every((r) => r.status === 400) && b1.latitude === HALL.lat && b1.longitude === HALL.lng, "X11: a missing or non-number coordinate is refused; the saved location stays", bad.map((r) => r.error));
+  check((await call("set_branch_location", { branchId: b2.id, clear: true }, tO)).ok && b2.latitude === null, "X11: clearing needs clear: true");
+
+  // #2: self checkout only where self check-in runs (a branch with a poster).
+  const visitor = insert("students", { name: "Ram Member", phone: "9100000007", branch_id: b2.id, status: "active", total_visits: 0 });
+  insert("memberships", { student_id: visitor.id, branch_id: b2.id, category: "temporary", seat_type: "floating", hours_per_day: 6, start_date: addDays(IST_TODAY(), -3), end_date: addDays(IST_TODAY(), 20), due_date: addDays(IST_TODAY(), 21), monthly_fee: 1200, total_paid: 1200, fee_due: 0, is_active: true, is_paused: false });
+  const code = await call("create_portal_setup_code", { studentId: visitor.id }, tR);
+  const tV = (await call("me_set_pin", { phone: visitor.phone, code: code.code, pin: "482915", acceptPrivacy: true })).token;
+  await call("check_in_member", { branchId: b2.id, studentId: visitor.id }, tR);
+  const info = await call("me_checkin_info", {}, tV);
+  const refused = await call("me_check_out", {}, tV);
+  check(info.session && info.session.canSelfCheckout === false && refused.status === 403 && rows("bookings").find((b) => b.student_id === visitor.id)?.status === "active",
+    "X2: at Ram Nagar (no poster) the portal offers no checkout and refuses one — the desk checks out", { canSelf: info.session?.canSelfCheckout, refused: refused.error });
+  await call("me_check_in", { branchId: b1.id, key, ...near, consent: CONSENT_VERSION }, tA);
+  const infoA = await call("me_checkin_info", {}, tA);
+  check(infoA.session?.canSelfCheckout === true && (await call("me_check_out", {}, tA)).status === 200, "X2: at Hopes (poster) self checkout works");
+
+  // #3: two check-ins for the same free desk at the same moment: one gets it.
+  const s1 = insert("students", { name: "Desk One", phone: "9100000011", branch_id: b1.id, status: "active", total_visits: 0 });
+  const s2 = insert("students", { name: "Desk Two", phone: "9100000012", branch_id: b1.id, status: "active", total_visits: 0 });
+  for (const st of [s1, s2]) insert("memberships", { student_id: st.id, branch_id: b1.id, category: "temporary", seat_type: "floating", hours_per_day: 6, start_date: addDays(IST_TODAY(), -3), end_date: addDays(IST_TODAY(), 20), due_date: addDays(IST_TODAY(), 21), monthly_fee: 1200, total_paid: 1200, fee_due: 0, is_active: true, is_paused: false });
+  const both = await Promise.all([s1, s2].map((st) => call("check_in_member", { branchId: b1.id, studentId: st.id, deskId: f3.id }, tP)));
+  const okOnes = both.filter((r) => r.status === 200);
+  check(okOnes.length === 1 && both.some((r) => r.error === "Selected desk is not available") && f3.status === "occupied" && f3.current_booking_id === okOnes[0].bookingId,
+    "X3: one of two simultaneous check-ins gets F3; the other is told it is taken", both.map((r) => r.status + " " + (r.error ?? r.deskLabel)));
+  // Checking out a session whose desk now belongs to someone else leaves that desk alone.
+  const winner = rows("bookings").find((b) => b.id === okOnes[0].bookingId)!;
+  f3.current_booking_id = "00000000-0000-4000-8000-0000000fffff";
+  await call("checkout_booking", { bookingId: winner.id, overtimeMinutes: 0 }, tP);
+  check(winner.status === "completed" && f3.status === "occupied", "X3: checkout frees a floating desk only while it still points at that session");
+
+  // #4: a cabin member self-checks in while a walk-in sold their hours is past time.
+  setSetting("pssai_hour_release", "on");
+  const walk = insert("students", { name: "Sold Walkin", phone: "9800000021", branch_id: b1.id, status: "active" });
+  const wb = insert("bookings", { student_id: walk.id, branch_id: b1.id, desk_id: cabin.id, booking_type: "walkin", status: "active", start_time: new Date(Date.now() - 4 * 3600e3).toISOString(), end_time: new Date(Date.now() - 3600e3).toISOString(), hours: 3, amount: 60 });
+  insert("seat_resales", { desk_id: cabin.id, booking_id: wb.id, release_id: null, collision: null, branch_id: b1.id });
+  rows("messages").length = 0;
+  const inM = await call("me_check_in", { branchId: b1.id, key, ...near, consent: CONSENT_VERSION }, tM);
+  const alert = rows("messages").find((m) => m.content.startsWith("[desk_alert]"));
+  check(inM.status === 200 && inM.collision?.kind === "walkin_overstay" && /desk has been told/.test(inM.collision.message) && !/please move them/.test(inM.collision.message),
+    "X4: the student is told in their own words (not the desk's)", inM.collision);
+  check(alert && alert.branch_id === b1.id && /Meena Raj/.test(alert.content) && /move them/.test(alert.content), "X4: and the desk gets an alert with the staff wording", alert?.content);
+
+  // #12: food orders still open at closing are cancelled by the nightly job, even with session watch off.
+  setSetting("pssai_food_orders", "on");
+  const stale = insert("food_orders", { branch_id: b1.id, student_id: arun.id, status: "accepted", items: [], total: 20, created_at: new Date(Date.now() - 5 * 3600e3).toISOString() });
+  const fresh = insert("food_orders", { branch_id: b1.id, student_id: arun.id, status: "placed", items: [], total: 10, created_at: new Date(Date.now() - 600e3).toISOString() });
+  const night = await run("cron_close_forgotten_sessions");
+  check(night.skipped && night.ordersCancelled === 1 && stale.status === "cancelled" && fresh.status === "placed" && rows("portal_notifications").some((n) => n.kind === "food" && n.student_id === arun.id && /Nothing was charged/.test(n.body)),
+    "X12: an order open for hours is cancelled at closing (nothing charged, the student told); a new one stays", night);
+
+  // #14: unpaid food on a finished walk-in shows in the nightly integrity report.
+  const done1 = insert("bookings", { student_id: walk.id, branch_id: b1.id, desk_id: null, booking_type: "walkin", status: "completed", start_time: new Date(Date.now() - 6 * 3600e3).toISOString(), end_time: new Date(Date.now() - 3 * 3600e3).toISOString(), hours: 3, amount: 0 });
+  insert("food_bills", { branch_id: b1.id, student_id: walk.id, booking_id: done1.id, subtotal: 30, total: 30, paid: false, payment_mode: null });
+  const f = await integrityFindings(adminClient());
+  check(f.counts.unpaid_food_on_closed_walkins === 1 && f.unpaid_food_on_closed_walkins[0].booking_id === done1.id, "X14: the integrity report lists unpaid food left on a finished walk-in", f.counts);
 }
 
 done();

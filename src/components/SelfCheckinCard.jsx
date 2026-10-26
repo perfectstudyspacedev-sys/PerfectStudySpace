@@ -16,7 +16,7 @@ function printPoster(name, url) {
   const qr = qrcode(0, 'M'); qr.addData(url); qr.make()
   const w = window.open('', '_blank', 'width=700,height=900')
   if (!w) return
-  w.document.write(`<!doctype html><title>Check in — ${name}</title><body style="font-family:sans-serif;text-align:center;padding:40px">
+  w.document.write(`<!doctype html><title>Check in — ${name.replace(/[<>&]/g, '')}</title><body style="font-family:sans-serif;text-align:center;padding:40px">
     <h1 style="font-size:40px;margin:0 0 8px">Check in here</h1><p style="font-size:22px;margin:0 0 24px">${name.replace(/[<>&]/g, '')} · Perfect Study Space</p>
     ${qr.createImgTag(10, 4)}
     <p style="font-size:20px">1. Open your phone camera and scan.<br>2. Log in to the student portal.<br>3. Tap <b>Check in</b>.</p>
@@ -49,7 +49,12 @@ export default function SelfCheckinCard({ branchId }) {
   const here = () => navigator.geolocation?.getCurrentPosition(
     (p) => { setLat(p.coords.latitude.toFixed(6)); setLng(p.coords.longitude.toFixed(6)); setMsg(`Read with ±${Math.round(p.coords.accuracy)} m accuracy — save it if you are inside the hall.`) },
     () => setError('Could not read this device\'s location'), { enableHighAccuracy: true, timeout: 15000 })
-  const save = async () => { setError(''); setMsg(''); try { await api('set_branch_location', { branchId, latitude: Number(lat), longitude: Number(lng) }); setMsg('Location saved.'); load() } catch (e) { setError(e.message) } }
+  const save = async () => {
+    setError(''); setMsg('')
+    const la = String(lat).trim(), lo = String(lng).trim()
+    if (!la || !lo || !Number.isFinite(Number(la)) || !Number.isFinite(Number(lo))) { setError('Enter the latitude and longitude as numbers, e.g. 11.0168 and 76.9558 (or use "Use this phone\'s location").'); return }
+    try { await api('set_branch_location', { branchId, latitude: Number(la), longitude: Number(lo) }); setMsg('Location saved.'); load() } catch (e) { setError(e.message) }
+  }
   const rotate = async () => {
     if (b.posterUrl && !window.confirm('Make a new poster? The old printed poster stops working at once.')) return
     setError(''); try { await api('rotate_checkin_key', { branchId }); setMsg('New poster ready — print it and replace the old one.'); load() } catch (e) { setError(e.message) }

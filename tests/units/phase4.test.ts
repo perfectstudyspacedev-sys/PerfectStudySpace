@@ -50,7 +50,10 @@ describe('self checkout and the session watch', () => {
     const start = iso(T0 - 8 * 3600e3)
     expect(forgottenSessionEnd({ start_time: start, end_time: iso(T0 - 3600e3) }, T0)).toBe(iso(T0 - 3600e3))
     expect(forgottenSessionEnd({ start_time: start, end_time: iso(T0 + 3600e3) }, T0)).toBeNull()
-    expect(forgottenSessionEnd({ start_time: start, end_time: iso(T0 + 3600e3), is_paused: true, paused_at: iso(T0 - 2 * 3600e3) }, T0)).toBe(iso(T0 - 2 * 3600e3))
+    // On a break with the booked end still ahead: left alone (booked past 23:30, review #8) …
+    expect(forgottenSessionEnd({ start_time: start, end_time: iso(T0 + 3600e3), is_paused: true, paused_at: iso(T0 - 2 * 3600e3) }, T0)).toBeNull()
+    // … once the booked end has passed, closed when the break began.
+    expect(forgottenSessionEnd({ start_time: start, end_time: iso(T0 - 600e3), is_paused: true, paused_at: iso(T0 - 2 * 3600e3) }, T0)).toBe(iso(T0 - 2 * 3600e3))
     // never before it started
     expect(forgottenSessionEnd({ start_time: iso(T0 - 3600e3), end_time: iso(T0 - 2 * 3600e3) }, T0)).toBe(iso(T0 - 3600e3))
   })

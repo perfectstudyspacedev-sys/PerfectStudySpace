@@ -236,7 +236,7 @@ await setup();
   const again = rows("bookings").find((b) => b.student_id === member.id && b.status === "active");
   if (again) await call("checkout_booking", { bookingId: again.id, overtimeMinutes: 0 }, tP);
   const later = await call("check_in_member", { branchId: b1.id, studentId: member.id }, tP);
-  check(later.collision?.kind === "free_day" && later.collision.credit === 0 && rows("cashbacks").filter((c) => c.student_id === member.id).length === 1, "R2: coming back later the same day adds no second free day", later.collision);
+  check(later.collision?.kind === "no_desk" && /free day was already given/.test(later.collision.message) && later.collision.credit === 0 && rows("cashbacks").filter((c) => c.student_id === member.id).length === 1, "R2: coming back later the same day adds no second free day", later.collision);
 }
 // 2: a release outlives its cabin; a booked cabin can't be sold; overlap across a renewal.
 await setup();

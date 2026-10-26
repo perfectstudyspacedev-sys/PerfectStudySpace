@@ -47,7 +47,8 @@ export function SelfSession({ info, onChange }) {
     <div className="card" data-testid="self-session">
       <h3 style={{ marginTop: 0 }}>You're checked in{s.branch ? ` at ${s.branch}` : ''}</h3>
       <p style={{ margin: '0.3rem 0' }}>{s.desk ? <>Desk <strong>{s.desk}</strong> · </> : null}since {hm(s.start)} · until <strong>{hm(s.end)}</strong>{s.paused ? ' · on a break' : ''}</p>
-      {info.on && <button type="button" className="btn btn-primary" disabled={busy} onClick={out}>{busy ? 'Checking out…' : 'Check out'}</button>}
+      {info.on && s.canSelfCheckout && <button type="button" className="btn btn-primary" disabled={busy} onClick={out}>{busy ? 'Checking out…' : 'Check out'}</button>}
+      {info.on && !s.canSelfCheckout && <p style={{ margin: '0.3rem 0', fontSize: '0.85rem', color: 'var(--text-muted)' }}>Please check out at the desk when you leave.</p>}
       {error && <p className="error-msg" role="alert">{error}</p>}
     </div>
   )
@@ -97,7 +98,9 @@ export function PortalCheckin() {
     return (
       <div className="card" data-testid="checkin-done">
         <h2 style={{ marginTop: 0 }}>You're in{result.branch ? ` at ${result.branch}` : ''} ✓</h2>
-        {result.deskLabel ? <p>Your desk: <strong style={{ fontSize: '1.3rem' }}>{result.deskLabel}</strong>{result.deskReason ? ` (${result.deskReason})` : ''}</p> : <p>Take any free seat.</p>}
+        {result.deskLabel
+          ? <p>Your desk: <strong style={{ fontSize: '1.3rem' }}>{result.deskLabel}</strong>{result.deskReason ? ` (${result.deskReason})` : ''}<br /><span style={{ fontSize: '0.85rem', color: 'var(--text-muted)' }}>If someone is already sitting there, take any free seat and tell the desk.</span></p>
+          : result.collision ? null : <p>Take any free seat.</p>}
         <p>Until <strong>{hm(result.endTime)}</strong> today. Check out on the home page when you leave.</p>
         {result.collision && <p className="error-msg">{result.collision.message}</p>}
         {result.expiredMembership && <p className="error-msg">Your plan has ended — please renew soon.</p>}

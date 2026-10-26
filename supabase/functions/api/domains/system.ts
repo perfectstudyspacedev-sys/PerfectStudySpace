@@ -11,6 +11,7 @@ import { fetchAllRows, membershipDateDrift, purgeExpiredSignups, remindExpiringM
 import { selfCheckinFindings } from "./checkin.ts";
 import { TASK_PHOTO_KEEP_DAYS } from "../../_shared/tickets.ts";
 
+const CHECKIN_RECORD_KEEP_DAYS = 180;
 export const IDEMPOTENCY_KEY_HOURS = 48;
 export const STALE_SESSION_HOURS = 24;
 export const PROOF_IMAGE_KEEP_DAYS = 180;
@@ -42,11 +43,12 @@ export async function integrityFindings(db: Ctx["db"]) {
       membership_dates: membershipDates.length, negative_food_pass: passes.length, stale_active_bookings: stale.length,
       proofs_without_transactions: noTx.length, stuck_agent_runs: stuck.length,
       selfcheckins_without_session: self.orphan.length, staff_checkins_at_poster_branches: self.staffIns.length,
-      walkins_without_payment: self.unpaid.length,
+      walkins_without_payment: self.unpaid.length, unpaid_food_on_closed_walkins: self.foodUnpaid.length,
     },
     selfcheckins_without_session: self.orphan.slice(0, LIST_LIMIT).map((r) => ({ record_id: r.id, student_id: r.student_id, branch_id: r.branch_id, at: r.created_at })),
     staff_checkins_at_poster_branches: self.staffIns.slice(0, LIST_LIMIT).map((e) => ({ event_id: e.id, branch_id: e.branch_id, student_id: e.student_id, staff_id: e.actor_id, at: e.occurred_at })),
     walkins_without_payment: self.unpaid.slice(0, LIST_LIMIT).map((w) => ({ booking_id: w.id, student_id: w.student_id, branch_id: w.branch_id, amount: w.amount, at: w.created_at })),
+    unpaid_food_on_closed_walkins: self.foodUnpaid.slice(0, LIST_LIMIT).map((f) => ({ food_bill_id: f.id, booking_id: f.booking_id, student_id: f.student_id, branch_id: f.branch_id, total: f.total, at: f.created_at })),
     proofs_without_transactions: noTx.slice(0, LIST_LIMIT).map((p) => ({ proof_id: p.id, reference: p.reference, student_id: p.student_id, branch_id: p.branch_id, amount: p.amount_expected, decided_at: p.decided_at })),
     stuck_agent_runs: stuck.slice(0, LIST_LIMIT).map((r) => ({ run_id: r.id, agent: r.agent, started_at: r.started_at })),
     checked: { memberships: checked },
@@ -109,6 +111,8 @@ export function handlers(): Record<string, Handler> {
         await db.from("task_photos").delete().in("id", batch.map((p) => p.id));
         taskPhotos += batch.length;
       }
+      // Phase 4 review: self check-in records (distance and accuracy only) are kept 180 days.
+      await db.from("checkin_records").delete().lt("created_at", new Date(Date.now() - CHECKIN_RECORD_KEEP_DAYS * 86400e3).toISOString());
       return json({ ok: true, removed, keepDays: days, taskPhotos, taskKeepDays: taskDays });
     },
     // Hourly: idempotency keys are only needed while a retry is likely.

@@ -884,6 +884,33 @@ Every piece has its own switch, off by default (R9). The switches are global, bu
 - Tests: `tests/server/checkin_test.ts` (49 checks) and `kitchen_test.ts`, `tests/units/phase4.test.ts`, `tests/integration/phase4_test.ts` (real Postgres: relation hints, the conflict target, array columns and their CHECKs, the partial unique index, the food queue and the 23:30 close end to end). Browser QA: 33 checks on the new screens.
 - Found while testing: a checkout's real clock can add a minute (121 instead of 120 minutes of overtime) — the integration test allows both; a body field named `status` collided with the test harness, so the food and supplier answers say `orderStatus`.
 
+### Independent review of Phase 4 (2026-10-26)
+
+One independent reviewer read the range `99a14f6..e058bcd` (Phase 4 and the Phase 3 fixes). Held up: money with the switches off (R1) — `checkout_booking` is unchanged for staff and `foodAsDues` is honoured only for student and system callers; the 128-bit poster key compared in constant time, consent first, both accuracy and distance within 100 m, 10 tries in 10 minutes, no coordinates or key in events or records; one delivery per order (conditional claim, put back on failure), prices re-checked, stock taken with a conditional decrement; branch and owner checks on every action; the upsert targets, hints and array CHECKs; the Phase 3 fixes 1–17. Fixed, each with a test (server suites; Postgres in `tests/integration/phase4_test.ts`), or decided:
+
+| # | Finding | Fix |
+|---|---|---|
+| 1 | High: delivering a Food Pass holder's order with "Cash/UPI now" ignored the payment (the counter's pass rule) — the student paid twice | `deliver_food_order` refuses cash/UPI (409) for a student with money on a pass; an empty pass counts as no pass (`skipFoodPass`). The order card offers no cash/UPI to a pass holder and shows the shortfall, which is collected at checkout; after delivery a notice says how it was paid |
+| 2 | Self checkout (and its food-as-dues path) worked at every branch, not only the poster branch | `me_check_out` needs a branch with a poster (key and location); the info call says `canSelfCheckout`; the reminder says "in the portal" only there |
+| 3 | Two check-ins at the same moment could be given the same floating desk; checkout freed a desk under its next occupant | Desks are claimed with one conditional update (`free` → `occupied`) before the booking, for check-ins, walk-ins and a cabin member's fallback desk, and given back if the booking fails; checkout frees a floating desk only while it still points at that session |
+| 4 | Cabin collisions at self check-in showed the desk's wording to the student and told no one | The student gets their own words; the desk gets a `[desk_alert]` message (a toast in the staff app) for an overstay, no desk or a free day |
+| 5 | Urgent problem reports alerted nobody | An urgent report sends a `[desk_alert]` to its branch |
+| 6 | Photo proof covered only tasks made after the switch; staff could untick it on cleaning tasks | `set_task_needs_photo` (owner): one task on or off, or every existing daily cleaning task at once (a button on Actions); only the owner or admin can untick a cleaning task's photo |
+| 7 | Decision: with C15, never checking out cost less than checking out late | Taken: the 23:30 notice no longer says "no overtime was charged" and asks for a checkout every time; each auto-close stays a flag for the owner. Billing overtime up to the last portal activity is **left for the owner** (it would change money, R1) |
+| 8 | Decision: a session on a break was closed at the break start even when booked past 23:30 | Taken: a session whose booked end is still ahead is left alone, on a break or not; once the end has passed it closes when the break began, and the notice says so |
+| 9 | Decision: seat matching trusts `desks.status`, which can be stale | Taken: the check-in screen adds "If someone is already sitting there, take any free seat and tell the desk" |
+| 10 | A member's second arrival after a fallback desk was told "their free day was already given" | Says "they were seated at another desk earlier" (kind `no_desk`); a free day is still granted once |
+| 11 | Text in the owner's location form could save as latitude 0 or clear the location | Both coordinates must be numbers; clearing needs `clear: true`; the form checks too |
+| 12 | Food orders never expired, so a forgotten order blocked the student's next ones | The 23:30 job cancels orders open more than 2 hours (nothing billed; the student is told), whether or not session watch is on |
+| 13 | "Checkout corrected" flagged a form left open or the Food Pass prompt's re-send | Only a time the staff member changed by hand counts (the form sends `endTimeEdited`) |
+| 14 | Unpaid food on a walk-in closed at 23:30 had no follow-up | The nightly integrity report lists `unpaid_food_on_closed_walkins` |
+| 15 | A missed day's photo task couldn't be completed from the UI | The missed-tasks table takes a photo for that day; errors are shown |
+| 16 | "Send to supplier" opened only the first WhatsApp chat and hid lines with no phone | One WhatsApp button per supplier, "Mark as sent" apart, and the lines with no supplier phone are listed |
+| 17 | Nits | Live seats paged (no 1,000 cap); self check-in records purged after 180 days; comments corrected; the poster title escaped |
+| — | Outside the range, pre-existing: the counter's Food Pass shortfall prompt records the whole bill and leaves the pass untouched (`collect_food_bill_shortfall`) | **Left for the owner** (R1: report, don't fix). Fix #1 does not use that path |
+
+The Phase 4 switch verdict after these fixes: all eight can be tried at Hopes; `pssai_session_watch` applies to every branch.
+
 ## Phase 4 exit gate
 
 - [ ] Four weeks at the pilot branch with staff present but not needed

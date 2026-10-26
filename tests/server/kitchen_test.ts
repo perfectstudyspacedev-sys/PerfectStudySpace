@@ -99,6 +99,22 @@ await setup();
   check(tab.status === 200 && tab.bill.paid === false && cash.status === 200 && cash.bill.paid === true && rows("transactions").filter((t) => t.category === "food").length === 1,
     "Q5: without a pass the member's order goes on the tab, or is paid in cash (one food transaction)", { tab: tab.bill, cash: cash.bill });
   check((await call("deliver_food_order", { orderId: rows("food_orders")[2].id, paymentMode: "card" }, tP)).status === 400, "Q5: an unknown payment mode is refused");
+  // Review fix #1: a Food Pass holder is never asked for cash or UPI as well.
+  const low = insert("food_passes", { student_id: arun.id, branch_id: b1.id, balance: 20 });
+  const o5 = await call("me_food_order", { items: [{ foodItemId: samosa.id, quantity: 2 }] }, tA);
+  const billsBefore = rows("food_bills").length, txBefore = rows("transactions").length;
+  const twice = await Promise.all([call("deliver_food_order", { orderId: o5.order.id, paymentMode: "cash" }, tP), call("deliver_food_order", { orderId: o5.order.id, paymentMode: "upi" }, tP)]);
+  check(twice.every((r) => r.status === 409) && rows("food_bills").length === billsBefore && rows("transactions").length === txBefore && Number(low.balance) === 20 && rows("food_orders").find((x) => x.id === o5.order.id).status === "placed",
+    "Q5b: with ₹20 on the pass, cash or UPI for a ₹30 order is refused — nothing billed, the order still open", twice.map((r) => r.error));
+  const short = await call("deliver_food_order", { orderId: o5.order.id }, tP);
+  check(short.status === 200 && short.bill.paid === false && short.foodPassShortfall === 10 && Number(low.balance) === 20 && rows("transactions").length === txBefore,
+    "Q5b: delivered on the pass: the bill waits unpaid, the ₹10 shortfall is collected at checkout, no cash recorded", { bill: short.bill, shortfall: short.foodPassShortfall });
+  low.balance = 0;
+  const o6 = await call("me_food_order", { items: [{ foodItemId: tea.id, quantity: 1 }] }, tA);
+  const emptyCash = await call("deliver_food_order", { orderId: o6.order.id, paymentMode: "cash" }, tP);
+  check(emptyCash.status === 200 && emptyCash.bill.paid === true && !emptyCash.bill.paidFromPass && rows("transactions").length === txBefore + 1 && Number(low.balance) === 0,
+    "Q5b: an empty pass counts as no pass, so cash is fine (one food transaction)", emptyCash.bill);
+  rows("food_passes").splice(rows("food_passes").indexOf(low), 1);
   const fourth = await call("me_food_order", { items: [{ foodItemId: tea.id, quantity: 1 }] }, tA);
   check((await call("me_cancel_food_order", { orderId: fourth.order.id }, tA)).status === 200 && rows("food_orders").find((x) => x.id === fourth.order.id).status === "cancelled", "Q6: a placed order can be cancelled by the student");
 }
@@ -162,6 +178,9 @@ await setup();
   const mine = await call("me_tickets", {}, tA);
   check(mine.tickets.find((t: any) => t.id === w.ticket.id).status === "resolved" && rows("portal_notifications").some((n) => n.kind === "ticket" && n.body === "Router restarted"), "T4: resolving tells the student, with what was done");
   check((await call("update_ticket", { ticketId: w.ticket.id, status: "done" }, tP)).status === 400, "T4: an unknown status is refused");
+  // Review fix #5: an urgent report reaches the desk at once; others wait in the list.
+  const alerts = rows("messages").filter((m) => m.content.startsWith("[desk_alert]"));
+  check(alerts.length === 1 && alerts[0].branch_id === b1.id && /smoke near the switchboard/.test(alerts[0].content) && alerts[0].recipient_type === "staff", "T5: only the urgent report sends a desk alert to its branch", alerts.map((m) => m.content));
 }
 
 // ── C17 photo-proof tasks ──
@@ -174,6 +193,19 @@ await setup();
   const cash = (await call("create_task", { branchId: b1.id, assignedToStaffId: priya.id, title: "Count the cash", repeatInterval: "daily" }, tO)).tasks[0];
   const optOut = (await call("create_task", { branchId: b1.id, assignedToStaffId: priya.id, title: "Clean the shelf", repeatInterval: "daily", needsPhoto: false }, tO)).tasks[0];
   check(clean.needs_photo === true && cash.needs_photo === false && optOut.needs_photo === false, "P2: a daily cleaning task needs a photo (C17); others don't; the owner can untick it");
+  const staffOptOut = (await call("create_task", { branchId: b1.id, assignedToStaffId: priya.id, title: "Sweep the stairs", repeatInterval: "daily", needsPhoto: false }, tP)).tasks[0];
+  check(staffOptOut.needs_photo === true, "P2b: desk staff can't untick the photo on a cleaning task (review #6)");
+  // Tasks made before the switch: the owner asks for photos on every existing daily cleaning task.
+  const oldTask = insert("tasks", { branch_id: b1.id, assigned_to_staff_id: priya.id, assigned_by_staff_id: owner.id, title: "Clean the toilets", repeat_interval: "daily", needs_photo: false, status: "pending", due_date: null, description: null, created_at: new Date(Date.now() - 3 * 86400e3).toISOString() });
+  check((await call("set_task_needs_photo", { cleaningTasks: true }, tP)).status === 403, "P2b: only the owner changes existing tasks");
+  const back = await call("set_task_needs_photo", { cleaningTasks: true }, tO);
+  const task = (id: string) => rows("tasks").find((t) => t.id === id)!;
+  // The three: the washroom task made while the switch was off, the shelf the owner unticked, and the old toilets task.
+  check(back.updated === 3 && oldTask.needs_photo === true && task(off.tasks[0].id).needs_photo === true && task(optOut.id).needs_photo === true && task(cash.id).needs_photo === false, "P2b: the owner switches photo proof on for the existing cleaning tasks", back);
+  const on1 = await call("set_task_needs_photo", { taskId: cash.id, needsPhoto: true }, tO);
+  const onNow = task(cash.id).needs_photo;
+  const off1 = await call("set_task_needs_photo", { taskId: cash.id, needsPhoto: false }, tO);
+  check(on1.ok && onNow === true && off1.ok && task(cash.id).needs_photo === false, "P2b: or turns it on and off for one task");
   check((await call("update_task_status", { taskId: clean.id, done: true }, tP)).status === 400 && !rows("task_completions").length, "P3: it can't be ticked without today's photo");
   check((await call("upload_task_photo", { taskId: clean.id, image: { data: PNG } }, tR)).status === 403, "P3: only the assignee (or the owner) adds the photo");
   check((await call("upload_task_photo", { taskId: clean.id, image: { data: "bm90IGFuIGltYWdl" } }, tP)).status === 400, "P3: a file that is not an image is refused");
@@ -185,9 +217,16 @@ await setup();
   const url = await call("get_task_photo", { taskId: clean.id }, tO);
   check(url.status === 200 && /task-photos/.test(url.url) && (await call("get_task_photo", { taskId: clean.id }, tR)).status === 403, "P4: the owner opens it through a short link; other staff can't");
   check(rows("events").some((e) => e.action === "upload_task_photo" && e.payload.image === "[redacted]"), "P4: the image never reaches the event log");
-  rows("task_photos")[0].created_at = new Date(Date.now() - 31 * 86400e3).toISOString();
+  // Review #15: a missed day's photo carries that day, and then the missed day can be completed.
+  const yesterday = addDays(IST_TODAY(), -1);
+  check((await call("update_task_status", { taskId: clean.id, done: true, date: yesterday }, tP)).status === 400, "P4b: yesterday's missed task needs yesterday's photo");
+  const upY = await call("upload_task_photo", { taskId: clean.id, image: { data: PNG }, date: yesterday }, tP);
+  check(upY.date === yesterday && (await call("update_task_status", { taskId: clean.id, done: true, date: yesterday }, tP)).status === 200, "P4b: with that photo in, the missed day is completed");
+  const missed = await call("list_incomplete_tasks", { branchId: b1.id }, tO);
+  check(missed.status === 200 && missed.tasks.some((t: any) => t.taskId === oldTask.id && t.needsPhoto === true), "P4b: missed days say they need a photo, so the page offers one for that day", missed.error ?? missed.tasks?.length);
+  for (const p of rows("task_photos")) p.created_at = new Date(Date.now() - 31 * 86400e3).toISOString();
   const purge = await run("cron_purge_images");
-  check(purge.taskPhotos === 1 && !rows("task_photos").length && !Object.keys(fake.storage).some((k) => k.startsWith("task-photos/")), "P5: task photos are removed after 30 days", purge);
+  check(purge.taskPhotos === 2 && !rows("task_photos").length && !Object.keys(fake.storage).some((k) => k.startsWith("task-photos/")), "P5: task photos are removed after 30 days", purge);
 }
 
 done();

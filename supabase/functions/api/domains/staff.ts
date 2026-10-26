@@ -148,9 +148,11 @@ export function handlers(): Record<string, Handler> {
           && assignees.every(a => a.role === "owner" || a.branch_id === staff.branch_id);
         if (!allValid) return err("Can only assign tasks to staff in your branch, or the owner");
       }
-      // PSS-AI C17: a daily cleaning task needs a photo unless the owner says otherwise.
+      // PSS-AI C17: a daily cleaning task needs a photo unless the owner says otherwise (only the
+      // owner or admin can turn it off; anyone can ask for a photo on any task).
       const photoOn = await featureOn(db, "photo_tasks");
-      const needsPhoto = photoOn && (typeof payload.needsPhoto === "boolean" ? payload.needsPhoto : needsPhotoByDefault({ title, repeatInterval }));
+      const byDefault = needsPhotoByDefault({ title, repeatInterval });
+      const needsPhoto = photoOn && (payload.needsPhoto === true || (payload.needsPhoto === false && isOwnerOrAdmin(staff) ? false : byDefault));
       const rows = staffIds.map(sid => ({
         branch_id: targetBranchId, assigned_by_staff_id: staff.id, assigned_to_staff_id: sid,
         title, description: description ?? null, due_date: dueDate ?? null,
@@ -193,6 +195,23 @@ export function handlers(): Record<string, Handler> {
       }));
 
       return json({ tasks: await withPhotos(db, tasks, targetDate) });
+    },
+    // PSS-AI C17 (Phase 4 review): photo proof for tasks made before the switch was on — one
+    // task ({ taskId, needsPhoto }), or every existing daily cleaning task ({ cleaningTasks: true }).
+    set_task_needs_photo: async (ctx: Ctx, payload: any): Promise<Response | undefined> => {
+      const { db } = ctx;
+      if (!isOwnerOrAdmin(ctx.staff!)) return err("Owner only", 403);
+      if (!(await featureOn(db, "photo_tasks"))) return err("Task photos are not switched on", 403);
+      if (payload.cleaningTasks === true) {
+        const { data } = await db.from("tasks").select("id, title, repeat_interval, needs_photo").eq("repeat_interval", "daily").eq("needs_photo", false).limit(1000);
+        const ids = (data ?? []).filter((t: any) => needsPhotoByDefault({ title: t.title, repeatInterval: t.repeat_interval })).map((t: any) => t.id);
+        if (ids.length) await db.from("tasks").update({ needs_photo: true }).in("id", ids);
+        return json({ ok: true, updated: ids.length });
+      }
+      if (typeof payload.needsPhoto !== "boolean") return err("Say whether the task needs a photo");
+      const { data } = await db.from("tasks").update({ needs_photo: payload.needsPhoto }).eq("id", payload.taskId).select("id");
+      if (!data?.length) return err("Task not found", 404);
+      return json({ ok: true, updated: 1 });
     },
     update_task_status: async (ctx: Ctx, payload: any): Promise<Response | undefined> => {
       const { db } = ctx;
@@ -309,7 +328,7 @@ export function handlers(): Record<string, Handler> {
             missed.push({
               id: `${t.id}:${t.due_date}`, taskId: t.id, title: t.title, description: t.description,
               repeatInterval: t.repeat_interval, missedDate: t.due_date, branchName: t.branches?.name ?? null,
-              assignedTo: t.assigned_to, assignedBy: t.assigned_by, assignedToStaffId: t.assigned_to_staff_id,
+              assignedTo: t.assigned_to, assignedBy: t.assigned_by, assignedToStaffId: t.assigned_to_staff_id, needsPhoto: !!t.needs_photo,
             });
           }
           continue;
@@ -321,7 +340,7 @@ export function handlers(): Record<string, Handler> {
             missed.push({
               id: `${t.id}:${cursor}`, taskId: t.id, title: t.title, description: t.description,
               repeatInterval: t.repeat_interval, missedDate: cursor, branchName: t.branches?.name ?? null,
-              assignedTo: t.assigned_to, assignedBy: t.assigned_by, assignedToStaffId: t.assigned_to_staff_id,
+              assignedTo: t.assigned_to, assignedBy: t.assigned_by, assignedToStaffId: t.assigned_to_staff_id, needsPhoto: !!t.needs_photo,
             });
           }
           cursor = addDays(cursor, 1);

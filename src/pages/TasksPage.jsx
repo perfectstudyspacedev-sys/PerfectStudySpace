@@ -22,7 +22,7 @@ function PhotoCell({ t, canAct, onPhoto, onView }) {
   )
 }
 
-function TaskTable({ tasks, allBranches, onToggle, currentStaffId, isOwner, photoOn, onPhoto, onView }) {
+function TaskTable({ tasks, allBranches, onToggle, currentStaffId, isOwner, photoOn, onPhoto, onView, onPhotoRule }) {
   if (tasks.length === 0) return <p style={{ color: 'var(--text-muted)' }}>No tasks found.</p>
   return (
     <table className="data-table">
@@ -68,6 +68,11 @@ function TaskTable({ tasks, allBranches, onToggle, currentStaffId, isOwner, phot
             <td>
               <div style={{ display: 'flex', gap: '0.3rem', alignItems: 'center', flexWrap: 'wrap' }}>
               {photoOn && <PhotoCell t={t} canAct={t.assigned_to_staff_id === currentStaffId || isOwner} onPhoto={onPhoto} onView={onView} />}
+              {photoOn && isOwner && onPhotoRule && !t.completedToday && (
+                <button type="button" className="btn btn-ghost" style={{ padding: '0.25rem 0.5rem', fontSize: '0.7rem' }} title={t.needs_photo ? 'Stop asking for a photo' : 'Ask for a photo when done'} onClick={() => onPhotoRule(t, !t.needs_photo)}>
+                  {t.needs_photo ? 'No photo' : '+ Photo'}
+                </button>
+              )}
               {t.assigned_to_staff_id === currentStaffId || isOwner ? (
                 <button
                   type="button"
@@ -91,7 +96,7 @@ function TaskTable({ tasks, allBranches, onToggle, currentStaffId, isOwner, phot
   )
 }
 
-function IncompleteTaskTable({ tasks, allBranches, onComplete, currentStaffId, isOwner }) {
+function IncompleteTaskTable({ tasks, allBranches, onComplete, currentStaffId, isOwner, photoOn, onPhoto }) {
   if (tasks.length === 0) return <p style={{ color: 'var(--text-muted)' }}>No incomplete tasks in the last 7 days. 🎉</p>
   return (
     <table className="data-table">
@@ -120,14 +125,22 @@ function IncompleteTaskTable({ tasks, allBranches, onComplete, currentStaffId, i
             <td className="mono" style={{ fontSize: '0.82rem', color: '#ff8888', fontWeight: 700 }}>{formatDate(t.missedDate)}</td>
             <td>
               {t.assignedToStaffId === currentStaffId || isOwner ? (
-                <button
-                  type="button"
-                  className="btn btn-primary"
-                  style={{ padding: '0.25rem 0.5rem', fontSize: '0.75rem' }}
-                  onClick={() => onComplete(t)}
-                >
-                  Complete
-                </button>
+                <span style={{ display: 'inline-flex', gap: '0.3rem', alignItems: 'center' }}>
+                  {photoOn && t.needsPhoto && (
+                    <label className="btn btn-ghost" style={{ padding: '0.25rem 0.5rem', fontSize: '0.75rem', cursor: 'pointer' }} title={`Photo for ${formatDate(t.missedDate)}`}>
+                      📷 Photo
+                      <input type="file" accept="image/*" capture="environment" style={{ display: 'none' }} onChange={(e) => { const f = e.target.files?.[0]; e.target.value = ''; if (f) onPhoto({ id: t.taskId }, f, t.missedDate) }} />
+                    </label>
+                  )}
+                  <button
+                    type="button"
+                    className="btn btn-primary"
+                    style={{ padding: '0.25rem 0.5rem', fontSize: '0.75rem' }}
+                    onClick={() => onComplete(t)}
+                  >
+                    Complete
+                  </button>
+                </span>
               ) : (
                 <span style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>—</span>
               )}
@@ -235,11 +248,24 @@ export default function TasksPage() {
       load()
     } catch (err) { setTaskError(err.message) }
   }
-  const addPhoto = async (task, file) => {
+  // A missed day's photo carries that day's date, so the missed day can then be completed.
+  const addPhoto = async (task, file, date) => {
     setTaskError('')
     try {
       const image = await shrinkImage(file)
-      await api('upload_task_photo', { taskId: task.id, image })
+      await api('upload_task_photo', { taskId: task.id, image, ...(date ? { date } : {}) })
+      load()
+    } catch (err) { setTaskError(err.message) }
+  }
+  const setPhotoRule = async (task, needsPhoto) => {
+    setTaskError('')
+    try { await api('set_task_needs_photo', { taskId: task.id, needsPhoto }); load() } catch (err) { setTaskError(err.message) }
+  }
+  const askPhotosOnCleaning = async () => {
+    setTaskError('')
+    try {
+      const r = await api('set_task_needs_photo', { cleaningTasks: true })
+      setTaskError(r.updated ? '' : 'Every daily cleaning task already asks for a photo.')
       load()
     } catch (err) { setTaskError(err.message) }
   }
@@ -249,10 +275,11 @@ export default function TasksPage() {
   }
 
   const completeMissed = async (missed) => {
+    setTaskError('')
     try {
       await api('update_task_status', { taskId: missed.taskId, done: true, date: missed.missedDate })
       load()
-    } catch { /* ignore */ }
+    } catch (err) { setTaskError(err.message) }
   }
 
   const applyStatusFilter = (list) => statusFilter === 'done'
@@ -378,11 +405,17 @@ export default function TasksPage() {
 
         <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
           {taskError && <p className="error-msg" role="alert">{taskError}</p>}
+          {photoOn && isOwner && (
+            <p style={{ margin: 0, fontSize: '0.8rem', color: 'var(--text-muted)' }}>
+              Tasks made before photos were switched on don't ask for one.{' '}
+              <button type="button" className="btn btn-ghost" style={{ padding: '0.2rem 0.5rem', fontSize: '0.75rem' }} onClick={askPhotosOnCleaning}>Ask for photos on existing daily cleaning tasks</button>
+            </p>
+          )}
           {isOwner && (
             <div className="card">
               <h3 style={{ color: 'var(--accent)', marginBottom: '0.75rem' }}>My Tasks (Owner)</h3>
               {loading ? <p>Loading…</p> : (
-                <TaskTable tasks={filteredOwnerTasks} allBranches={effectiveAllBranches} onToggle={toggleDone} currentStaffId={staff?.id} isOwner={isOwner} photoOn={photoOn} onPhoto={addPhoto} onView={viewPhoto} />
+                <TaskTable tasks={filteredOwnerTasks} allBranches={effectiveAllBranches} onToggle={toggleDone} currentStaffId={staff?.id} isOwner={isOwner} photoOn={photoOn} onPhoto={addPhoto} onView={viewPhoto} onPhotoRule={setPhotoRule} />
               )}
             </div>
           )}
@@ -402,7 +435,7 @@ export default function TasksPage() {
             </div>
 
             {loading ? <p>Loading…</p> : (
-              <TaskTable tasks={filteredTasks} allBranches={effectiveAllBranches} onToggle={toggleDone} currentStaffId={staff?.id} isOwner={isOwner} photoOn={photoOn} onPhoto={addPhoto} onView={viewPhoto} />
+              <TaskTable tasks={filteredTasks} allBranches={effectiveAllBranches} onToggle={toggleDone} currentStaffId={staff?.id} isOwner={isOwner} photoOn={photoOn} onPhoto={addPhoto} onView={viewPhoto} onPhotoRule={setPhotoRule} />
             )}
           </div>
 
@@ -412,7 +445,7 @@ export default function TasksPage() {
               Tasks that were due on a past date and were never marked done, from the last 7 days.
             </p>
             {loading ? <p>Loading…</p> : (
-              <IncompleteTaskTable tasks={incompleteTasks} allBranches={effectiveAllBranches} onComplete={completeMissed} currentStaffId={staff?.id} isOwner={isOwner} />
+              <IncompleteTaskTable tasks={incompleteTasks} allBranches={effectiveAllBranches} onComplete={completeMissed} currentStaffId={staff?.id} isOwner={isOwner} photoOn={photoOn} onPhoto={addPhoto} />
             )}
           </div>
         </div>

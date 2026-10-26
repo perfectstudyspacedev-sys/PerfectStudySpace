@@ -79,7 +79,7 @@ let posterKey = "";
   const forgot = await insert("bookings", { student_id: s.id, branch_id: w.branch.id, desk_id: f1.id, booking_type: "walkin", start_time: new Date(Date.now() - 6 * 3600e3).toISOString(), end_time: end, hours: 3, scheduled_hours: 3, amount: 35, payment_mode: "cash", status: "active" });
   await db.from("desks").update({ status: "occupied", current_booking_id: forgot.id }).eq("id", f1.id);
   const moved = await insert("bookings", { student_id: perm.id, branch_id: w.branch.id, desk_id: cabin.id, booking_type: "permanent", start_time: new Date(Date.now() - 5 * 3600e3).toISOString(), end_time: new Date(Date.now() - 3600e3).toISOString(), hours: 4, amount: 0, status: "active" });
-  await call("checkout_booking", { bookingId: moved.id, overtimeMinutes: 0, actualEndTime: new Date(Date.now() - 45 * 60e3).toISOString() }, w.tS);
+  await call("checkout_booking", { bookingId: moved.id, overtimeMinutes: 0, actualEndTime: new Date(Date.now() - 45 * 60e3).toISOString(), endTimeEdited: true }, w.tS);
   const r1 = await sys("cron_close_forgotten_sessions");
   const r2 = await sys("cron_close_forgotten_sessions");
   const b = await get("bookings", forgot.id);

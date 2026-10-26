@@ -57,13 +57,14 @@ export function overtimeMinutesAt(booking: { end_time: string; is_paused?: boole
 }
 
 /** C15: where a forgotten session is closed — its booked end, or when its break began; never
- * before it started. Null while the booked end is still ahead (the session is not forgotten). */
+ * before it started. Null while the booked end is still ahead (the session is not forgotten),
+ * on a break or not: a session booked past 23:30 is left alone (Phase 4 review #8). */
 export function forgottenSessionEnd(booking: { start_time: string; end_time: string | null; is_paused?: boolean | null; paused_at?: string | null }, nowMs: number): string | null {
   const start = Date.parse(booking.start_time);
   const end = booking.end_time ? Date.parse(booking.end_time) : start;
   const pausedAt = booking.is_paused && booking.paused_at ? Date.parse(booking.paused_at) : null;
   const at = pausedAt != null ? Math.min(pausedAt, end) : end;
-  if (pausedAt == null && end > nowMs) return null;
+  if (end > nowMs) return null;
   return new Date(Math.min(Math.max(at, start), nowMs)).toISOString();
 }
 

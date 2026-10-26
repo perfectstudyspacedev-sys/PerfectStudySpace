@@ -11,8 +11,11 @@ import { useFeatureFlags } from '../hooks/useFeatureFlags'
 const STATUS = { placed: 'New', accepted: 'Being made', ready: 'Ready', delivered: 'Delivered', cancelled: 'Cancelled' }
 
 function OrderCard({ o, onAct, busy }) {
-  const passCovers = o.foodPassBalance != null && o.foodPassBalance >= o.total
-  const [mode, setMode] = useState(passCovers ? 'pass' : 'tab')
+  // A Food Pass with money on it is the only way to pay (the counter's rule); an empty one counts
+  // as no pass. Cash or UPI is never offered on top of a pass — that would charge twice.
+  const hasPass = o.foodPassBalance != null && o.foodPassBalance > 0
+  const shortfall = hasPass && o.foodPassBalance < o.total ? Math.round((o.total - o.foodPassBalance) * 100) / 100 : 0
+  const [mode, setMode] = useState('tab')
   const open = ['placed', 'accepted', 'ready'].includes(o.status)
   return (
     <div className="card" data-testid="food-order" style={{ marginBottom: '0.75rem' }}>
@@ -27,13 +30,16 @@ function OrderCard({ o, onAct, busy }) {
         <div style={{ display: 'flex', gap: '0.4rem', flexWrap: 'wrap', alignItems: 'center', marginTop: '0.4rem' }}>
           {o.status === 'placed' && <button type="button" className="btn btn-ghost" disabled={busy} onClick={() => onAct('update_food_order', { orderId: o.id, status: 'accepted' })}>Accept</button>}
           {o.status !== 'ready' && <button type="button" className="btn btn-ghost" disabled={busy} onClick={() => onAct('update_food_order', { orderId: o.id, status: 'ready' })}>Ready</button>}
-          <select aria-label="How it is paid" value={mode} onChange={(e) => setMode(e.target.value)}>
-            {o.foodPassBalance != null && <option value="pass">Food Pass ({formatCurrency(o.foodPassBalance)})</option>}
-            <option value="tab">On their tab</option>
-            <option value="cash">Cash now</option>
-            <option value="upi">UPI now</option>
-          </select>
-          <button type="button" className="btn btn-primary" disabled={busy} onClick={() => onAct('deliver_food_order', { orderId: o.id, paymentMode: mode === 'cash' || mode === 'upi' ? mode : null })}>Delivered</button>
+          {hasPass
+            ? <span style={{ fontSize: '0.85rem' }} data-testid="food-pass-note">Food Pass {formatCurrency(o.foodPassBalance)}{shortfall ? ` — short by ${formatCurrency(shortfall)}, collected at checkout` : ''}</span>
+            : (
+              <select aria-label="How it is paid" value={mode} onChange={(e) => setMode(e.target.value)}>
+                <option value="tab">On their tab</option>
+                <option value="cash">Cash now</option>
+                <option value="upi">UPI now</option>
+              </select>
+            )}
+          <button type="button" className="btn btn-primary" disabled={busy} onClick={() => onAct('deliver_food_order', { orderId: o.id, paymentMode: !hasPass && (mode === 'cash' || mode === 'upi') ? mode : null })}>Delivered</button>
           <button type="button" className="btn btn-ghost" disabled={busy} onClick={() => { const reason = window.prompt('Why is it cancelled? (the student sees this)', 'Not available right now'); if (reason !== null) onAct('update_food_order', { orderId: o.id, status: 'cancelled', reason }) }}>Cancel</button>
         </div>
       )}
@@ -46,6 +52,7 @@ function Orders({ branchId }) {
   const [orders, setOrders] = useState(null)
   const [error, setError] = useState('')
   const [busy, setBusy] = useState(false)
+  const [notice, setNotice] = useState('')
   const load = useCallback(() => api('list_food_orders', { branchId, view }).then((r) => setOrders(r.orders ?? [])).catch((e) => setError(e.message)), [branchId, view])
   useEffect(() => {
     load()
@@ -53,8 +60,16 @@ function Orders({ branchId }) {
     return () => clearInterval(id)
   }, [load])
   const act = async (action, payload) => {
-    setBusy(true); setError('')
-    try { await api(action, payload); await load() } catch (e) { setError(e.message) } finally { setBusy(false) }
+    setBusy(true); setError(''); setNotice('')
+    try {
+      const r = await api(action, payload)
+      if (action === 'deliver_food_order' && r.bill) {
+        setNotice(r.foodPassShortfall ? `Billed ${formatCurrency(r.bill.total)}: the Food Pass is short by ${formatCurrency(r.foodPassShortfall)} — it is collected at checkout.`
+          : r.bill.paidFromPass ? `Paid ${formatCurrency(r.bill.total)} from the Food Pass (${formatCurrency(r.foodPassBalance)} left).`
+          : r.bill.paid ? `Paid ${formatCurrency(r.bill.total)}.` : `${formatCurrency(r.bill.total)} is on their tab.`)
+      }
+      await load()
+    } catch (e) { setError(e.message) } finally { setBusy(false) }
   }
   return (
     <>
@@ -62,6 +77,7 @@ function Orders({ branchId }) {
         {[['open', 'To do'], ['done', 'Done today']].map(([v, l]) => <button key={v} type="button" className={view === v ? 'active' : ''} onClick={() => setView(v)}>{l}</button>)}
       </div>
       {error && <p className="error-msg" role="alert">{error}</p>}
+      {notice && <p className="success-msg" role="status" data-testid="food-notice">{notice}</p>}
       {!orders ? <p>Loading…</p> : orders.length === 0 ? <p style={{ color: 'var(--text-muted)' }}>No orders {view === 'open' ? 'waiting' : 'today'}.</p> : orders.map((o) => <OrderCard key={`${o.id}-${o.status}`} o={o} onAct={act} busy={busy} />)}
     </>
   )
@@ -82,14 +98,13 @@ function Stock({ branchId }) {
   useEffect(() => { load() }, [load])
   const act = async (action, payload) => { setError(''); try { await api(action, payload); await load() } catch (e) { setError(e.message) } }
   if (!data) return error ? <p className="error-msg">{error}</p> : <p>Loading…</p>
-  const send = (o) => {
+  // One chat per supplier, each opened by its own click (a browser lets one click open one tab).
+  const bySupplier = (o) => {
     const byPhone = new Map()
     for (const l of o.items) byPhone.set(l.supplierPhone ?? '', [...(byPhone.get(l.supplierPhone ?? '') ?? []), l])
-    for (const [phone, lines] of byPhone) {
-      if (!phone) continue
-      openWhatsApp(phone, `Hello, please send for Perfect Study Space:\n${lines.map((l) => `• ${l.name}: ${l.order}`).join('\n')}\nThank you.\n— Team Perfect Study Space`)
-    }
+    return byPhone
   }
+  const sendTo = (phone, lines) => openWhatsApp(phone, `Hello, please send for Perfect Study Space:\n${lines.map((l) => `• ${l.name}: ${l.order}`).join('\n')}\nThank you.\n— Team Perfect Study Space`)
   return (
     <>
       {error && <p className="error-msg" role="alert">{error}</p>}
@@ -106,8 +121,14 @@ function Stock({ branchId }) {
                   <td><input type="number" min={0} style={{ width: 70 }} aria-label={`${l.name} arrived`} value={got[`${o.id}:${l.inventoryItemId}`] ?? l.order} onChange={(e) => setGot({ ...got, [`${o.id}:${l.inventoryItemId}`]: e.target.value })} /></td></tr>
               ))}</tbody>
             </table>
+            {o.status === 'draft' && bySupplier(o).has('') && (
+              <p style={{ margin: '0.3rem 0 0', fontSize: '0.8rem', color: 'var(--text-muted)' }}>No supplier phone for {bySupplier(o).get('').map((l) => l.name).join(', ')} — order these yourself, or add the supplier's phone in the menu-item links below.</p>
+            )}
             <div style={{ display: 'flex', gap: '0.4rem', flexWrap: 'wrap', marginTop: '0.4rem' }}>
-              {o.status === 'draft' && <button type="button" className="btn btn-primary" onClick={() => { send(o); act('update_supplier_order', { orderId: o.id, status: 'sent' }) }}>💬 Send to supplier</button>}
+              {o.status === 'draft' && [...bySupplier(o)].filter(([phone]) => phone).map(([phone, lines]) => (
+                <button key={phone} type="button" className="btn btn-ghost" onClick={() => sendTo(phone, lines)}>💬 WhatsApp {phone} ({lines.length} item{lines.length === 1 ? '' : 's'})</button>
+              ))}
+              {o.status === 'draft' && <button type="button" className="btn btn-primary" onClick={() => act('update_supplier_order', { orderId: o.id, status: 'sent' })}>Mark as sent</button>}
               <button type="button" className="btn btn-ghost" onClick={() => act('update_supplier_order', { orderId: o.id, status: 'received', received: o.items.map((l) => ({ inventoryItemId: l.inventoryItemId, quantity: Number(got[`${o.id}:${l.inventoryItemId}`] ?? l.order) })) })}>Received — add to stock</button>
               <button type="button" className="btn btn-ghost" onClick={() => act('update_supplier_order', { orderId: o.id, status: 'discarded' })}>Discard</button>
             </div>

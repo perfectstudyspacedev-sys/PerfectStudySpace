@@ -32,6 +32,7 @@ const TOAST_META = {
   task: { icon: '📋', title: 'New Task Assigned', color: '#4ade80', bg: '#0d1a0d', border: '#4ade80', shadow: 'rgba(74,222,128,0.35)' },
   new_enquiry: { icon: '📝', title: 'New Enquiry', color: '#38bdf8', bg: '#0a1a24', border: '#38bdf8', shadow: 'rgba(56,189,248,0.35)' },
   new_signup: { icon: '🆕', title: 'New Sign-up', color: '#f472b6', bg: '#1f0a17', border: '#f472b6', shadow: 'rgba(244,114,182,0.35)' },
+  desk_alert: { icon: '⚠️', title: 'Needs the desk', color: '#ff8888', bg: '#1a0000', border: '#ff4444', shadow: 'rgba(255,60,60,0.35)' },
 }
 
 // Only the 4 most recent toasts stack up on screen — a burst of alerts (e.g. several

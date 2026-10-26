@@ -248,6 +248,7 @@
   "set_desk_tags",
   "set_food_item_stock_link",
   "set_overtime_excluded",
+  "set_task_needs_photo",
   "set_walkin_price_day",
   "simulate_policy",
   "suggest_desk",

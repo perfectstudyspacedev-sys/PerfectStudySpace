@@ -20,3 +20,16 @@ export async function notifyStudent(db: Db, studentId: string, n: Notice): Promi
     return false;
   }
 }
+
+/**
+ * Tells a branch's desk something needs a person now (PSS-AI Phase 4 review): a staff message
+ * tagged [desk_alert], which the staff app's message alerts show as a toast. Never throws.
+ */
+export async function alertDesk(db: Db, branchId: string, text: string): Promise<void> {
+  try {
+    const { error } = await db.from("messages").insert({ branch_id: branchId, sender_staff_id: null, recipient_type: "staff", content: `[desk_alert] ${text}`.slice(0, 1000) });
+    if (error) console.error("desk alert failed:", error.message);
+  } catch (e) {
+    console.error("desk alert failed:", e instanceof Error ? e.message : e);
+  }
+}

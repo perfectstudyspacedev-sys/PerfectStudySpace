@@ -175,7 +175,12 @@ export async function memberArrives(ctx: Ctx, membership: any, desk: any, sessio
   }
   if (outcome === "free_day") {
     const won = await claim();
-    if (!won) return { desk: null, collision: { kind: "free_day", credit: 0, message: `Their cabin is in use until ${until} and no desk is free; their free day was already given — offer the next free desk.` } };
+    // A later arrival in the same sold window: the first one was already settled — a free day,
+    // or a seat at another desk (review #10: then no free day is due, and the words say so).
+    if (!won) {
+      const before = clash.collision === "free_day" ? "their free day was already given" : "they were seated at another desk earlier";
+      return { desk: null, collision: { kind: "no_desk", credit: 0, message: `Their cabin is in use until ${until} and no desk is free; ${before} — offer the next free desk.` } };
+    }
     const credit = freeDayCredit(membership);
     const cashbackId = await grantCredit(db, membership.student_id, membership.branch_id, credit, "One free day: your cabin was in use when you arrived");
     await db.from("seat_resales").update({ collision_cashback_id: cashbackId }).eq("id", clash.id);

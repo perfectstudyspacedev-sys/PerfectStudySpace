@@ -54,7 +54,7 @@ export async function takeStock(db: Ctx["db"], branchId: string, lines: { food_i
     for (const it of items ?? []) {
       const qty = lines.filter((l) => l.food_item_id === it.id).reduce((s, l) => s + Number(l.quantity), 0) * Number(it.inventory_per_unit ?? 1);
       if (!(qty > 0)) continue;
-      // A conditional update, retried once, so two bills at the same moment both count.
+      // A conditional update, tried up to 3 times, so two bills at the same moment both count.
       for (let attempt = 0; attempt < 3; attempt++) {
         const { data: inv } = await db.from("inventory_items").select("id, quantity").eq("id", it.inventory_item_id).maybeSingle();
         if (!inv) break;
@@ -215,6 +215,12 @@ export function handlers(): Record<string, Handler> {
       if (!OPEN.includes(o.status)) return err(`This order is already ${o.status}`);
       const mode = payload.paymentMode ?? null;
       if (mode !== null && mode !== "cash" && mode !== "upi") return err("Choose cash, UPI, or leave it for the Food Pass or the tab");
+      // The counter's rule (create_food_bill): a student with money on a Food Pass pays through it
+      // and nothing else — any shortfall is collected at checkout. Cash or UPI taken here as well
+      // would charge them twice, so it is refused. An empty pass counts as no pass (skipFoodPass).
+      const { data: pass } = await db.from("food_passes").select("balance").eq("student_id", o.student_id).maybeSingle();
+      const passUsable = !!pass && Number(pass.balance) > 0;
+      if (passUsable && mode !== null) return err("This student pays from their Food Pass — don't take cash or UPI; any shortfall is collected at checkout", 409);
       const lines = (o.items ?? []).map((l: any) => ({ foodItemId: l.foodItemId, quantity: Number(l.quantity) }));
       const p = await priced(db, o.branch_id, lines);
       if (!p) return err("An item in this order is no longer on the menu — cancel the order", 409);
@@ -226,7 +232,7 @@ export function handlers(): Record<string, Handler> {
       const { data: student } = await db.from("students").select("name, phone").eq("id", o.student_id).maybeSingle();
       const ran = await runNested(actionDef("create_food_bill"), ctx, {}, {
         branchId: o.branch_id, studentId: o.student_id, studentName: student?.name ?? null, studentPhone: student?.phone ?? null,
-        bookingId: o.booking_id, items: lines, paymentMode: mode,
+        bookingId: o.booking_id, items: lines, paymentMode: mode, skipFoodPass: !passUsable,
       });
       if (!ran.ok) {
         await db.from("food_orders").update({ status: o.status, updated_at: new Date().toISOString() }).eq("id", o.id).eq("status", "delivered").is("food_bill_id", null);

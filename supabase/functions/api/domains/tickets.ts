@@ -12,7 +12,7 @@ import { err, json } from "../../_shared/http.ts";
 import { isOwnerOrAdmin, requireBranch } from "../../_shared/auth.ts";
 import { featureOn } from "../../_shared/flags.ts";
 import { addDays, istDayStart, todayISO } from "../../_shared/dates.ts";
-import { notifyStudent } from "../../_shared/notify.ts";
+import { alertDesk, notifyStudent } from "../../_shared/notify.ts";
 import { OPEN_TICKETS_MAX, TICKET_CATEGORIES, TICKETS_PER_DAY, ticketPriority } from "../../_shared/tickets.ts";
 import { decodeImage } from "../payments-lib.ts";
 import { isISODate } from "../lib.ts";
@@ -62,6 +62,8 @@ export function handlers(): Record<string, Handler> {
         desk_label: typedDesk || (session?.desks as any)?.label || null,
       }).select("*").single();
       if (error || !t) return err(error?.message ?? "Could not save your report", 500);
+      // Urgent reports reach a person at once: the desk's message alerts show it (review fix).
+      if (priority === "urgent") await alertDesk(db, branchId, `Urgent problem reported${t.desk_label ? ` at desk ${t.desk_label}` : ""}: ${details.slice(0, 200)}`);
       return json({ ok: true, ticket: ticketView(t) });
     },
 
