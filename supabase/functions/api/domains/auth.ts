@@ -5,6 +5,7 @@ import type { Ctx, Handler } from "../registry.ts";
 import { todayISO } from "../../_shared/dates.ts";
 import { err, json } from "../../_shared/http.ts";
 import { markAttendanceIfNeeded, signToken } from "../../_shared/auth.ts";
+import { staffOpsRetired } from "../../_shared/retire.ts";
 
 export function handlers(): Record<string, Handler> {
   const h: Record<string, Handler> = {
@@ -24,7 +25,9 @@ export function handlers(): Record<string, Handler> {
       // Once a staff member has ended their session for the day, they're locked out of
       // logging back in until tomorrow — mirrors clocking out at a physical front desk.
       // Owner is exempt (End Session isn't offered to them in the first place).
-      if (row.role !== "owner") {
+      // PSS-AI S1: neither the lock-out nor the attendance mark once the desk-staff modules retire.
+      const retired = await staffOpsRetired(db);
+      if (row.role !== "owner" && !retired) {
         const { data: att } = await db.from("staff_attendance").select("last_logout_at")
           .eq("staff_id", row.id).eq("attendance_date", todayISO()).maybeSingle();
         if (att?.last_logout_at) {
@@ -35,7 +38,7 @@ export function handlers(): Record<string, Handler> {
       const token = await signToken({ sub: row.id, role: row.role, username: row.username });
 
       // Auto-mark attendance on first login of the day (no-op if already marked) — owner is exempt
-      await markAttendanceIfNeeded(db, row.id, row.role, row.branch_id);
+      if (!retired) await markAttendanceIfNeeded(db, row.id, row.role, row.branch_id);
 
       // If the owner reassigned this staff member to a different branch for today (covering
       // an absence), log them into that branch instead of their permanent home branch.

@@ -12,7 +12,9 @@ import { notifyStudent } from "../../_shared/notify.ts";
 import { portalScope } from "../../_shared/student.ts";
 import { actionDef } from "../registry-ref.ts";
 import { runNested } from "../run.ts";
-import { createAlert } from "../lib.ts";
+import { createAlert, fetchAllRows } from "../lib.ts";
+import { featureOn } from "../../_shared/flags.ts";
+import { AUTO_SCOPES, ruleMatches } from "../../_shared/policy.ts";
 import { currentMembership } from "../portal-lib.ts";
 
 export const SELF_HOLD_MAX_DAYS = 7;    // C1
@@ -48,6 +50,23 @@ async function queueRequest(ctx: Ctx, kind: string, details: Record<string, unkn
   const { data: reqRow, error: e2 } = await db.from("student_requests").insert({ student_id: s.id, branch_id: s.branch_id, kind, details, approval_id: appr.id }).select("id").single();
   if (e2) return err(e2.message, 500);
   return json({ pending_approval: appr.id, requestId: reqRow?.id, message: `Your ${KIND_LABEL[kind]} request was sent to the owner. You will see the answer here.` }, 202);
+}
+
+/**
+ * Approving a student's hold request: the same steps whoever approves it (the owner, or a rule the
+ * owner signed, I8). The plan may have changed since the request (renewed, ended, already on hold):
+ * the hold applies only to the same membership, still active, not paused and not ended.
+ */
+async function approveHold(ctx: Ctx, a: any, scope: { staff?: Ctx["staff"] }): Promise<{ result: any } | { error: string }> {
+  const { db } = ctx;
+  const mem = a.student_id ? await currentMembership(db, a.student_id) : null;
+  if (!mem || mem.id !== a.payload.membershipId || !mem.is_active || mem.is_paused || mem.end_date < todayISO()) {
+    return { error: "The student's membership has changed since this request (renewed, ended or already on hold) — deny it with a note." };
+  }
+  const ran = await runNested(actionDef("pause_membership"), ctx, scope.staff ? { staff: scope.staff } : {}, { membershipId: a.payload.membershipId, reason: `Approved hold request ${a.id}` });
+  if (!ran.ok) return { error: `Not approved — pause_membership said: ${ran.body?.error ?? `HTTP ${ran.status}`}` };
+  await planResume(db, a.payload.membershipId, Number(a.payload.days), false);
+  return { result: { ...ran.body, resumesOn: addDays(todayISO(), Number(a.payload.days)) } };
 }
 
 /** Marks the newest open hold of a membership with its planned end. */
@@ -127,7 +146,13 @@ export function handlers(): Record<string, Handler> {
         .select("id, kind, action, payload, requested_by_type, requested_by_id, run_id, student_id, status, reason, result, decided_at, created_at, ai_note, ai_note_at, students(name, phone), branches(name)")
         .eq("status", status).order("created_at", { ascending: status === "pending" }).limit(200);
       if (error) return err(error.message, 500);
-      return json({ approvals: (data ?? []).map((a: any) => ({ ...a, name: a.students?.name ?? null, phone: a.students?.phone ?? null, branch: a.branches?.name ?? null, students: undefined, branches: undefined })) });
+      // I8: a rule the owner signed that this request falls under (shown, never applied here).
+      const rules = status === "pending" && (await featureOn(ctx.db, "policy_learner"))
+        ? (await ctx.db.from("policy_rules").select("id, scope, bucket, outcome, description").eq("status", "active")).data ?? [] : [];
+      return json({ approvals: (data ?? []).map((a: any) => {
+        const rule = rules.find((r: any) => ruleMatches(r, a));
+        return { ...a, name: a.students?.name ?? null, phone: a.students?.phone ?? null, branch: a.branches?.name ?? null, students: undefined, branches: undefined, ...(rule ? { rule: { id: rule.id, outcome: rule.outcome, description: rule.description } } : {}) };
+      }) });
     },
 
     decide_approval: async (ctx: Ctx, payload: any): Promise<Response | undefined> => {
@@ -163,17 +188,9 @@ export function handlers(): Record<string, Handler> {
         if (!ran.ok) { await reopen(); return err(`Not approved — ${a.action} said: ${ran.body?.error ?? `HTTP ${ran.status}`}`, 409); }
         result = ran.body;
       } else if (a.action === "hold") {
-        // The plan may have changed since the request (renewed, ended, already on hold): the hold
-        // applies only to the same membership, still active, not paused and not ended.
-        const mem = a.student_id ? await currentMembership(db, a.student_id) : null;
-        if (!mem || mem.id !== a.payload.membershipId || !mem.is_active || mem.is_paused || mem.end_date < todayISO()) {
-          await reopen();
-          return err("The student's membership has changed since this request (renewed, ended or already on hold) — deny it with a note.", 409);
-        }
-        const ran = await runNested(actionDef("pause_membership"), ctx, {}, { membershipId: a.payload.membershipId, reason: `Approved hold request ${a.id}` });
-        if (!ran.ok) { await reopen(); return err(`Not approved — pause_membership said: ${ran.body?.error ?? `HTTP ${ran.status}`}`, 409); }
-        await planResume(db, a.payload.membershipId, Number(a.payload.days), false);
-        result = { ...ran.body, resumesOn: addDays(todayISO(), Number(a.payload.days)) };
+        const held = await approveHold(ctx, a, {});
+        if ("error" in held) { await reopen(); return err(held.error, 409); }
+        result = held.result;
       }
       // Plan changes, refunds, privacy requests and waitlist seats are finished by the owner or
       // the desk in the staff app (they need staff choices: amounts, cabins); approving tells the
@@ -189,6 +206,41 @@ export function handlers(): Record<string, Handler> {
         await notifyStudent(db, a.student_id, { kind: "request_approved", title: `Your ${label} request was approved`, body: reason ? `${body} ${reason}` : body, dedupeKey: `approval:${a.id}` });
       }
       return json({ ok: true, decision: "approved", result });
+    },
+
+    // ─── System: I8, signed rules decide student hold requests (every 15 minutes) ───
+    cron_apply_policy_rules: async (ctx: Ctx): Promise<Response | undefined> => {
+      const { db } = ctx;
+      if (!(await featureOn(db, "policy_learner"))) return json({ skipped: "pssai_policy_learner is off" });
+      const { data: rules } = await db.from("policy_rules").select("id, scope, bucket, outcome, description, applied_count").eq("status", "active").eq("outcome", "approve");
+      const usable = (rules ?? []).filter((r: any) => AUTO_SCOPES.has(r.scope));
+      if (!usable.length) return json({ ok: true, applied: 0 });
+      const pending = await fetchAllRows<any>(() => db.from("approvals").select("*").eq("status", "pending").eq("kind", "student_request").eq("action", "hold").order("created_at").order("id"));
+      let applied = 0, failed = 0;
+      for (const a of pending) {
+        const rule = usable.find((r: any) => ruleMatches(r, a));
+        if (!rule) continue;
+        // Claimed like the owner's Approve, so an owner deciding at the same moment wins cleanly.
+        const reason = `Signed rule: ${rule.description}`;
+        const { data: claimed } = await db.from("approvals").update({ status: "approved", decided_by_staff_id: null, decided_at: new Date().toISOString(), reason, policy_rule_id: rule.id })
+          .eq("id", a.id).eq("status", "pending").select("id");
+        if (!claimed?.length) continue;
+        const mem = await currentMembership(db, a.student_id);
+        const held = mem ? await approveHold(ctx, a, { staff: portalScope(mem.branch_id) }) : { error: "No membership" };
+        if ("error" in held) {
+          // The rule can't apply (the plan changed): the request goes back to the owner.
+          await db.from("approvals").update({ status: "pending", decided_by_staff_id: null, decided_at: null, reason: null, policy_rule_id: null }).eq("id", a.id);
+          failed++;
+          continue;
+        }
+        await db.from("approvals").update({ result: held.result }).eq("id", a.id);
+        await db.from("student_requests").update({ status: "approved", decided_at: new Date().toISOString() }).eq("approval_id", a.id);
+        await db.from("policy_rules").update({ applied_count: Number(rule.applied_count ?? 0) + 1, updated_at: new Date().toISOString() }).eq("id", rule.id);
+        rule.applied_count = Number(rule.applied_count ?? 0) + 1;
+        await notifyStudent(db, a.student_id, { kind: "request_approved", title: "Your hold request was approved", body: `Your hold has started and ends on ${held.result.resumesOn}.`, dedupeKey: `approval:${a.id}` });
+        applied++;
+      }
+      return json({ ok: true, applied, failed });
     },
 
     // ─── System: holds end by themselves on their planned day ───

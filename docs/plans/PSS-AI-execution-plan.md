@@ -908,6 +908,92 @@ Every piece has its own switch, off by default (R9). The switches are global, bu
 | Portal R4 | SP18 focus profile, SP19 exam coach, SP20 Study Wrapped, SP21 study buddy (opt-in) |
 | S1 Retire desk-staff modules | Migration `070_deprecate_staff_ops` marks tables deprecated; a later migration drops them after the data is archived. Remove: `markAttendanceIfNeeded` on every request; `staff_attendance` reads, `list_staff_attendance`, `end_staff_session` and the logout cut-off in `authStaff`; `assign_staff_override`, `clear_staff_override`; `list_branch_staff`, `get_staff_grid`; staff-to-staff `list_messages`, `send_message`, `MessagesPage`; `StaffPage`; `TasksPage` unless housekeeping still uses it. `create_staff` and `update_staff` shrink to owner, admin and kitchen/housekeeping accounts. Do this only after the staff modules sit unused for a full month. |
 
+### Build level (2026-10-25)
+
+I7 is skipped (D3). Everything else is code-only: no AI call is added in Phase 5, so nothing here spends from the AI budget. Every piece is off by default (R9). Settled rules hold:
+- T3 still always goes to the owner (S9).
+- The large discount/cashback confirm stays on (C24).
+- Money is worked out only by the existing code (R1, R3).
+
+| Switch | Turns on |
+|---|---|
+| `pssai_policy_learner` | I8: proposed rules from past decisions, the owner's sign-off, and signed hold rules applied |
+| `pssai_digital_twin` | I6: "what if" simulations of a policy change on the last months' real data |
+| `pssai_experiments` | O6: A/B tests on win-back offers, next-exam plans and the featured menu item (C20) |
+| `pssai_space_yield` | O7: occupancy heat-map and suggestions per branch |
+| `pssai_portal_r4` | SP18 focus profile, SP19 exam coach, SP20 Study Wrapped |
+| `pssai_study_buddy` | SP21 study buddy, opt-in both ways (C20) |
+| `pssai_retire_staff_ops` | S1: the desk-staff screens and checks retired (C18) |
+
+**Migrations** (append-only; Appendix B):
+- `070_deprecate_staff_ops`:
+  - `COMMENT ON TABLE` marks `staff_attendance` (and the override columns) deprecated; nothing is dropped.
+  - `staff.duty` (`desk`, `kitchen`, `housekeeping`; default `desk`), so the accounts C18 keeps can be told apart.
+- `071_learning_and_buddies`:
+  - `policy_rules` (scope, condition, outcome, support, status proposed → active → retired, who signed and when);
+  - `experiments` and `experiment_exposures` (one variant per student per experiment, conversion time);
+  - `study_buddies` (opt-in profile) and `study_buddy_matches`.
+
+**I8 Policy learner.**
+- `learnPolicies()` (`_shared/policy.ts`, pure) groups decided approvals from the last 180 days by kind, action and a bucket of the request:
+  - hold days 1–7 / 8–14 / 15–31;
+  - cashback ₹1–100 / 101–300 / over 300;
+  - whether the student had dues.
+- A group of at least 6 decisions that went the same way at least 90% of the time becomes a proposed rule, in words: "Holds of 8–14 days with no dues: you approved 9 of 9".
+- `cron_policy_rules` (weekly) refreshes the proposals; `list_policy_rules` (T0) shows them; `decide_policy_rule` (T3, owner: it changes policy) signs or retires one.
+- A signed rule:
+  - shows on every matching approval card as "Matches your rule";
+  - for student hold requests only (T1, never T3), `cron_apply_policy_rules` (every 15 minutes) approves a matching request through the same steps as the owner's Approve (`approveHold()`), with the rule in the reason;
+  - never applies to T3 actions, refunds, plan changes or money (S9, R3).
+
+**I6 Digital twin.** `simulate_policy` (T0, owner) answers "what if" from the last 180 days, using pure functions in `_shared/twin.ts`:
+- the renewal grace days (today 10): renewals whose start date and charged days would change, the extra or lost ₹ (days × the plan's daily rate), and the check-ins that would have been refused;
+- the overtime grace minutes (today 15): each logged overtime session re-priced with `overtimeCharge(…, grace)`, which equals `computeOvertimeCharge` at 15 (tested), and the ₹ difference;
+- the self-hold limit (today 7 days, C1): past hold requests that would run by themselves or go to approval.
+
+Nothing changes until the owner changes the real setting.
+
+**O6 Experiments (C20).**
+- `create_experiment`, `update_experiment` (T1, owner) and `list_experiments` (T0) manage them. Kinds:
+  - `winback_offer`: two discounts, each at most 10% (C12);
+  - `next_exam_offer`: 3 vs 6 months;
+  - `menu_feature`: two food items shown first in the portal menu.
+- Students get a variant by a stable hash. Every exposure is recorded when the job or the page uses it.
+- `cron_experiments` (weekly):
+  - marks conversions: a renewal or rejoin within 21 days, or an order of the item within 7 days;
+  - ends experiments past their end date;
+  - works out each variant's rate and a two-proportion test (`abResult()`, pure).
+- The owner "keeps" the winner (`update_experiment` with `keep`). That writes the real setting: `winback_discount_pct`, `next_exam_months` or `featured_food_items`.
+
+**O7 Space yield.**
+- `get_space_yield` (T0, owner): for each weekday × hour over the last 8 weeks, the average open sessions not in a fixed cabin ÷ open seats, and the cabins' own use.
+- `spaceSuggestions()` (pure) turns that into suggestions:
+  - add seats when open seats are over 95% full for 6 or more hours a week;
+  - convert seats to cabins when the permanent waitlist is long and open seats stay under 60% at peak;
+  - an evening offer or a group room when whole blocks of hours stay under 25%.
+
+**Portal R4.**
+- `me_focus_profile` (SP18): focus ratings by time of day and weekday, and the best window; needs at least 5 ratings.
+- `me_exam_coach` (SP19): the next confirmed exam of the student's family, days left, the last 14 days' study per day against the plan's hours, and fixed advice for far / near / last month.
+- `me_wrapped` (SP20, a month): hours, days, longest streak, best day, favourite desk, average focus, and a percentile among the branch's members (counts only).
+- SP21 study buddy:
+  - `me_buddy`, `me_buddy_join` (window: morning, afternoon, evening, night), `me_buddy_leave`, `me_buddy_respond`;
+  - `cron_buddy_matches` (weekly) pairs opted-in members of the same branch, exam family and window;
+  - after both accept, each sees the other's first name and window only, never a phone number, and they meet at the hall.
+
+**S1 Retire the desk-staff modules (C18).**
+- `get_staff_module_usage` (T0, owner): calls to each retiring action in the last 30 days, so the owner sees a full month unused before switching.
+- With `pssai_retire_staff_ops` on:
+  - attendance is no longer marked on every request, and End Session no longer cuts staff off;
+  - `list_staff_attendance`, `end_staff_session`, `assign_staff_override`, `clear_staff_override`, `get_staff_grid` and staff-to-staff `send_message` answer 410;
+  - Messages, the staff attendance grid and the override controls are hidden;
+  - `create_staff` / `update_staff` accept only owner, admin or a kitchen / housekeeping duty.
+- Kept, because housekeeping still uses Actions:
+  - `list_branch_staff`, which assigns tasks;
+  - TasksPage;
+  - `list_messages`, which carries system notices such as new enquiries and cross-branch visits.
+- The tables are only marked (070); dropping them is a later migration after the data is archived.
+
 ## Phase 5 exit gate
 
 - [ ] The small model handles most chats at the large model's accuracy on the test sets (or I7 is skipped by decision)
@@ -925,6 +1011,50 @@ Every piece has its own switch, off by default (R9). The switches are global, bu
 | I33 Verified study certificate (SP22) | A record of real study hours, signed with an HMAC secret, with a public check page at `join.perfectstudyspace.in/verify/<id>` |
 | I34 Parent digest (SP23) | A weekly read-only summary link that the student chooses to share; the student can revoke it |
 | O10 One owner, every branch | One dashboard, one approval queue and one brief across all branches |
+
+### Build level (2026-10-25)
+
+| Switch | Turns on |
+|---|---|
+| `pssai_certificates` | I33/SP22: verified study certificates and the public check page |
+| `pssai_parent_digest` | I34/SP23: the weekly parent summary link |
+| `pssai_owner_overview` | O10: one page across every branch |
+
+**Migration** `072_certificates_and_digests`:
+- `study_certificates` (short id, student, branch, date range, hours, days, issued, signature, revoked);
+- `parent_links` (student, hash of the link token, created, revoked, last viewed);
+- `parent_digests` (the weekly snapshot per student and week).
+
+**I33 certificate (C21).**
+- `me_issue_certificate` (T1):
+  - the student picks a range of up to 12 months, ending no later than today;
+  - code counts completed sessions in it, minus breaks (hours and days);
+  - the row is signed with HMAC-SHA256 under the `CERTIFICATE_SECRET` Supabase secret over the hall name, the student's name, the range, the hours and the days;
+  - without the secret, issuing is refused;
+  - at most 5 a month.
+- `me_certificates` (T0) lists them; `me_revoke_certificate` (T1) withdraws one.
+- `public_verify_certificate` (public, T0): `join.perfectstudyspace.in/verify/<id>` shows the hall name, the student's name, the hours, the dates and whether the signature checks.
+- The portal's printable certificate carries the check link as a QR.
+
+**I34 parent digest (C22).**
+- `me_parent_link` (T1) makes or replaces the student's link (a 32-character token, only its hash kept); `me_revoke_parent_link` (T1).
+- `cron_parent_digest` runs Sundays at 19:00 IST. It freezes each linked student's week:
+  - hours per day;
+  - days attended;
+  - average focus;
+  - when the plan ends.
+
+  It holds no amounts, phone numbers or messages, and the student is told it is ready.
+- `public_parent_digest` (public, T0): `join.perfectstudyspace.in/p/<token>` shows the latest week (and the 3 before it); a revoked link shows nothing.
+
+**O10 One owner, every branch.**
+- `get_owner_overview` (T0, owner), one row per branch plus totals:
+  - checked in now and free seats;
+  - today's and this month's collections (from transactions);
+  - dues;
+  - plans ending this week;
+  - open approvals, open problem reports and open food orders.
+- One Approvals queue and one brief already cover every branch; the page links to them.
 
 ## Phase 6 exit gate
 
@@ -1013,7 +1143,9 @@ Values marked "pinned" record what the code returns today. If one looks wrong, r
 | 067 | `067_phase2_hardening.sql` | P2 review | Sign-up pay key; one confirmed proof per UTR |
 | 068 | `068_checkin_location.sql` | P4 | Branch location, check-in key, check-in records and consents, desk tags, seat preferences |
 | 069 | `069_food_queue_and_tickets.sql` | P4 | Food order queue, stock links, supplier drafts, tickets, task photos |
-| 070 | `070_deprecate_staff_ops.sql` | P5 | Marks desk-staff tables deprecated |
+| 070 | `070_deprecate_staff_ops.sql` | P5 | Marks desk-staff tables deprecated; staff duty (desk, kitchen, housekeeping) |
+| 071 | `071_learning_and_buddies.sql` | P5 | Policy rules, experiments and exposures, study buddies |
+| 072 | `072_certificates_and_digests.sql` | P6 | Study certificates, parent links and weekly digests |
 
 Numbers are indicative. Because phases ship in order, the migration owner may renumber unbuilt ones so files are applied in the order they ship; update this table in the same commit. *Renumbered on 2026-10-20 (P1.8), 2026-10-23 (Phase 3 and the Phase 2 review) and 2026-10-25 (Phase 4) into build order.*
 

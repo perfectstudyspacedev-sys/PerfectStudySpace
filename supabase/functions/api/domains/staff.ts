@@ -9,6 +9,16 @@ import { getOwnerStaffIds, isTaskDueOn } from "../lib.ts";
 import { featureOn } from "../../_shared/flags.ts";
 import { needsPhotoByDefault } from "../../_shared/tickets.ts";
 import { photosFor } from "./tickets.ts";
+import { STAFF_DUTIES, staffOpsRetired } from "../../_shared/retire.ts";
+
+// PSS-AI S1 / C18: once the desk-staff modules retire, the only staff accounts kept are owner,
+// admin and kitchen / housekeeping duties. Returns an error message, or null when the account may exist.
+async function dutyProblem(db: Ctx["db"], role: string, duty: unknown): Promise<string | null> {
+  if (duty !== undefined && !STAFF_DUTIES.includes(duty as any)) return "Duty is desk, kitchen or housekeeping";
+  if (role === "owner" || role === "admin" || !(await staffOpsRetired(db))) return null;
+  if (duty !== "kitchen" && duty !== "housekeeping") return "The desk-staff modules are retired — a staff account now needs a kitchen or housekeeping duty";
+  return null;
+}
 
 // PSS-AI C17: with pssai_photo_tasks on, the tasks a day's list returns say whether that day's
 // photo is in (photoTaken), for tasks that need one.
@@ -29,6 +39,11 @@ export function handlers(): Record<string, Handler> {
       // Disambiguated FK hint (!branch_id) is required — staff now has two FKs to branches
       // (branch_id and override_branch_id from the branch-reassignment feature), so the
       // plain `branches(name)` embed is ambiguous to PostgREST and errors out silently.
+      // PSS-AI S1: with each account's duty (migration 070); before 070 the plain list.
+      const withDuty = await db.from("staff")
+        .select("id, username, role, display_name, branch_id, is_active, duty, branches!branch_id(name)")
+        .neq("role", "admin").order("username");
+      if (!withDuty.error) return json({ staff: withDuty.data ?? [] });
       const { data } = await db.from("staff")
         .select("id, username, role, display_name, branch_id, is_active, branches!branch_id(name)")
         .neq("role", "admin").order("username");
@@ -362,11 +377,14 @@ export function handlers(): Record<string, Handler> {
       const { db } = ctx;
       const staff = ctx.staff!;
       if (!isOwnerOrAdmin(staff)) return err("Owner only", 403);
-      const { username, password, displayName, role, branchId } = payload;
+      const { username, password, displayName, role, branchId, duty } = payload;
+      const problem = await dutyProblem(db, role ?? "staff", duty);
+      if (problem) return err(problem);
       const { data: hash } = await db.rpc("hash_staff_password", { plain_password: password });
       const { error } = await db.from("staff").insert({
         username, password_hash: hash, role: role ?? "staff",
         display_name: displayName, branch_id: branchId,
+        ...(duty !== undefined ? { duty } : {}),
       });
       if (error) return err(error.code === "23505" ? "That username is already taken (usernames aren't case-sensitive)" : error.message);
       return json({ ok: true });
@@ -379,7 +397,7 @@ export function handlers(): Record<string, Handler> {
       const { db } = ctx;
       const staff = ctx.staff!;
       if (!isOwnerOrAdmin(staff)) return err("Owner only", 403);
-      const { staffId, username, newPassword, displayName, branchId, isActive } = payload;
+      const { staffId, username, newPassword, displayName, branchId, isActive, duty } = payload;
       if (!staffId) return err("Staff ID required");
       const { data: target } = await db.from("staff").select("id, role, is_active").eq("id", staffId).single();
       if (!target) return err("Staff not found");
@@ -393,12 +411,17 @@ export function handlers(): Record<string, Handler> {
       // switched back on, so this deliberately does not accept isActive: true on an
       // already-inactive account.
       if (!target.is_active) return err("This staff account has been permanently removed and cannot be reactivated");
+      if (duty !== undefined) {
+        const problem = await dutyProblem(db, target.role, duty);
+        if (problem) return err(problem);
+      }
 
       const updates: Record<string, unknown> = { updated_at: new Date().toISOString() };
       if (username !== undefined && username !== "") updates.username = username;
       if (displayName !== undefined) updates.display_name = displayName;
       if (branchId !== undefined && branchId !== "") updates.branch_id = branchId;
       if (isActive === false) updates.is_active = false;
+      if (duty !== undefined) updates.duty = duty;
       if (newPassword) {
         const { data: hash } = await db.rpc("hash_staff_password", { plain_password: newPassword });
         updates.password_hash = hash;

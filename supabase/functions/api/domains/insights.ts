@@ -23,6 +23,11 @@ const FLAGS = {
   selfCheckin: "pssai_self_checkin", sessionWatch: "pssai_session_watch", seatMatching: "pssai_seat_matching",
   liveSeats: "pssai_live_seats", foodOrders: "pssai_food_orders", foodStock: "pssai_food_stock",
   tickets: "pssai_tickets", photoTasks: "pssai_photo_tasks",
+  // Phase 5
+  policyLearner: "pssai_policy_learner", digitalTwin: "pssai_digital_twin", experiments: "pssai_experiments",
+  spaceYield: "pssai_space_yield", portalR4: "pssai_portal_r4", studyBuddy: "pssai_study_buddy", retireStaffOps: "pssai_retire_staff_ops",
+  // Phase 6
+  certificates: "pssai_certificates", parentDigest: "pssai_parent_digest", ownerOverview: "pssai_owner_overview",
 } as const;
 const DISCOUNT_CONFIRM_KEY = "pssai_discount_confirm_over";
 export const DISCOUNT_CONFIRM_DEFAULT = 1000;

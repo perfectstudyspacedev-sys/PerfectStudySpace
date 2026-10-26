@@ -13,6 +13,9 @@ const OFF = {
   examRadar: false, winback: false, nextExam: false, paylaterAdvice: false, exceptionDesk: false, portalR2: false,
   // Phase 4
   selfCheckin: false, sessionWatch: false, seatMatching: false, liveSeats: false, foodOrders: false, foodStock: false, tickets: false, photoTasks: false,
+  // Phase 5 and 6
+  policyLearner: false, digitalTwin: false, experiments: false, spaceYield: false, portalR4: false, studyBuddy: false, retireStaffOps: false,
+  certificates: false, parentDigest: false, ownerOverview: false,
 }
 const MAX_AGE_MS = 10 * 60 * 1000
 let cached = null

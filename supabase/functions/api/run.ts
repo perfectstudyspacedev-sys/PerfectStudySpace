@@ -22,8 +22,12 @@ export async function runOnce(def: ActionDef, ctx: Ctx, payload: any): Promise<R
   return res;
 }
 
+// PSS-AI S1: reads of the retiring desk-staff screens are logged too, so the owner can see they sat
+// unused for a month before switching them off (C18).
+const WATCHED_READS = new Set(["list_staff_attendance", "get_staff_grid"]);
+
 // Runs one action and logs it: every mutating action (success or failure), and reads only for
-// agent and student callers. The handler gets a client that stamps the caller on audited inserts;
+// agent and student callers (and the watched reads above). The handler gets a client that stamps the caller on audited inserts;
 // the event itself is written with the plain client.
 // deno-lint-ignore no-explicit-any
 export async function runAction(def: ActionDef, ctx: Ctx, payload: any): Promise<Response> {
@@ -42,7 +46,7 @@ export async function runAction(def: ActionDef, ctx: Ctx, payload: any): Promise
   } catch (e) {
     res = err(e instanceof Error ? e.message : "Server error", 500);
   }
-  if (def.mutating || ctx.actor.type === "agent" || ctx.actor.type === "student") {
+  if (def.mutating || ctx.actor.type === "agent" || ctx.actor.type === "student" || WATCHED_READS.has(def.name)) {
     await writeEvent(ctx.db, await eventRow(def, ctx.actor, ctx.runId, payload, res));
   }
   // P2.5: tell open staff screens something changed (only with pssai_realtime on). Never for public

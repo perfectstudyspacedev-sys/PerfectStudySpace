@@ -14,8 +14,10 @@ import { paylaterAdvice, paylaterRisk } from "../../_shared/paylater.ts";
 import { fetchAllRows, isISODate } from "../lib.ts";
 import { currentMembership, quoteRenewal, renewalBlock } from "../portal-lib.ts";
 import { PORTAL_URL } from "./portal.ts";
+import { experimentVariant } from "./learning.ts";
 
 const NEXT_EXAM_MONTHS = 3;
+const PLAN_MONTHS = [1, 2, 3, 6];
 const ENDING_DAYS = 10;
 const JUST_PASSED_DAYS = 14;
 const SIGN_OFF = "— Team Perfect Study Space"; // C6
@@ -34,18 +36,23 @@ async function nextConfirmed(db: Ctx["db"], family: string, from = todayISO()) {
 }
 
 /** O9 for one student: their exam, the next one up the ladder and a ready plan (code prices). */
-export async function nextExamOffer(db: Ctx["db"], studentId: string) {
+export async function nextExamOffer(db: Ctx["db"], studentId: string, recordExposure = false) {
   const { data: s } = await db.from("students").select("id, name, course").eq("id", studentId).maybeSingle();
   const family = examFamily(s?.course);
   const next = nextExam(family, await ladder(db));
   if (!s || !family || !next) return null;
   const mem = await currentMembership(db, studentId);
-  const quote = mem && !renewalBlock(mem) ? await quoteRenewal(db, mem, NEXT_EXAM_MONTHS) : null;
+  // Phase 5 (O6): the plan length the owner kept from an experiment, or a running experiment's variant.
+  const { data: setting } = await db.from("app_settings").select("value").eq("key", "next_exam_months").maybeSingle();
+  let months = PLAN_MONTHS.includes(Number(setting?.value)) ? Number(setting!.value) : NEXT_EXAM_MONTHS;
+  const variant = mem ? await experimentVariant(db, "next_exam_offer", mem.branch_id, studentId, recordExposure) : null;
+  if (variant && PLAN_MONTHS.includes(Number(variant.value))) months = Number(variant.value);
+  const quote = mem && !renewalBlock(mem) ? await quoteRenewal(db, mem, months) : null;
   const exam = await nextConfirmed(db, next);
   return {
     name: s.name, current: family, currentLabel: familyLabel(family), next, nextLabel: familyLabel(next),
     examDate: exam?.exam_date ?? null, applyBy: exam?.apply_by ?? null, membership: mem,
-    plan: quote && !("error" in quote) ? { months: NEXT_EXAM_MONTHS, amount: quote.amount } : null,
+    plan: quote && !("error" in quote) ? { months, amount: quote.amount } : null,
   };
 }
 
@@ -147,7 +154,7 @@ export function handlers(): Record<string, Handler> {
         const ending = daysBetween(today, m.end_date) <= ENDING_DAYS;
         const justPassed = passedFamilies.some((f: string) => familiesMatch(f, family));
         if (!ending && !justPassed) continue;
-        const offer = await nextExamOffer(db, m.student_id);
+        const offer = await nextExamOffer(db, m.student_id, true);
         if (!offer?.plan) continue;
         // The Send list holds one row per student a day: when the 08:00 collections job already
         // has one, this student waits for tomorrow (no notice yet, so nothing is lost).

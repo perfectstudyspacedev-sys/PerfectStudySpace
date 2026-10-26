@@ -91,6 +91,13 @@ SELECT cron.schedule('pss_exception_desk',    '*/30 * * * *', $$SELECT pss_run_a
 SELECT cron.schedule('pss_close_sessions',    '0 18 * * *',  $$SELECT pss_run_cron_job('cron_close_forgotten_sessions')$$); -- 23:30 IST (pssai_session_watch, C15)
 SELECT cron.schedule('pss_supplier_drafts',   '30 15 * * *', $$SELECT pss_run_cron_job('cron_supplier_drafts')$$);   -- 21:00 IST (pssai_food_stock)
 
+-- Phases 5 and 6 (each does nothing while its switch is off):
+SELECT cron.schedule('pss_policy_rules',      '50 20 * * 6', $$SELECT pss_run_cron_job('cron_policy_rules')$$);      -- Sundays 02:20 IST (pssai_policy_learner)
+SELECT cron.schedule('pss_apply_rules',       '7,22,37,52 * * * *', $$SELECT pss_run_cron_job('cron_apply_policy_rules')$$); -- every 15 min (pssai_policy_learner; signed hold rules only)
+SELECT cron.schedule('pss_experiments',       '10 21 * * 0', $$SELECT pss_run_cron_job('cron_experiments')$$);       -- Mondays 02:40 IST (pssai_experiments)
+SELECT cron.schedule('pss_buddy_matches',     '0 3 * * 1',   $$SELECT pss_run_cron_job('cron_buddy_matches')$$);     -- Mondays 08:30 IST (pssai_study_buddy)
+SELECT cron.schedule('pss_parent_digest',     '30 13 * * 0', $$SELECT pss_run_cron_job('cron_parent_digest')$$);     -- Sundays 19:00 IST (pssai_parent_digest)
+
 -- ── 4. Check ──
 -- Run one job now and look at the answer a few seconds later:
 --   SELECT pss_run_cron_job('cron_integrity_report');

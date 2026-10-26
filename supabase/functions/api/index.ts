@@ -7,10 +7,13 @@
 // mutating action with the same Idempotency-Key header gets the stored answer (_shared/idempotency.ts).
 // The run itself (logging, actor stamping, keys) is in run.ts, shared with the cron function.
 // Since P2.1 a third path serves the student portal: me_* actions need a student token.
+// Since PSS-AI S1 (pssai_retire_staff_ops on) attendance is no longer marked and the retired
+// desk-staff actions answer 410 (_shared/retire.ts).
 import { withCors, err } from "../_shared/http.ts";
 import { adminClient, authStaff, markAttendanceIfNeeded } from "../_shared/auth.ts";
 import { authStudent } from "../_shared/student.ts";
 import { featureOn } from "../_shared/flags.ts";
+import { RETIRING_ACTIONS, staffOpsRetired } from "../_shared/retire.ts";
 import type { Caller } from "./registry.ts";
 import { REGISTRY } from "./actions.ts";
 import { runOnce } from "./run.ts";
@@ -46,9 +49,11 @@ async function handleRequest(req: Request): Promise<Response> {
 
     const staff = await authStaff(req);
     if (!staff) return err("Unauthorized", 401);
-    await markAttendanceIfNeeded(db, staff.id, staff.role, staff.homeBranchId);
+    const retired = await staffOpsRetired(db);
+    if (!retired) await markAttendanceIfNeeded(db, staff.id, staff.role, staff.homeBranchId);
 
     if (!def) return err(`Unknown action: ${action}`);
+    if (retired && RETIRING_ACTIONS.includes(def.name)) return err("This screen was retired — the owner switched the desk-staff modules off.", 410);
     return await runOnce(def, { db, req, action, staff, actor: { type: staff.role as Caller, id: staff.id } }, payload);
   } catch (e) {
     return err(e instanceof Error ? e.message : "Server error", 500);

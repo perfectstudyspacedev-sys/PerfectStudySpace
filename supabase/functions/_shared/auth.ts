@@ -3,6 +3,7 @@
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2.49.1";
 import { SignJWT, jwtVerify } from "https://esm.sh/jose@5";
 import { todayISO } from "./dates.ts";
+import { staffOpsRetired } from "./retire.ts";
 
 // A staff member's session token lasts 7 days, and the frontend keeps it in sessionStorage —
 // which survives as long as the browser tab stays open (very common on an always-on
@@ -75,7 +76,8 @@ export async function authStaff(req: Request): Promise<StaffRow | null> {
     // Cuts off an already-open tab/device too, not just fresh logins — once "End Session"
     // has been recorded for today, every subsequent request from this staff member (any
     // token) is treated as unauthorized until tomorrow's attendance row resets it.
-    if (data.role !== "owner") {
+    // PSS-AI S1: not once the desk-staff modules are retired (End Session is gone then).
+    if (data.role !== "owner" && !(await staffOpsRetired(db))) {
       const { data: att } = await db.from("staff_attendance").select("last_logout_at")
         .eq("staff_id", data.id).eq("attendance_date", todayISO()).maybeSingle();
       if (att?.last_logout_at) return null;

@@ -18,6 +18,7 @@ import { forecastDemand, FORECAST_DAYS, FORECAST_WEEKS, LEAD_DAYS, MAX_OPEN_ORDE
 import { actionDef } from "../registry-ref.ts";
 import { runNested } from "../run.ts";
 import { fetchAllRows } from "../lib.ts";
+import { experimentVariant } from "./learning.ts";
 
 const me = (ctx: Ctx) => ctx.student!;
 const OPEN = ["placed", "accepted", "ready"];
@@ -111,11 +112,23 @@ export function handlers(): Record<string, Handler> {
         db.from("food_orders").select("id, items, total, status, note, cancel_reason, created_at, updated_at").eq("student_id", s.id).order("created_at", { ascending: false }).limit(10),
       ]);
       const atHome = !!session && session.branch_id === s.branch_id;
+      // Phase 5 (O6): a featured item shows first — a running menu experiment's variant, else the one kept.
+      let featured: string | null = null;
+      if (branchId) {
+        const v = await experimentVariant(db, "menu_feature", branchId, s.id, atHome);
+        if (v) featured = v.value;
+        else {
+          const { data: kept } = await db.from("app_settings").select("value").eq("key", "featured_food_items").maybeSingle();
+          try { featured = (JSON.parse(kept?.value ?? "{}") ?? {})[branchId] ?? null; } catch { featured = null; }
+        }
+      }
+      const menu = [...(items ?? [])].sort((a: any, b: any) => (b.id === featured ? 1 : 0) - (a.id === featured ? 1 : 0));
       return json({
         on: true,
+        featured,
         canOrder: atHome,
         whyNot: !session ? "Check in first — food is brought to your seat." : !atHome ? "Visiting another branch? Please order at the counter." : null,
-        items: (items ?? []).map((f: any) => ({ id: f.id, name: f.name, price: Number(f.price), available: f.quantity == null || Number(f.quantity) > 0, left: f.quantity == null ? null : Number(f.quantity) })),
+        items: menu.map((f: any) => ({ id: f.id, name: f.name, price: Number(f.price), available: f.quantity == null || Number(f.quantity) > 0, left: f.quantity == null ? null : Number(f.quantity), featured: f.id === featured })),
         foodPass: pass ? { balance: Number(pass.balance) } : null,
         orders: (orders ?? []).map((o: any) => ({ id: o.id, items: o.items, total: Number(o.total), status: o.status, note: o.note, cancelReason: o.cancel_reason, at: o.created_at })),
       });

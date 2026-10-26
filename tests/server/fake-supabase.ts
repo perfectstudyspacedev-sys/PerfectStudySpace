@@ -51,14 +51,25 @@ const DEFAULTS: Record<string, Row> = {
   tickets: { priority: "normal", status: "open", desk_label: null, resolution: null, handled_by_staff_id: null, resolved_at: null },
   tasks: { needs_photo: false, status: "pending", description: null, due_date: null, completed_at: null, repeat_interval: "none" },
   task_photos: { uploaded_by_staff_id: null },
+  // Phases 5 and 6 (071, 072)
+  staff: { is_active: true, duty: "desk" },
+  policy_rules: { status: "proposed", decided_by_staff_id: null, decided_at: null, applied_count: 0 },
+  experiments: { status: "draft", winner: null, result: null, decided_by_staff_id: null, decided_at: null, branch_id: null },
+  experiment_exposures: { converted_at: null },
+  study_buddies: { active: true, exam_family: null },
+  study_buddy_matches: { a_answer: null, b_answer: null, status: "proposed" },
+  study_certificates: { revoked_at: null, branch_id: null },
+  parent_links: { revoked_at: null, last_viewed_at: null },
 };
 
 function uuid() { return crypto.randomUUID(); }
 // Tables whose primary key is not a generated id; a second insert with the same key fails like Postgres.
-const PRIMARY_KEY: Record<string, string> = { idempotency_keys: "key", focus_ratings: "booking_id", fingerprints: "student_id", student_credentials: "student_id", student_setup_codes: "student_id", checkin_consents: "student_id", seat_preferences: "student_id" };
+const PRIMARY_KEY: Record<string, string> = { idempotency_keys: "key", focus_ratings: "booking_id", fingerprints: "student_id", student_credentials: "student_id", student_setup_codes: "student_id", checkin_consents: "student_id", seat_preferences: "student_id", study_buddies: "student_id", study_certificates: "id" };
 // events has a BIGSERIAL id and occurred_at (migration 052), so it takes no uuid from the seeded counter.
 function baseRow(table: string): Row {
   if (table === "events") return { id: tbl(table).reduce((m, r) => Math.max(m, r.id), 0) + 1, occurred_at: new Date().toISOString() };
+  if (table === "study_certificates") return { issued_at: new Date().toISOString() };
+  if (table === "experiment_exposures") return { exposed_at: new Date().toISOString() };
   if (table in PRIMARY_KEY) return { created_at: new Date().toISOString() };
   // agent_runs (057) stamps started_at, not created_at.
   if (table === "agent_runs") return { id: uuid(), started_at: new Date().toISOString(), staff_id: null, student_id: null };
