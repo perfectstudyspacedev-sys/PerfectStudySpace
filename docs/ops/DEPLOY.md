@@ -39,6 +39,9 @@ create two **private** Storage buckets, `payment-proofs` and `id-photos` (no pub
     here; never put it in the website's settings or in a chat. Without it the analyst says it is not set
     up and nothing else changes. Optional: `AI_MODEL` (default `claude-haiku-5-5`) and `AI_MODEL_HARD`
     (default `claude-sonnet-5-5`, used for "Deep answer").
+  - `CERTIFICATE_SECRET` — Phase 6 only: another long random value (at least 16 characters, e.g.
+    `openssl rand -hex 32`). It signs study certificates; without it no certificate is issued and
+    none checks. Changing it later makes every certificate issued before stop checking — keep it.
 
 ## 4. Functions
 ```bash
@@ -277,3 +280,76 @@ Hopes checked in through the portal.
 
 Rollback: set the switch back to `off`. Sessions already closed stay closed; food left as dues stays
 on the student's tab and is settled at the desk or at closure as before.
+
+# Part 6 — switching Phase 5 on (the self-improving system)
+
+Deploy order as always: migrations `070` and `071` → `supabase functions deploy api cron` → the
+website. Re-run `docs/ops/cron.sql` to add `pss_policy_rules` (Sundays 02:20 IST),
+`pss_apply_rules` (every 15 minutes), `pss_experiments` (Mondays 02:40 IST) and
+`pss_buddy_matches` (Mondays 08:30 IST); each does nothing while its switch is off. Nothing here
+changes a price or a rule by itself: the owner signs, keeps or changes each one.
+
+1. **Rules from your own decisions (I8)** — `pssai_policy_learner` = `on`. Each Sunday your decided
+   approvals of the last 180 days are grouped; a group of 6 or more decided the same way 9 times in
+   10 becomes a proposal on **Learning → Rules**, in words. Sign, dismiss (never proposed again) or
+   later retire. A signed rule shows on matching **Approvals** cards ("Matches your rule"). Only a
+   signed *approve* rule for student **hold** requests decides by itself (every 15 minutes, through the
+   same steps as your Approve, the rule named as the reason); refunds, plan changes, cashbacks and
+   every T3 action always wait for you.
+2. **What if (I6)** — `pssai_digital_twin` = `on`. **Learning → What if** tries a different renewal
+   grace, overtime grace or self-hold limit on the last 180 days. It changes nothing.
+3. **Experiments (O6, C20)** — `pssai_experiments` = `on`. **Learning → Experiments**: a win-back
+   offer (two discounts, each at most 10%), a next-exam plan length (1, 2, 3 or 6 months) or the
+   featured menu item at one branch. Each student always sees the same variant. A winner is named
+   only with 20 students per variant and p < 0.1. **Keep** sets the real setting
+   (`winback_discount_pct`, `next_exam_months` or the branch's featured item); **Drop** changes nothing.
+4. **Space use (O7)** — `pssai_space_yield` = `on`. **Learning → Space use** (choose a branch):
+   open-seat use by weekday and hour over 8 weeks, cabin use, and suggestions.
+5. **Portal pages (SP18–SP20)** — `pssai_portal_r4` = `on`: under More, *Exam coach*, *When you
+   focus best* (needs 5 focus ratings) and *Your month (Wrapped)*.
+6. **Study buddy (SP21)** — `pssai_study_buddy` = `on`. Members opt in with their study window;
+   on Mondays members of the same branch, exam and window are paired; first names show only after
+   both say yes, never phone numbers.
+7. **Retiring the desk-staff screens (S1, C18)** — last, and only when **Staff → "Desk-staff
+   screens: use in the last 30 days"** has said *Unused for a month*. Then
+   `pssai_retire_staff_ops` = `on`: attendance is no longer marked, End Session and its lock-out go,
+   the attendance list, branch-cover board and staff Messages are hidden (system notices still pop
+   up), and new staff accounts are kitchen or housekeeping only (set each account's **Duty** on
+   **Staff**). Tasks on **Actions** stay. The tables are only marked (migration 070); dropping them
+   is a later migration after the data is archived.
+
+Phase 5 exit gate (you): the small model handles most chats at the large model's accuracy on the
+test sets (or I7 skipped); staff modules unused for a full month before step 7; monthly active
+portal users meet the target set with you.
+
+Rollback: set the switch back to `off`. A signed rule stops applying when its switch is off or the
+rule is retired; a kept experiment's setting stays (change it back by hand); retiring the staff
+screens is undone by switching it off (attendance is marked again from the next request).
+
+# Part 7 — switching Phase 6 on (certificates, family summary, every branch)
+
+Deploy order: migration `072` → set the `CERTIFICATE_SECRET` secret (section 3) →
+`supabase functions deploy api cron` → the website. Re-run `docs/ops/cron.sql` to add
+`pss_parent_digest` (Sundays 19:00 IST).
+
+1. **Study certificates (I33, C21)** — `pssai_certificates` = `on`. Under More → *Study
+   certificates* a student picks dates (up to 12 months, at most 5 a month) and gets a certificate
+   of their completed study hours, signed with `CERTIFICATE_SECRET`, printable with a QR code.
+   Anyone can check it at `join.perfectstudyspace.in/verify/<number>`: the hall, the name, the
+   hours and dates, and whether it checks. The student can withdraw one.
+2. **Weekly family summary (I34, C22)** — `pssai_parent_digest` = `on`. Under More → *Weekly
+   summary for your family* a student makes a link (shown once; only its hash is kept) and shares
+   it. Every Sunday at 19:00 the week is frozen: hours per day, days attended, average focus and
+   when the plan ends — no amounts, phone numbers or messages. A new link stops the old one; the
+   student can stop it any time.
+3. **Every branch on one page (O10)** — `pssai_owner_overview` = `on`: **Every branch** shows each
+   branch's check-ins, free seats, today's and this month's collections, dues, plans ending, open
+   approvals, problems and food orders, with totals.
+
+Phase 6 exit gate (you): review how many students use certificates and family links, and keep what
+is used.
+
+Rollback: set the switch back to `off`. With certificates off the check page answers "not found";
+with the family summary off the links show nothing (they work again when switched back on unless
+the student stopped them).
+

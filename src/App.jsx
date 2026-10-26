@@ -21,6 +21,8 @@ import ApprovalsPage from './pages/ApprovalsPage'
 import ChatRepliesPage from './pages/ChatRepliesPage'
 import SendListPage from './pages/SendListPage'
 import GrowthPage from './pages/GrowthPage'
+import LearningPage from './pages/LearningPage'
+import OverviewPage from './pages/OverviewPage'
 import FoodQueuePage from './pages/FoodQueuePage'
 import TicketsPage from './pages/TicketsPage'
 import JoinPage from './pages/JoinPage'
@@ -76,6 +78,8 @@ export default function App() {
             <Route path="chat-replies" element={<ChatRepliesPage />} />
             <Route path="send-list" element={<OwnerRoute><SendListPage /></OwnerRoute>} />
             <Route path="growth" element={<OwnerRoute><GrowthPage /></OwnerRoute>} />
+            <Route path="learning" element={<OwnerRoute><LearningPage /></OwnerRoute>} />
+            <Route path="overview" element={<OwnerRoute><OverviewPage /></OwnerRoute>} />
             <Route path="messages" element={<MessagesPage />} />
             <Route path="reports" element={<ReportsPage />} />
             <Route path="actions" element={<TasksPage />} />

@@ -101,6 +101,12 @@ function RequestCard({ a, busy, onDecide, onSuggest, canSuggest }) {
         <p style={{ fontSize: '0.8rem', color: 'var(--text-muted)', marginTop: '0.3rem' }}>Approving tells the student it is being done — finish it in the student&apos;s profile.</p>
       )}
       {a.ai_note && <AiNote note={a.ai_note} />}
+      {/* PSS-AI I8: a rule the owner signed that this request falls under (shown; only hold rules decide by themselves). */}
+      {a.rule && (
+        <p data-testid="rule-badge" style={{ fontSize: '0.8rem', margin: '0.4rem 0 0', padding: '0.3rem 0.5rem', borderRadius: 6, background: a.rule.outcome === 'approve' ? 'rgba(74,222,128,0.1)' : 'rgba(255,60,60,0.1)' }}>
+          📏 Matches your rule — {a.rule.description}
+        </p>
+      )}
       <div style={{ display: 'flex', gap: '0.5rem', marginTop: '0.6rem', flexWrap: 'wrap' }}>
         <button type="button" className="btn btn-primary" disabled={busy} onClick={() => onDecide(a, 'approve')}>Approve</button>
         {!denying && <button type="button" className="btn btn-ghost" disabled={busy} onClick={() => setDenying(true)}>Deny</button>}

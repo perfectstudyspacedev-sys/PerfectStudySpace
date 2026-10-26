@@ -340,7 +340,7 @@ export default function Shell() {
                 {staff?.role}
               </span>
             </span>
-            {!isOwner && (
+            {!isOwner && flags.loaded && !flags.retireStaffOps && (
               <button
                 type="button" className="btn btn-ghost"
                 onClick={openEndSessionModal}
@@ -374,14 +374,15 @@ export default function Shell() {
           {(flags.foodOrders || (isOwner && flags.foodStock)) && <NavLink to="/food-orders">Food orders</NavLink>}
           {flags.tickets && <NavLink to="/tickets">Problems</NavLink>}
           {isOwner && <NavLink to="/revenue">Revenue</NavLink>}
+          {/* PSS-AI S1: staff-to-staff Messages retire with the desk-staff modules (system notices still pop up). */}
           {isOwner ? (
             <>
               <NavLink to="/reports">Reports</NavLink>
-              <NavLink to="/messages">Messages</NavLink>
+              {!flags.retireStaffOps && <NavLink to="/messages">Messages</NavLink>}
             </>
           ) : (
             <>
-              <NavLink to="/messages">Messages</NavLink>
+              {!flags.retireStaffOps && <NavLink to="/messages">Messages</NavLink>}
               <NavLink to="/reports">Reports</NavLink>
             </>
           )}
@@ -392,6 +393,8 @@ export default function Shell() {
           {flags.portal && <NavLink to="/chat-replies">Chat replies</NavLink>}
           {isOwner && (flags.collections || flags.winback || flags.nextExam) && <NavLink to="/send-list">Send list</NavLink>}
           {isOwner && (flags.yieldPricing || flags.hourRelease || flags.overbooking || flags.referralLinks || flags.examRadar || flags.nextExam || flags.winback) && <NavLink to="/growth">Growth</NavLink>}
+          {isOwner && (flags.policyLearner || flags.digitalTwin || flags.experiments || flags.spaceYield) && <NavLink to="/learning">Learning</NavLink>}
+          {isOwner && flags.ownerOverview && <NavLink to="/overview">Every branch</NavLink>}
           {isOwner && (
             <>
               <NavLink to="/settings/branches">Branches</NavLink>

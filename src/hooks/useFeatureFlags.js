@@ -24,8 +24,10 @@ let pending = null
 
 function load() {
   pending ??= api('get_feature_flags')
-    .then((res) => { cached = { ...OFF, ...res }; cachedAt = Date.now(); return cached })
-    .catch(() => cached ?? OFF)
+    // `loaded` tells a screen the answer is in (until then everything reads as off), so a screen
+    // that must not call a switched-off action (the retired staff screens, S1) can wait for it.
+    .then((res) => { cached = { ...OFF, ...res, loaded: true }; cachedAt = Date.now(); return cached })
+    .catch(() => cached ?? { ...OFF, loaded: true })
     .finally(() => { pending = null })
   return pending
 }

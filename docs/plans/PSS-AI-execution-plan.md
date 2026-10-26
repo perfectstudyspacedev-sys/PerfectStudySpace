@@ -1021,6 +1021,15 @@ Nothing changes until the owner changes the real setting.
   - `list_messages`, which carries system notices such as new enquiries and cross-branch visits.
 - The tables are only marked (070); dropping them is a later migration after the data is archived.
 
+### Phase 5 as built (2026-10-26)
+
+✅ Everything above is built, each behind its switch (all off), with no AI call: it is all code over the hall's own records. Server: `api/domains/learning.ts` (I8 jobs and reads, I6, O6, O7, the S1 usage report), `api/domains/studentlife.ts` (portal R4, SP21), `cron_apply_policy_rules` in `requests.ts` (through `approveHold()`, the same steps as the owner's Approve), `_shared/{policy,twin,experiments,study,retire}.ts`. UI: **Learning** (Rules, What if, Experiments, Space use), the "Matches your rule" badge on Approvals, the usage card and Duty on Staff, and the portal's Exam coach, focus profile, Wrapped and Study buddy.
+
+- Tiers: `decide_policy_rule` is T3 (it changes policy, Appendix D); `create_experiment` and `update_experiment` are T1, owner-only; the five new jobs are system-only.
+- O6 wiring: the win-back agent gives each person their own offer and the next-exam offer reads the kept plan length (`next_exam_months`), then a running variant; the portal menu shows the featured item first. Exposures are recorded only where the variant is really shown (the job, or a student at their own hall).
+- S1: the switch is read once a minute per function instance (`_shared/retire.ts`); `login` and `authStaff` skip the attendance mark and the End Session lock-out; six actions answer 410; `list_branch_staff`, Actions and `list_messages` stay (system notices). The two staff-grid reads are now logged as events so the usage report sees them. The golden master was re-recorded for that and for the new `duty` field.
+- Tests: `tests/server/learning_test.ts` (79 checks), `studentlife_test.ts` (60), `tests/units/phase5.test.ts` (21; `overtimeCharge` equals `computeOvertimeCharge` at 15 minutes), `tests/integration/phase5_test.ts` (27, real Postgres: the partial unique indexes, the sorted-pair CHECK, the embeds, composite upserts). Browser QA: the Phase 5/6 screens.
+
 ## Phase 5 exit gate
 
 - [ ] The small model handles most chats at the large model's accuracy on the test sets (or I7 is skipped by decision)
@@ -1082,6 +1091,10 @@ Nothing changes until the owner changes the real setting.
   - plans ending this week;
   - open approvals, open problem reports and open food orders.
 - One Approvals queue and one brief already cover every branch; the page links to them.
+
+### Phase 6 as built (2026-10-26)
+
+✅ Built behind `pssai_certificates`, `pssai_parent_digest` and `pssai_owner_overview` (all off). Certificates are signed over exactly what the check page shows (`certificateText()`, HMAC-SHA256 with `CERTIFICATE_SECRET`; refused with 503 when the secret is missing or under 16 characters); ids are 10 characters from the code alphabet. The parent link token is 32 characters and only its SHA-256 is stored; the summary holds the first name, the hall, minutes per day, days attended, average focus and the plan's end date. Public pages: `/verify/<id>` and `/p/<token>` on the student site (`src/pages/PublicStudyPages.jsx`); the portal's *Study certificates* (printable, with a QR of the check link) and *Weekly summary for your family*; the owner's **Every branch** page.
 
 ## Phase 6 exit gate
 
@@ -1205,7 +1218,7 @@ Every implementer runs `/freeze <glob>` on their paths first (see `.claude/rules
 | T2 | Money comes in, with amounts calculated by code: `record_payment`, `record_locker_payment`, `add_manual_payment`, `topup_food_pass`, `create_food_bill`, `collect_food_bill_shortfall`, `create_walkin`, `create_membership`, `renew_membership`, `renew_locker`, `add_locker`, `checkout_booking`, `deliver_food_order` (Phase 4: bills a portal food order through `create_food_bill`), payment requests and proofs | Allowed | Own payments only |
 | T3 | Money goes out, records are destroyed or policy changes. Always the owner's approval queue for agents and students. | Approval only | Approval only |
 
-**Explicit T3 list:** `delete_membership`, `close_membership`, `cancel_early_renewal`, `change_membership_plan`, `change_membership_cabin`, `transfer_student_branch`, `apply_loyalty_discount`, `grant_cashback`, `redeem_cashback_now`, `set_overtime_excluded`, `add_attendance`, `update_attendance`, `fix_membership_dates`, `fix_negative_food_pass_balances`, `update_fee_config`, `update_welcome_template`, `update_branch`, `add_desk`, `remove_desk`, `remove_locker`, `update_locker_due_date`, `update_locker_number`, `create_food_item`, `update_food_item`, `create_staff`, `update_staff`, `assign_staff_override`, `clear_staff_override`, `end_staff_session`, `delete_enquiries`, `rotate_signup_link`, `set_walkin_price_day` (Phase 3: the owner's own walk-in price for a day), `set_branch_location`, `rotate_checkin_key` (Phase 4: where self check-in is allowed, and the poster key).
+**Explicit T3 list:** `delete_membership`, `close_membership`, `cancel_early_renewal`, `change_membership_plan`, `change_membership_cabin`, `transfer_student_branch`, `apply_loyalty_discount`, `grant_cashback`, `redeem_cashback_now`, `set_overtime_excluded`, `add_attendance`, `update_attendance`, `fix_membership_dates`, `fix_negative_food_pass_balances`, `update_fee_config`, `update_welcome_template`, `update_branch`, `add_desk`, `remove_desk`, `remove_locker`, `update_locker_due_date`, `update_locker_number`, `create_food_item`, `update_food_item`, `create_staff`, `update_staff`, `assign_staff_override`, `clear_staff_override`, `end_staff_session`, `delete_enquiries`, `rotate_signup_link`, `set_walkin_price_day` (Phase 3: the owner's own walk-in price for a day), `set_branch_location`, `rotate_checkin_key` (Phase 4: where self check-in is allowed, and the poster key), `decide_policy_rule` (Phase 5: signing a rule changes policy).
 
 When unsure, choose the higher tier. Tiers do not change what staff, owner and admin can do today (R6).
 

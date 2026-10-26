@@ -13,6 +13,7 @@ import PortalMore from './PortalMore'
 import PortalChat from './PortalChat'
 import { PortalNext, PortalRefer, PortalRelease, PortalWaitlist } from './PortalGrow'
 import { PortalCheckin, PortalFood, PortalProblem, PortalSeatPrefs } from './PortalSelf'
+import { PortalBuddy, PortalCertificates, PortalCoach, PortalFamily, PortalFocus, PortalWrapped } from './PortalStudy'
 
 // PSS-AI P2.1 — the student portal under /me on the student site (loaded only for /me pages).
 export default function PortalRoutes() {
@@ -38,6 +39,12 @@ export default function PortalRoutes() {
         <Route path="seats" element={<PortalSeatPrefs />} />
         <Route path="food" element={<PortalFood />} />
         <Route path="problem" element={<PortalProblem />} />
+        <Route path="focus" element={<PortalFocus />} />
+        <Route path="coach" element={<PortalCoach />} />
+        <Route path="wrapped" element={<PortalWrapped />} />
+        <Route path="buddy" element={<PortalBuddy />} />
+        <Route path="certificates" element={<PortalCertificates />} />
+        <Route path="family" element={<PortalFamily />} />
         <Route path="*" element={<PortalHome />} />
       </Route>
     </Routes>
