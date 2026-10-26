@@ -45,8 +45,12 @@ export function simulateRenewalGrace(renewals: GraceRenewal[], checkinDaysAfterE
   return { renewals: renewals.filter((r) => r.daysLate > 0).length, changed, difference: Math.round(difference * 100) / 100, checkinsRefused: refused, checkins: checkinDaysAfterEnd.length };
 }
 
-/** C1 self-hold limit: past hold requests that would run by themselves (days ≤ limit) or wait for approval. */
-export function simulateHoldLimit(holdDays: number[], proposed: number, current: number) {
-  const auto = (limit: number) => holdDays.filter((d) => d >= 1 && d <= limit).length;
+/**
+ * C1 self-hold limit: past hold requests that would run by themselves (days ≤ limit) or wait for
+ * approval. `alwaysDays` are requests that go to the owner whatever the limit (a cabin, a second
+ * hold in the month); they are among `holdDays` and never count as running by themselves.
+ */
+export function simulateHoldLimit(holdDays: number[], proposed: number, current: number, alwaysDays: number[] = []) {
+  const auto = (limit: number) => Math.max(0, holdDays.filter((d) => d >= 1 && d <= limit).length - alwaysDays.filter((d) => d >= 1 && d <= limit).length);
   return { requests: holdDays.length, autoNow: auto(current), autoThen: auto(proposed), toApprovalThen: holdDays.length - auto(proposed) };
 }

@@ -139,8 +139,12 @@ export function buddyPairs(profiles: BuddyProfile[], busy: Set<string>, seenPair
 }
 
 // ── I33: certificates ──
-export function certificateText(c: { id: string; hall_name: string; student_name: string; date_from: string; date_to: string; hours: number; days: number }) {
-  return `pss-cert:v1|${c.id}|${c.hall_name}|${c.student_name}|${c.date_from}|${c.date_to}|${Number(c.hours).toFixed(2)}|${c.days}`;
+/**
+ * What a certificate's signature covers: exactly what the check page shows, the issue date (IST)
+ * included. A JSON array, so no text can be shifted from one field into another (review fix).
+ */
+export function certificateText(c: { id: string; hall_name: string; student_name: string; date_from: string; date_to: string; hours: number | string; days: number; issued_at: string }) {
+  return `pss-cert:v2|${JSON.stringify([c.id, c.hall_name, c.student_name, c.date_from, c.date_to, Number(c.hours).toFixed(2), Number(c.days), istDate(Date.parse(c.issued_at))])}`;
 }
 export async function hmacHex(secret: string, text: string): Promise<string> {
   const key = await crypto.subtle.importKey("raw", new TextEncoder().encode(secret), { name: "HMAC", hash: "SHA-256" }, false, ["sign"]);

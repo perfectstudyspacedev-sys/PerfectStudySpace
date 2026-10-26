@@ -18,7 +18,7 @@ import { forecastDemand, FORECAST_DAYS, FORECAST_WEEKS, LEAD_DAYS, MAX_OPEN_ORDE
 import { actionDef } from "../registry-ref.ts";
 import { runNested } from "../run.ts";
 import { fetchAllRows } from "../lib.ts";
-import { experimentVariant } from "./learning.ts";
+import { experimentVariant, featuredItemKey } from "./learning.ts";
 
 const me = (ctx: Ctx) => ctx.student!;
 const OPEN = ["placed", "accepted", "ready"];
@@ -118,8 +118,8 @@ export function handlers(): Record<string, Handler> {
         const v = await experimentVariant(db, "menu_feature", branchId, s.id, atHome);
         if (v) featured = v.value;
         else {
-          const { data: kept } = await db.from("app_settings").select("value").eq("key", "featured_food_items").maybeSingle();
-          try { featured = (JSON.parse(kept?.value ?? "{}") ?? {})[branchId] ?? null; } catch { featured = null; }
+          const { data: kept } = await db.from("app_settings").select("value").eq("key", featuredItemKey(branchId)).maybeSingle();
+          featured = kept?.value || null;
         }
       }
       const menu = [...(items ?? [])].sort((a: any, b: any) => (b.id === featured ? 1 : 0) - (a.id === featured ? 1 : 0));

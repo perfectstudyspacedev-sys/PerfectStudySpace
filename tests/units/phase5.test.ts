@@ -7,16 +7,18 @@ import { computeOvertimeCharge } from '../../supabase/functions/_shared/overtime
 import { abResult, cleanVariants, variantFor } from '../../supabase/functions/_shared/experiments.ts'
 import { buddyPairs, certificateText, examCoach, focusProfile, hmacHex, occupancyGrid, spaceSuggestions, windowOf, wrapped } from '../../supabase/functions/_shared/study.ts'
 
-const hold = (days: number, status: string, why = 'longer than 7 days') => ({ kind: 'student_request', action: 'hold', payload: { days, why }, status, requested_by_type: 'student' })
+const hold = (days: number, status: string, why = 'longer than 7 days', dues: boolean | null = false) => ({ kind: 'student_request', action: 'hold', payload: { days, why, dues }, status, requested_by_type: 'student' })
 // An IST wall-clock time as epoch ms.
 const ist = (d: string, hm: string) => Date.parse(`${d}T${hm}:00+05:30`)
 
 describe('I8 policy learner', () => {
   test('hold requests are bucketed by days and by why they needed the owner', () => {
-    expect(bucketOf(hold(10, 'approved'))).toEqual({ scope: 'student_request:hold', bucket: 'days:8-14|why:long' })
-    expect(bucketOf(hold(3, 'approved', 'permanent seat (a hold frees the cabin)')).bucket).toBe('days:1-7|why:permanent')
-    expect(bucketOf(hold(5, 'approved', 'second hold this month')).bucket).toBe('days:1-7|why:second')
-    expect(bucketOf(hold(40, 'approved')).bucket).toBe('days:31+|why:long')
+    expect(bucketOf(hold(10, 'approved'))).toEqual({ scope: 'student_request:hold', bucket: 'days:8-14|why:long|dues:no' })
+    expect(bucketOf(hold(3, 'approved', 'permanent seat (a hold frees the cabin)')).bucket).toBe('days:1-7|why:permanent|dues:no')
+    expect(bucketOf(hold(5, 'approved', 'second hold this month', true)).bucket).toBe('days:1-7|why:second|dues:yes')
+    expect(bucketOf(hold(40, 'approved')).bucket).toBe('days:31+|why:long|dues:no')
+    // A request from before dues were recorded never matches a newer rule.
+    expect(bucketOf(hold(10, 'approved', 'longer than 7 days', null)).bucket).toBe('days:8-14|why:long|dues:?')
   })
   test('cashbacks are bucketed by value and by who asked', () => {
     expect(bucketOf({ kind: 't3_action', action: 'grant_cashback', payload: { cashbackValue: 150 }, status: 'approved', requested_by_type: 'system' }).bucket).toBe('value:101-300|by:system')
@@ -35,13 +37,14 @@ describe('I8 policy learner', () => {
     expect(r).toEqual([expect.objectContaining({ outcome: 'deny', support: 6 })])
   })
   test('a rule is described in words', () => {
-    expect(describeRule('student_request:hold', 'days:8-14|why:long', 'approve', 9, 9)).toBe('Hold requests of 8–14 days (longer than the self-hold limit): you approved 9 of 9.')
+    expect(describeRule('student_request:hold', 'days:8-14|why:long|dues:no', 'approve', 9, 9)).toBe('Hold requests of 8–14 days (longer than the self-hold limit) with no dues: you approved 9 of 9.')
     expect(describeRule('t3_action:grant_cashback', 'value:1-100|by:system', 'approve', 7, 7)).toBe('Cashbacks of ₹1–100 queued by the system: you approved 7 of 7.')
   })
   test('only hold requests can ever be decided by a rule', () => {
     expect([...AUTO_SCOPES]).toEqual(['student_request:hold'])
-    expect(ruleMatches({ scope: 'student_request:hold', bucket: 'days:8-14|why:long' }, hold(12, 'pending'))).toBe(true)
-    expect(ruleMatches({ scope: 'student_request:hold', bucket: 'days:8-14|why:long' }, hold(15, 'pending'))).toBe(false)
+    expect(ruleMatches({ scope: 'student_request:hold', bucket: 'days:8-14|why:long|dues:no' }, hold(12, 'pending'))).toBe(true)
+    expect(ruleMatches({ scope: 'student_request:hold', bucket: 'days:8-14|why:long|dues:no' }, hold(15, 'pending'))).toBe(false)
+    expect(ruleMatches({ scope: 'student_request:hold', bucket: 'days:8-14|why:long|dues:no' }, hold(12, 'pending', 'longer than 7 days', true))).toBe(false)
   })
 })
 
@@ -65,6 +68,8 @@ describe('I6 digital twin', () => {
   })
   test('the self-hold limit splits past requests', () => {
     expect(simulateHoldLimit([3, 5, 9, 12, 20], 10, 7)).toEqual({ requests: 5, autoNow: 2, autoThen: 3, toApprovalThen: 2 })
+    // A cabin or a second hold goes to the owner whatever the limit.
+    expect(simulateHoldLimit([3, 5, 9, 12, 20], 10, 7, [5, 9])).toEqual({ requests: 5, autoNow: 1, autoThen: 1, toApprovalThen: 4 })
   })
 })
 
@@ -152,8 +157,13 @@ describe('Portal R4 and the study buddy', () => {
 
 describe('I33 certificates', () => {
   test('the signed text covers exactly what the check page shows', async () => {
-    const c = { id: 'abc123defg', hall_name: 'Perfect Study Space — Hopes', student_name: 'Asha Rao', date_from: '2026-09-01', date_to: '2026-09-30', hours: 10, days: 3 }
-    expect(certificateText(c)).toBe('pss-cert:v1|abc123defg|Perfect Study Space — Hopes|Asha Rao|2026-09-01|2026-09-30|10.00|3')
+    // Issued 2026-10-25 20:00 UTC = 26 October in IST: the signed date is the IST one.
+    const c = { id: 'abc123defg', hall_name: 'Perfect Study Space — Hopes', student_name: 'Asha Rao', date_from: '2026-09-01', date_to: '2026-09-30', hours: 10, days: 3, issued_at: '2026-10-25T20:00:00.000Z' }
+    expect(certificateText(c)).toBe('pss-cert:v2|["abc123defg","Perfect Study Space — Hopes","Asha Rao","2026-09-01","2026-09-30","10.00",3,"2026-10-26"]')
+    // A "|" in a name can no longer move text from one field into another.
+    expect(certificateText({ ...c, hall_name: 'A|B', student_name: 'C' })).not.toBe(certificateText({ ...c, hall_name: 'A', student_name: 'B|C' }))
+    // PostgREST's numeric and timestamp forms sign the same.
+    expect(certificateText({ ...c, hours: '10.00', issued_at: '2026-10-25T20:00:00+00:00' })).toBe(certificateText(c))
     const sig = await hmacHex('a-long-enough-secret', certificateText(c))
     expect(sig).toMatch(/^[0-9a-f]{64}$/)
     expect(await hmacHex('a-long-enough-secret', certificateText({ ...c, hours: 10.01 }))).not.toBe(sig)

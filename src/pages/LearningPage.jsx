@@ -94,7 +94,7 @@ function TwinTab() {
         <div data-testid="twin-result" style={{ marginTop: '0.75rem' }}>
           <p style={{ margin: '0 0 0.3rem' }}><strong>{p.label}: {result.current} → {result.proposed} {p.unit}</strong></p>
           {result.policy === 'renewal_grace' && <p style={{ margin: 0 }}>{result.renewals} late renewals; {result.changed} would change, {result.difference >= 0 ? 'bringing in' : 'losing'} <strong>{formatCurrency(Math.abs(result.difference))}</strong>. {result.checkinsRefused} of {result.checkins} check-ins after a plan ended would have been refused.</p>}
-          {result.policy === 'overtime_grace' && <p style={{ margin: 0 }}>{result.sessions} overtime sessions; {result.changed} would be priced differently: {formatCurrency(result.currentTotal)} → {formatCurrency(result.proposedTotal)} (<strong>{result.difference >= 0 ? '+' : '−'}{formatCurrency(Math.abs(result.difference))}</strong>).</p>}
+          {result.policy === 'overtime_grace' && <p style={{ margin: 0 }}>Every checkout's overtime minutes are re-priced, including those under today's grace. {result.sessions} overtime sessions; {result.changed} would be priced differently: {formatCurrency(result.currentTotal)} → {formatCurrency(result.proposedTotal)} (<strong>{result.difference >= 0 ? '+' : '−'}{formatCurrency(Math.abs(result.difference))}</strong>).</p>}
           {result.policy === 'self_hold_days' && <p style={{ margin: 0 }}>Of {result.requests} hold requests, {result.autoNow} run by themselves today; {result.autoThen} would, and {result.toApprovalThen} would wait for you.</p>}
         </div>
       )}
@@ -105,7 +105,7 @@ function TwinTab() {
 const KINDS = {
   winback_offer: { label: 'Win-back offer (% off, at most 10)', hint: 'e.g. 5 and 10' },
   next_exam_offer: { label: 'Next-exam plan length (months)', hint: '1, 2, 3 or 6' },
-  menu_feature: { label: 'Featured menu item (one branch)', hint: 'two items of the branch' },
+  menu_feature: { label: 'Featured menu item (one branch)', hint: 'two items of the branch', note: 'Compares how often each item is ordered when it is shown first — the winner is the item students order more, not proof that featuring it helped.' },
 }
 
 function NewExperiment({ onMade }) {
@@ -151,6 +151,7 @@ function NewExperiment({ onMade }) {
       <div className="form-group" style={{ marginBottom: 0 }}><label htmlFor="exp-weeks">Weeks</label><input id="exp-weeks" type="number" min={1} max={12} value={weeks} onChange={(e) => setWeeks(e.target.value)} style={{ width: 70 }} /></div>
       <div className="form-group" style={{ marginBottom: 0, flex: 1, minWidth: 160 }}><label htmlFor="exp-name">Name (optional)</label><input id="exp-name" value={name} onChange={(e) => setName(e.target.value)} placeholder={KINDS[kind].hint} /></div>
       <button type="submit" className="btn btn-primary">Start</button>
+      {KINDS[kind].note && <p style={{ width: '100%', margin: 0, fontSize: '0.75rem', color: 'var(--text-muted)' }}>{KINDS[kind].note}</p>}
       {error && <p className="error-msg" role="alert" style={{ width: '100%' }}>{error}</p>}
     </form>
   )

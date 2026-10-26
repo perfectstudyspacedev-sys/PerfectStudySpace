@@ -21,10 +21,11 @@ export function VerifyCertificate() {
   if (error) return <Frame><p className="error-msg">This certificate could not be found.</p></Frame>
   if (!r) return <Frame><p style={{ color: 'var(--text-muted)' }}>Checking…</p></Frame>
   if (!r.found) return <Frame><h2 style={{ marginTop: 0 }}>Not found</h2><p>No certificate has the number {id}.</p></Frame>
+  if (r.revoked) return <Frame><div data-testid="verify-result"><h2 style={{ marginTop: 0, color: '#ff8888' }}>Withdrawn</h2><p>Certificate {id} was withdrawn by the student. Do not rely on it.</p></div></Frame>
   return (
     <Frame>
       <div data-testid="verify-result">
-        <h2 style={{ marginTop: 0, color: r.valid ? '#4ade80' : '#ff8888' }}>{r.valid ? '✓ Genuine certificate' : r.revoked ? 'Withdrawn by the student' : '✗ This certificate does not check'}</h2>
+        <h2 style={{ marginTop: 0, color: r.valid ? '#4ade80' : '#ff8888' }}>{r.valid ? '✓ Genuine certificate' : '✗ This certificate does not check'}</h2>
         <p style={{ fontSize: '0.85rem', color: 'var(--text-muted)' }}>{r.hall}</p>
         <p style={{ fontSize: '1.2rem', margin: '0.3rem 0' }}><strong>{r.name}</strong></p>
         <p>{r.hours} hours of study on {r.days} days, {fmt(r.from)} – {fmt(r.to)}.</p>

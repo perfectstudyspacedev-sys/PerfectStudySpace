@@ -7,6 +7,19 @@ import { featureOn } from "./flags.ts";
 
 export const RETIRING_ACTIONS = ["list_staff_attendance", "end_staff_session", "assign_staff_override", "clear_staff_override", "get_staff_grid", "send_message"];
 export const STAFF_DUTIES = ["desk", "kitchen", "housekeeping"] as const;
+/** Reads that load by themselves on the owner's Staff page: shown as views, not counted as use. */
+export const PASSIVE_READS = new Set(["list_staff_attendance", "get_staff_grid"]);
+
+/**
+ * C18: once the desk-staff modules retire, a desk-duty staff account no longer signs in (no
+ * attendance, no End Session lock-out to protect an unattended desk). Fails closed: an account
+ * whose duty can't be read counts as desk.
+ */
+export async function retiredDeskAccount(db: { from: (table: string) => any }, staffId: string, role: string): Promise<boolean> {
+  if (role !== "staff" || !(await staffOpsRetired(db))) return false;
+  const { data } = await db.from("staff").select("duty").eq("id", staffId).maybeSingle();
+  return (data?.duty ?? "desk") === "desk";
+}
 
 const TTL_MS = 60_000;
 let cached: { at: number; on: boolean } | null = null;

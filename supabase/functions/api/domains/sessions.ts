@@ -8,21 +8,9 @@ import { OVERTIME_GRACE_MINUTES, computeOvertimeCharge } from "../../_shared/ove
 import { err, json } from "../../_shared/http.ts";
 import { isOwnerOrAdmin, requireBranch } from "../../_shared/auth.ts";
 import { claimRelease, memberArrives, recordResale, unclaimRelease } from "./seats.ts";
+import { claimFreeDesk, linkDesk, unclaimDesk } from "../desks.ts";
 import { walkinPrice } from "./pricing.ts";
 import { STUDY_REPORT_MAX_DAYS, fetchAllRows, findOverlappingSession, formatISTSession, insertPaymentTransactions, isISODate, recordTransaction, splitPaymentError, storedPaymentMode, upsertStudent } from "../lib.ts";
-
-/**
- * Claims a free floating desk in one conditional step (PSS-AI Phase 4 review): two check-ins at
- * the same moment can no longer both be given it. The booking is linked once it exists.
- */
-async function claimFreeDesk(db: Ctx["db"], deskId: string): Promise<boolean> {
-  const { data } = await db.from("desks").update({ status: "occupied", current_booking_id: null }).eq("id", deskId).eq("status", "free").select("id");
-  return !!data?.length;
-}
-/** Gives back a desk claimed for a booking that was then not made. */
-async function unclaimDesk(db: Ctx["db"], deskId: string) {
-  await db.from("desks").update({ status: "free" }).eq("id", deskId).eq("status", "occupied").is("current_booking_id", null);
-}
 
 export function handlers(): Record<string, Handler> {
   const h: Record<string, Handler> = {
@@ -111,9 +99,7 @@ export function handlers(): Record<string, Handler> {
         throw e;
       }
 
-      if (desk) {
-        await db.from("desks").update({ status: "occupied", current_booking_id: booking!.id }).eq("id", desk.id);
-      }
+      if (desk) await linkDesk(db, desk.id, booking!.id, { status: "occupied" });
       if (release) await recordResale(ctx, release, { id: booking!.id, start: startTime, end: endTime }, amount);
       await insertPaymentTransactions(db, {
         student_id: studentId, branch_id: branchId, booking_id: booking!.id,
@@ -253,13 +239,11 @@ export function handlers(): Record<string, Handler> {
       const sessionHours = remainingMinutes / 60;
       const endTime = new Date(new Date(checkInTime).getTime() + remainingMinutes * 60_000).toISOString();
       const bookingType = membership.category === "permanent" ? "permanent" : "temporary";
-      // A floating desk (or a cabin member's fallback desk) is claimed in one step before the booking.
-      const claimed = !!desk && (membership.category !== "permanent" || fallbackDesk);
-      if (claimed && !(await claimFreeDesk(db, desk.id))) {
-        if (!fallbackDesk) return err("Selected desk is not available");
-        desk = null; fallbackDesk = false;
-        collision = { kind: "no_desk", credit: 0, message: "Their cabin is in use and the free desk was just taken — offer the next free one." };
-      }
+      // A floating desk is claimed in one step before the booking; a cabin member's fallback desk
+      // was already claimed the same way by memberArrives.
+      const needsClaim = !!desk && membership.category !== "permanent";
+      if (needsClaim && !(await claimFreeDesk(db, desk.id))) return err("Selected desk is not available");
+      const claimed = needsClaim || fallbackDesk;
 
       const { data: booking, error: bErr } = await db.from("bookings").insert({
         student_id: studentId, branch_id: branchId, desk_id: desk?.id ?? null,
@@ -279,7 +263,7 @@ export function handlers(): Record<string, Handler> {
           // Permanent cabin stays 'reserved' — just link the booking
           await db.from("desks").update({ current_booking_id: booking!.id }).eq("id", desk.id);
         } else {
-          await db.from("desks").update({ status: "occupied", current_booking_id: booking!.id }).eq("id", desk.id);
+          await linkDesk(db, desk.id, booking!.id, { status: "occupied" });
         }
       }
       await db.from("students").update({

@@ -20,7 +20,7 @@ import { abResult, cleanVariants, CONVERT_DAYS, variantFor } from "../../_shared
 import { occupancyGrid, spaceSuggestions } from "../../_shared/study.ts";
 import { fetchAllRows } from "../lib.ts";
 import { SELF_HOLD_MAX_DAYS } from "./requests.ts";
-import { RETIRING_ACTIONS } from "../../_shared/retire.ts";
+import { PASSIVE_READS, RETIRING_ACTIONS } from "../../_shared/retire.ts";
 
 const owner = (ctx: Ctx) => isOwnerOrAdmin(ctx.staff!);
 const LEARN_DAYS = 180;
@@ -43,15 +43,11 @@ export async function experimentVariant(db: Ctx["db"], kind: string, branchId: s
   return { experimentId: e.id, key, value: v.value };
 }
 
-/** The setting a kept experiment writes (O6). */
-async function keepWinner(db: Ctx["db"], e: any, value: any) {
-  if (e.kind === "winback_offer") return db.from("app_settings").upsert({ key: "winback_discount_pct", value: String(value) }, { onConflict: "key" });
-  if (e.kind === "next_exam_offer") return db.from("app_settings").upsert({ key: "next_exam_months", value: String(value) }, { onConflict: "key" });
-  const { data } = await db.from("app_settings").select("value").eq("key", "featured_food_items").maybeSingle();
-  let map: Record<string, string> = {};
-  try { map = JSON.parse(data?.value ?? "{}") ?? {}; } catch { map = {}; }
-  map[e.branch_id ?? "all"] = value;
-  return db.from("app_settings").upsert({ key: "featured_food_items", value: JSON.stringify(map) }, { onConflict: "key" });
+/** The setting a kept experiment writes (O6): one key each, a menu item per branch. */
+export const featuredItemKey = (branchId: string) => `featured_food_item:${branchId}`;
+async function keepWinner(db: Ctx["db"], e: any, value: any): Promise<{ error: { message: string } | null }> {
+  const key = e.kind === "winback_offer" ? "winback_discount_pct" : e.kind === "next_exam_offer" ? "next_exam_months" : featuredItemKey(e.branch_id);
+  return await db.from("app_settings").upsert({ key, value: String(value) }, { onConflict: "key" });
 }
 
 /** Per variant: students shown it and how many converted. */
@@ -146,25 +142,41 @@ export function handlers(): Record<string, Handler> {
       }
       if (payload.policy === "overtime_grace") {
         if (!Number.isInteger(value) || value < 0 || value > 60) return err("Choose 0 to 60 minutes");
-        const ot = await fetchAllRows<any>(() => db.from("overtime_sessions").select("id, booking_id, overtime_minutes, membership_id").gte("session_date", since).order("id"));
-        const walkins = new Map<string, any>();
-        const ids = ot.filter((o) => !o.membership_id).map((o) => o.booking_id).filter(Boolean);
-        for (let i = 0; i < ids.length; i += 200) {
-          const part = await fetchAllRows<any>(() => db.from("bookings").select("id, scheduled_hours, hours, amount").in("id", ids.slice(i, i + 200)).order("id"));
-          for (const b of part) walkins.set(b.id, b);
+        // Every checkout's overtime minutes as the desk (or the portal) worked them out, from the
+        // event log — including those under today's grace, which overtime_sessions never keeps, so a
+        // shorter grace is priced too (review fix). A re-sent checkout counts once (the last one).
+        const evs = await fetchAllRows<any>(() => db.from("events").select("id, payload").eq("action", "checkout_booking").eq("ok", true).gte("occurred_at", istDayStart(since)).order("id"));
+        const minutesOf = new Map<string, number>();
+        for (const e of evs) {
+          const id = e.payload?.bookingId, m = Number(e.payload?.overtimeMinutes);
+          if (typeof id === "string" && /^[0-9a-f-]{36}$/i.test(id) && Number.isFinite(m)) minutesOf.set(id, m);
         }
-        const cases = ot.map((o) => {
-          const w = o.membership_id ? null : walkins.get(o.booking_id);
-          const booked = w ? Number(w.scheduled_hours ?? w.hours) || 1 : 0;
-          return { minutes: Number(o.overtime_minutes) || 0, bookedHours: booked, baseFee: w ? Number(w.amount) : 0, walkinThreeHour: !!w && booked === 3 };
-        });
+        const ids = [...minutesOf.entries()].filter(([, m]) => m > 0).map(([id]) => id);
+        const booked = new Map<string, any>();
+        for (let i = 0; i < ids.length; i += 200) {
+          const part = await fetchAllRows<any>(() => db.from("bookings").select("id, status, booking_type, scheduled_hours, hours, amount").in("id", ids.slice(i, i + 200)).order("id"));
+          for (const b of part) booked.set(b.id, b);
+        }
+        const cases = ids.map((id) => {
+          const b = booked.get(id);
+          if (!b || b.status !== "completed") return null;
+          const walkin = b.booking_type === "walkin";
+          const hours = walkin ? Number(b.scheduled_hours ?? b.hours) || 1 : 0;
+          return { minutes: minutesOf.get(id)!, bookedHours: hours, baseFee: walkin ? Number(b.amount) || 0 : 0, walkinThreeHour: walkin && hours === 3 };
+        }).filter(Boolean) as { minutes: number; bookedHours: number; baseFee: number; walkinThreeHour: boolean }[];
         return json({ policy: "overtime_grace", current: OVERTIME_GRACE_MINUTES, proposed: value, days: TWIN_DAYS, ...simulateOvertimeGrace(cases, value) });
       }
       if (payload.policy === "self_hold_days") {
         if (!Number.isInteger(value) || value < 0 || value > 31) return err("Choose 0 to 31 days");
-        const holds = await fetchAllRows<any>(() => db.from("events").select("id, payload, ok").eq("action", "me_request_hold").gte("occurred_at", istDayStart(since)).order("id"));
+        // Requests that were taken (ok), and of those the ones that go to the owner whatever the
+        // limit: a cabin, or a second hold in the month (review fix).
+        const [holds, queued] = await Promise.all([
+          fetchAllRows<any>(() => db.from("events").select("id, payload").eq("action", "me_request_hold").eq("ok", true).gte("occurred_at", istDayStart(since)).order("id")),
+          fetchAllRows<any>(() => db.from("approvals").select("id, payload").eq("kind", "student_request").eq("action", "hold").gte("created_at", istDayStart(since)).order("id")),
+        ]);
         const days = holds.map((h) => Number(h.payload?.days)).filter((d) => Number.isInteger(d) && d > 0);
-        return json({ policy: "self_hold_days", current: SELF_HOLD_MAX_DAYS, proposed: value, days: TWIN_DAYS, ...simulateHoldLimit(days, value, SELF_HOLD_MAX_DAYS) });
+        const always = queued.filter((a) => /permanent|second hold/.test(String(a.payload?.why ?? ""))).map((a) => Number(a.payload?.days)).filter((d) => Number.isInteger(d) && d > 0);
+        return json({ policy: "self_hold_days", current: SELF_HOLD_MAX_DAYS, proposed: value, days: TWIN_DAYS, ...simulateHoldLimit(days, value, SELF_HOLD_MAX_DAYS, always) });
       }
       return err("Choose what to try: renewal_grace, overtime_grace or self_hold_days");
     },
@@ -216,12 +228,20 @@ export function handlers(): Record<string, Handler> {
       if (!["running", "ended"].includes(e.status)) return err("This experiment is already decided", 409);
       const variant = (e.variants ?? []).find((v: any) => v.key === payload.variant);
       if (payload.decision === "keep" && !variant) return err("Choose the variant to keep");
+      if (payload.decision === "keep" && e.kind === "menu_feature" && !e.branch_id) return err("A menu test is for one branch");
       const { data } = await db.from("experiments").update({
         status: payload.decision === "keep" ? "kept" : "dropped", winner: variant?.key ?? null, decided_by_staff_id: ctx.staff!.id, decided_at: new Date().toISOString(),
         result: e.result ?? await experimentStats(db, e), ...(e.status === "running" ? { ends_at: new Date().toISOString() } : {}),
       }).eq("id", e.id).in("status", ["running", "ended"]).select("id");
       if (!data?.length) return err("This experiment was just decided", 409);
-      if (payload.decision === "keep") await keepWinner(db, e, variant.value);
+      // Kept only if the real setting is saved: otherwise the experiment goes back as it was.
+      if (payload.decision === "keep") {
+        const { error } = await keepWinner(db, e, variant.value);
+        if (error) {
+          await db.from("experiments").update({ status: e.status, winner: null, decided_by_staff_id: null, decided_at: null, ends_at: e.ends_at, result: e.result ?? null }).eq("id", e.id).eq("status", "kept");
+          return err(`Could not save the setting: ${error.message}`, 500);
+        }
+      }
       return json({ ok: true });
     },
 
@@ -287,9 +307,18 @@ export function handlers(): Record<string, Handler> {
         const { count } = await db.from("events").select("*", { count: "exact", head: true }).eq("action", a).in("actor_type", ["staff", "owner", "admin"]).gte("occurred_at", since);
         usage[a] = count ?? 0;
       }
-      const { data: last } = await db.from("events").select("occurred_at").in("action", RETIRING_ACTIONS).in("actor_type", ["staff", "owner", "admin"]).order("occurred_at", { ascending: false }).limit(1);
-      const total = Object.values(usage).reduce((a, b) => a + b, 0);
-      return json({ on: await featureOn(db, "retire_staff_ops"), days: 30, usage, total, lastUsedAt: last?.[0]?.occurred_at ?? null, unusedForAMonth: total === 0 });
+      // The attendance list and the cover board load by themselves when the owner opens Staff, so
+      // they are views, not use (review fix): only the other four count toward "unused for a month".
+      const active = RETIRING_ACTIONS.filter((a) => !PASSIVE_READS.has(a));
+      const { data: last } = await db.from("events").select("occurred_at").in("action", active).in("actor_type", ["staff", "owner", "admin"]).order("occurred_at", { ascending: false }).limit(1);
+      const total = active.reduce((n, a) => n + usage[a], 0);
+      const views = [...PASSIVE_READS].reduce((n, a) => n + (usage[a] ?? 0), 0);
+      // Desk accounts can't sign in once the screens retire (C18): the owner sets each one's duty first.
+      const desk = await db.from("staff").select("id, username, display_name").eq("is_active", true).eq("role", "staff").eq("duty", "desk").limit(200);
+      return json({
+        on: await featureOn(db, "retire_staff_ops"), days: 30, usage, total, views, lastUsedAt: last?.[0]?.occurred_at ?? null, unusedForAMonth: total === 0,
+        deskAccounts: desk.error ? null : (desk.data ?? []).map((d: any) => d.display_name || d.username),
+      });
     },
   };
 }

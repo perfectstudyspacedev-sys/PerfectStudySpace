@@ -149,6 +149,7 @@ function StaffBranchBoard() {
 
 // PSS-AI S1: how much the retiring desk-staff screens are still used — the owner switches
 // pssai_retire_staff_ops on only after a full month at zero.
+const PAGE_VIEWS = ['list_staff_attendance', 'get_staff_grid']
 const MODULE_LABEL = { list_staff_attendance: 'Attendance list', end_staff_session: 'End Session', assign_staff_override: 'Branch cover (assign)', clear_staff_override: 'Branch cover (clear)', get_staff_grid: 'Branch cover board', send_message: 'Staff messages sent' }
 function StaffModuleUsage() {
   const [u, setU] = useState(null)
@@ -160,7 +161,13 @@ function StaffModuleUsage() {
       <p style={{ fontSize: '0.85rem', margin: '0 0 0.5rem' }}>
         {u.on ? 'Retired (pssai_retire_staff_ops is on).' : u.unusedForAMonth ? 'Unused for a month — they can be retired (pssai_retire_staff_ops).' : `Still used ${u.total} time${u.total === 1 ? '' : 's'}${u.lastUsedAt ? `, last on ${new Date(u.lastUsedAt).toLocaleDateString('en-IN')}` : ''} — wait for a full month at zero before retiring them.`}
       </p>
-      <ul style={{ margin: 0, fontSize: '0.8rem', color: 'var(--text-muted)' }}>{Object.entries(u.usage).map(([k, n]) => <li key={k}>{MODULE_LABEL[k] ?? k}: {n}</li>)}</ul>
+      <ul style={{ margin: 0, fontSize: '0.8rem', color: 'var(--text-muted)' }}>{Object.entries(u.usage).filter(([k]) => !PAGE_VIEWS.includes(k)).map(([k, n]) => <li key={k}>{MODULE_LABEL[k] ?? k}: {n}</li>)}</ul>
+      <p style={{ margin: '0.4rem 0 0', fontSize: '0.75rem', color: 'var(--text-muted)' }}>Opening this page ({u.views ?? 0} times) doesn't count as use.</p>
+      {Array.isArray(u.deskAccounts) && u.deskAccounts.length > 0 && (
+        <p data-testid="desk-accounts" style={{ margin: '0.4rem 0 0', fontSize: '0.8rem' }}>
+          Desk accounts that will stop signing in when retired: <strong>{u.deskAccounts.join(', ')}</strong>. Set each one's Duty (kitchen or housekeeping) or deactivate it first.
+        </p>
+      )}
     </div>
   )
 }

@@ -18,6 +18,7 @@ const FINDINGS = [
   ['staff_checkins_at_poster_branches', 'check-in made by staff at a branch with self check-in — note why'],
   ['walkins_without_payment', 'paid walk-in with no desk payment recorded'],
   ['unpaid_food_on_closed_walkins', 'unpaid food bill on a finished walk-in — collect it or write it off'],
+  ['desks_occupied_without_session', 'desk marked occupied with nobody checked in — free it (DEPLOY.md, "Stuck desks")'],
 ]
 
 export default function IntegrityReportCard() {

@@ -5,7 +5,7 @@ import type { Ctx, Handler } from "../registry.ts";
 import { todayISO } from "../../_shared/dates.ts";
 import { err, json } from "../../_shared/http.ts";
 import { markAttendanceIfNeeded, signToken } from "../../_shared/auth.ts";
-import { staffOpsRetired } from "../../_shared/retire.ts";
+import { retiredDeskAccount, staffOpsRetired } from "../../_shared/retire.ts";
 
 export function handlers(): Record<string, Handler> {
   const h: Record<string, Handler> = {
@@ -21,6 +21,9 @@ export function handlers(): Record<string, Handler> {
       const { data, error } = await db.rpc("verify_staff_login", { p_username: username, p_password: password });
       if (error || !data?.length) return err("Invalid login credentials", 401);
       const row = data[0];
+      if (await retiredDeskAccount(db, row.id, row.role)) {
+        return err("Desk-staff accounts were retired — ask the owner to set your duty (kitchen or housekeeping).", 403);
+      }
 
       // Once a staff member has ended their session for the day, they're locked out of
       // logging back in until tomorrow — mirrors clocking out at a physical front desk.

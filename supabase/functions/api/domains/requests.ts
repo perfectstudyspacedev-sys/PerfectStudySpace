@@ -18,6 +18,7 @@ import { AUTO_SCOPES, ruleMatches } from "../../_shared/policy.ts";
 import { currentMembership } from "../portal-lib.ts";
 
 export const SELF_HOLD_MAX_DAYS = 7;    // C1
+const RULE_HOLD_EVERY_DAYS = 30;         // I8: a signed rule approves at most one hold per student in this time
 const HOLD_MAX_DAYS = 31;
 const MAX_OPEN_REQUESTS = 5;
 const REQUEST_KINDS = ["plan_change", "refund", "privacy_download", "privacy_delete"];
@@ -93,7 +94,8 @@ export function handlers(): Record<string, Handler> {
       const why = mem.category !== "temporary" ? "permanent seat (a hold frees the cabin)"
         : days > SELF_HOLD_MAX_DAYS ? `longer than ${SELF_HOLD_MAX_DAYS} days`
         : (await selfHoldUsedThisMonth(db, s.id)) ? "second hold this month" : null;
-      if (why) return await queueRequest(ctx, "hold", { membershipId: mem.id, days, reason, why });
+      // I8: whether the plan has dues is part of what a hold rule learns from (review fix).
+      if (why) return await queueRequest(ctx, "hold", { membershipId: mem.id, days, reason, why, dues: Number(mem.fee_due ?? 0) > 0 });
       const ran = await runNested(actionDef("pause_membership"), ctx, { staff: portalScope(mem.branch_id) }, { membershipId: mem.id, reason: reason || "Portal self-hold" });
       if (!ran.ok) return err(ran.body?.error ?? "Could not start the hold", ran.status);
       await planResume(db, mem.id, days, true);
@@ -217,9 +219,13 @@ export function handlers(): Record<string, Handler> {
       if (!usable.length) return json({ ok: true, applied: 0 });
       const pending = await fetchAllRows<any>(() => db.from("approvals").select("*").eq("status", "pending").eq("kind", "student_request").eq("action", "hold").order("created_at").order("id"));
       let applied = 0, failed = 0;
+      const since = new Date(Date.now() - RULE_HOLD_EVERY_DAYS * 86400e3).toISOString();
       for (const a of pending) {
         const rule = usable.find((r: any) => ruleMatches(r, a));
         if (!rule) continue;
+        // One rule-approved hold per student per 30 days; after that the owner decides (review fix).
+        const { count: recent } = await db.from("approvals").select("*", { count: "exact", head: true }).eq("student_id", a.student_id).not("policy_rule_id", "is", null).eq("status", "approved").gte("decided_at", since);
+        if ((recent ?? 0) > 0) continue;
         // Claimed like the owner's Approve, so an owner deciding at the same moment wins cleanly.
         const reason = `Signed rule: ${rule.description}`;
         const { data: claimed } = await db.from("approvals").update({ status: "approved", decided_by_staff_id: null, decided_at: new Date().toISOString(), reason, policy_rule_id: rule.id })

@@ -25,6 +25,7 @@ import {
   OPEN_HOUR, predictWindow, RELEASE_AHEAD_DAYS, releaseCredit,
 } from "../../_shared/seats.ts";
 import { fetchAllRows, isISODate } from "../lib.ts";
+import { claimFreeDesk } from "../desks.ts";
 import { currentMembership } from "../portal-lib.ts";
 
 const MAX_OPEN_RELEASES = 14;
@@ -160,8 +161,13 @@ export async function memberArrives(ctx: Ctx, membership: any, desk: any, sessio
     return { desk, collision: { kind: "walkin_overstay", credit: 0, message: "A walk-in sold hours in this cabin is past their time — please move them; the member keeps the cabin." } };
   }
   const source = clash.seat_releases?.source ?? "predicted";
-  const { data: free } = await db.from("desks").select("*").eq("branch_id", membership.branch_id).eq("status", "free").neq("id", desk.id).order("sort_order").order("label").limit(1);
-  const outcome = free?.length ? "fallback_desk" : source === "predicted" ? "free_day" : "no_desk";
+  // The fallback desk is claimed here, in one conditional step, before anything is recorded: if
+  // another check-in takes it first the next free one is tried (review fix), so a "seated at
+  // another desk" record always means the member really got one.
+  const { data: free } = await db.from("desks").select("*").eq("branch_id", membership.branch_id).eq("status", "free").neq("id", desk.id).order("sort_order").order("label").limit(3);
+  let seat: any = null;
+  for (const d of free ?? []) if (await claimFreeDesk(db, d.id)) { seat = d; break; }
+  const outcome = seat ? "fallback_desk" : source === "predicted" ? "free_day" : "no_desk";
   // The first arrival records what happened; a later one (a second session) is seated the same way.
   const claim = async () => {
     if (clash.collision) return false;
@@ -171,7 +177,7 @@ export async function memberArrives(ctx: Ctx, membership: any, desk: any, sessio
   const until = hm(clash.bookings.end_time);
   if (outcome === "fallback_desk") {
     await claim();
-    return { desk: free![0], collision: { kind: "fallback_desk", credit: 0, message: `Their cabin is in use by a walk-in until ${until} — seat them at ${free![0].label}.` } };
+    return { desk: seat, collision: { kind: "fallback_desk", credit: 0, message: `Their cabin is in use by a walk-in until ${until} — seat them at ${seat.label}.` } };
   }
   if (outcome === "free_day") {
     const won = await claim();

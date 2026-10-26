@@ -1096,6 +1096,27 @@ Nothing changes until the owner changes the real setting.
 
 ✅ Built behind `pssai_certificates`, `pssai_parent_digest` and `pssai_owner_overview` (all off). Certificates are signed over exactly what the check page shows (`certificateText()`, HMAC-SHA256 with `CERTIFICATE_SECRET`; refused with 503 when the secret is missing or under 16 characters); ids are 10 characters from the code alphabet. The parent link token is 32 characters and only its SHA-256 is stored; the summary holds the first name, the hall, minutes per day, days attended, average focus and the plan's end date. Public pages: `/verify/<id>` and `/p/<token>` on the student site (`src/pages/PublicStudyPages.jsx`); the portal's *Study certificates* (printable, with a QR of the check link) and *Weekly summary for your family*; the owner's **Every branch** page.
 
+### Independent review of Phases 5 and 6 (2026-10-26)
+
+One independent reviewer read the range `e058bcd..a0c889c` (the Phase 5/6 server and screens, and the Phase 4 review fixes) and ran the server and unit suites. No High findings. Held up: hold rules apply only within their limits (signed, approve, hold-only, claimed while pending, reverted on failure, deny rules never applied, rule-made decisions not used as evidence); nothing changes with the switches off (R1); C12, C20, C21 (503 without the secret, constant-time compare) and C22 (160-bit token, hash only, never in the event log or idempotency store); the 410s; the maths (`abResult`, `occupancyGrid`), the IST week and month boundaries and the five schedules; no `.or()` on writes, paged reads, FK hints; RLS on all 8 new tables; every writer of `current_booking_id` consistent with the new checkout rule. Fixed, each with a test (server suites, units, and `tests/integration/phase5_test.ts` on Postgres), or decided:
+
+| # | Finding | Fix |
+|---|---|---|
+| 1 | The staff-module usage card counted the owner's own page loads, so it could never say "unused for a month" | The attendance list and cover board (loaded by the page itself) are shown as views, not use; only the other four actions count |
+| 2 | Decision: retiring the screens left desk accounts working with no attendance or lock-out (C18 keeps only owner, admin, kitchen and housekeeping) | Taken: with the switch on, a desk-duty account can't log in and its token stops working (fails closed); the usage card lists the desk accounts and DEPLOY says to set each Duty first. Limiting kitchen and housekeeping accounts to their own screens is **left for the owner** |
+| 3 | The overtime "what if" read only `overtime_sessions`, which holds nothing under today's grace, so a shorter grace always looked like ₹0 | It now re-prices every checkout's overtime minutes from the event log (a re-sent checkout counted once, only completed sessions) |
+| 4 | Hold rules lacked the planned "had dues" part, and a signed rule could approve the same student's holds again and again | Hold requests record whether the plan has dues and the bucket includes it; decision taken: a rule approves at most one hold per student in 30 days, after which the owner decides |
+| 5 | Decision: certificates and the family summary counted sessions closed at 23:30 at their full booked length | Taken: a session closed automatically (C15 flag) is left out of certificates, the family summary and the student's own pages |
+| 6 | Two "yes" answers at the same moment could leave a buddy match stuck | The write checks the other side's answer as read and retries, so the second answer connects the pair |
+| 7 | The certificate signature didn't cover the issue date and its fields could be shifted | v2: a JSON list of the fields, the IST issue date included (set before signing); no certificate existed yet, so no v1 support is kept |
+| 8 | Two taps at the cap could make a sixth certificate | Counted again after the insert; the extra one is taken back with 429 |
+| 9 | "Keep" ignored a failed settings write; the featured items shared one JSON setting | The experiment is claimed, the setting written, and the experiment put back if the write fails; one setting per branch (`featured_food_item:<branch>`) |
+| 10 | A failed desk link could leave a floating desk occupied forever | The link is retried; the nightly report lists `desks_occupied_without_session`, with the fix in DEPLOY ("Stuck desks") |
+| 11 | A lost race for a cabin member's fallback desk still recorded "seated at another desk" | The fallback desk is claimed inside the collision handling, trying the next free desk; only a real seat is recorded |
+| 12 | The self-hold "what if" counted failed requests and ignored the cabin and second-hold rules | Only taken requests; a cabin or a second hold in the month never counts as running by itself |
+| 13 | Decision: a withdrawn certificate still showed the name, hall and hours | Taken: it shows only that it was withdrawn |
+| — | Known, outside the range: two deliveries for the same Food Pass at the same moment can lose one debit (`create_food_bill` writes the balance it read); a cross-branch cabin member's desk is linked but not marked occupied | **Left for the owner** (pre-existing money and seat paths, R1). The menu experiment compares how often each item is ordered, which the Learning page now says |
+
 ## Phase 6 exit gate
 
 - [ ] The owner reviews student uptake of certificates and parent links and keeps what is used

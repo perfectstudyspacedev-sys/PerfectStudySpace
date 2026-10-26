@@ -33,9 +33,9 @@ const session = (studentId: string, date: string, from: string, to: string, extr
 {
   const decidedAt = new Date(Date.now() - 20 * 86400e3).toISOString();
   // A bucket no other suite uses: 1–7 days, a second hold this month.
-  for (let i = 0; i < 6; i++) await insert("approvals", { kind: "student_request", action: "hold", payload: { days: 5, why: "second hold this month" }, requested_by_type: "student", status: "approved", decided_at: decidedAt, branch_id: w.branch.id });
+  for (let i = 0; i < 6; i++) await insert("approvals", { kind: "student_request", action: "hold", payload: { days: 5, why: "second hold this month", dues: false }, requested_by_type: "student", status: "approved", decided_at: decidedAt, branch_id: w.branch.id });
   const r = await sys("cron_policy_rules");
-  const rule = (await db.from("policy_rules").select("*").eq("bucket", "days:1-7|why:second").in("status", ["proposed", "active"])).data?.[0];
+  const rule = (await db.from("policy_rules").select("*").eq("bucket", "days:1-7|why:second|dues:no").in("status", ["proposed", "active"])).data?.[0];
   check(r.ok && rule?.outcome === "approve" && rule.support >= 6 && Number(rule.agreement) >= 0.9, "P5-1: the weekly job proposes a rule from the owner's decisions", { r, rule });
   const { error: dup } = await db.from("policy_rules").insert({ scope: rule.scope, bucket: rule.bucket, outcome: "approve", support: 6, agreement: 1, description: "dup" });
   check(!!dup, "P5-1: the partial unique index allows one live rule per bucket", dup?.message);
@@ -93,8 +93,8 @@ const session = (studentId: string, date: string, from: string, to: string, extr
   const list = await call("list_experiments", {}, w.tO);
   check(list.status === 200 && list.experiments.find((e: any) => e.id === made.id)?.live?.rows?.length === 2, "P5-3: the list embeds the branch and works out the numbers");
   const kept = await call("update_experiment", { experimentId: made.id, decision: "keep", variant: "A" }, w.tO);
-  const featured = JSON.parse((await where("app_settings", "key", "featured_food_items"))[0]?.value ?? "{}");
-  check(kept.status === 200 && featured[w.branch.id] === tea.id && (await get("experiments", made.id)).status === "kept", "P5-3: keeping writes the featured item for the branch", { kept: kept.error, featured });
+  const featured = (await where("app_settings", "key", `featured_food_item:${w.branch.id}`))[0]?.value;
+  check(kept.status === 200 && featured === tea.id && (await get("experiments", made.id)).status === "kept", "P5-3: keeping writes the featured item for the branch (its own setting)", { kept: kept.error, featured });
 }
 
 // ── 4. O7 space yield and O10 the owner overview ──
@@ -174,7 +174,18 @@ const session = (studentId: string, date: string, from: string, to: string, extr
   const { error: badDuty } = await db.from("staff").update({ duty: "chef" }).eq("id", w.staff.id);
   const listed = await call("list_staff", {}, w.tO);
   check(gone.status === 410 && made.status === 200 && desk.status === 400 && !!badDuty && listed.staff?.some((s: any) => s.duty === "kitchen"), "P5-8: retired screens answer 410; only kitchen/housekeeping accounts are made; the duty CHECK holds", { gone: gone.status, made: made.error ?? made.status, desk: desk.status, badDuty: badDuty?.message });
+  const deskCall = await call("list_messages", { branchId: w.branch.id }, w.tS);
+  check(deskCall.status === 401, "P5-8: a desk-duty account's token stops working once the screens retire (C18)", deskCall.status);
   await setting("pssai_retire_staff_ops", "off");
+}
+
+// ── 9. The nightly report lists a floating desk left occupied with nobody in it ──
+{
+  const { integrityFindings } = await import("../../supabase/functions/api/domains/system.ts");
+  const stray = await insert("desks", { branch_id: w.branch.id, label: "P5-STRAY", status: "occupied", seat_type: "floating", sort_order: 9 });
+  const f = await integrityFindings(db as any);
+  check(f.desks_occupied_without_session.some((d: any) => d.desk_id === stray.id), "P5-9: an occupied floating desk with no open session is in the integrity report", f.counts.desks_occupied_without_session);
+  await db.from("desks").update({ status: "free" }).eq("id", stray.id);
 }
 
 for (const k of SWITCHES.filter((s) => s !== "pssai_portal")) await setting(k, "off");

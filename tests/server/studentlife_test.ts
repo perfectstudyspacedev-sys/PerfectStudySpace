@@ -141,6 +141,13 @@ await setup();
   check(no.ok && no.matchStatus === "declined" && m2.status === "declined" && !(await call("me_buddy", {}, ravi.token)).match, "B5: a no declines it; neither sees the other", m2.status);
   await run("cron_buddy_matches");
   check(rows("study_buddy_matches").filter((x) => [x.student_a, x.student_b].includes(eva.s.id) && [x.student_a, x.student_b].includes(ravi.s.id)).length === 1, "B5: a declined pair is never offered again");
+  // Review fix: two "yes" at the same moment still connect.
+  const fia = await member("Fia N", "9100000008"), gopi = await member("Gopi R", "9100000009");
+  for (const x of [fia, gopi]) await call("me_buddy_join", { window: "afternoon" }, x.token);
+  await run("cron_buddy_matches");
+  const m3 = rows("study_buddy_matches").find((x) => [x.student_a, x.student_b].includes(fia.s.id))!;
+  const both2 = await Promise.all([fia, gopi].map((x) => call("me_buddy_respond", { matchId: m3.id, accept: true }, x.token)));
+  check(both2.every((r) => r.ok) && m3.status === "connected" && m3.a_answer === "yes" && m3.b_answer === "yes", "B6: two yes answers at the same moment connect the pair", { statuses: both2.map((r) => r.matchStatus ?? r.error), m3 });
 }
 
 // ── I33 certificates ──
@@ -176,7 +183,7 @@ await setup();
   check(list.on && list.certificates.length === 1 && list.certificates[0].id === row.id, "C5: the student lists their certificates");
   check((await call("me_revoke_certificate", { id: row.id }, asha.token)).ok && (await call("me_revoke_certificate", { id: row.id }, asha.token)).status === 404, "C5: the student withdraws one, once");
   const after = await call("public_verify_certificate", { id: row.id });
-  check(after.found && after.revoked && !after.valid, "C5: a withdrawn certificate shows as withdrawn", after);
+  check(after.found && after.revoked && !after.valid && !("name" in after) && !("hours" in after), "C5: a withdrawn certificate shows only that it was withdrawn — no name or hours (review fix)", after);
   const ravi = await member("Ravi K", "9100000002");
   check((await call("me_revoke_certificate", { id: rows("study_certificates")[0].id }, ravi.token)).status === 404, "C5: nobody else can withdraw it");
   for (let i = 0; i < 4; i++) await call("me_issue_certificate", range, asha.token);
@@ -185,6 +192,26 @@ await setup();
   check(ev.length >= 5 && ev.every((e) => e.actor_type === "student"), "C6: each issue is an event with the student as actor");
   Deno.env.delete("CERTIFICATE_SECRET");
   check((await call("public_verify_certificate", { id: rows("study_certificates")[1].id })).valid === false, "C6: with the secret gone nothing checks");
+}
+
+// ── Review fixes: sessions closed at 23:30 don't count; the monthly cap holds under two taps ──
+await setup();
+{
+  Deno.env.set("CERTIFICATE_SECRET", "test-certificate-secret-0123");
+  setSetting("pssai_certificates", "on");
+  const asha = await member("Asha Rao", "9100000001");
+  session(asha.s.id, "2026-09-01", "09:00", "12:00");
+  const forgot = session(asha.s.id, "2026-09-02", "09:00", "15:00");
+  insert("anomaly_flags", { kind: "session_auto_closed", ref_table: "bookings", ref_id: forgot.id, branch_id: b1.id, explanation: "No checkout by 23:30", status: "open" });
+  const range = { dateFrom: "2026-09-01", dateTo: "2026-09-30" };
+  const c = await call("me_issue_certificate", range, asha.token);
+  check(c.certificate?.hours === 3 && c.certificate.days === 1, "X5: a session nobody checked out of (closed at 23:30) is not counted on a certificate", c.certificate);
+  for (let i = 0; i < 3; i++) await call("me_issue_certificate", range, asha.token);
+  const two = await Promise.all([call("me_issue_certificate", range, asha.token), call("me_issue_certificate", range, asha.token)]);
+  check(two.filter((r) => r.status === 200).length === 1 && two.some((r) => r.status === 429) && rows("study_certificates").length === 5, "X8: two taps at the cap make one certificate, not two", two.map((r) => r.status));
+  const v = await call("public_verify_certificate", { id: c.certificate.id });
+  check(v.valid && /^pss-cert:v2\|\[/.test((await import("../../supabase/functions/_shared/study.ts")).certificateText(rows("study_certificates")[0])), "X7: certificates are signed as v2 (fields as a list, the issue date included) and check", v.valid);
+  Deno.env.delete("CERTIFICATE_SECRET");
 }
 
 // ── I34 parent digest ──

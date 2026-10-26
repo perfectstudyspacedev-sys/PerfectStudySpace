@@ -292,10 +292,11 @@ changes a price or a rule by itself: the owner signs, keeps or changes each one.
 1. **Rules from your own decisions (I8)** — `pssai_policy_learner` = `on`. Each Sunday your decided
    approvals of the last 180 days are grouped; a group of 6 or more decided the same way 9 times in
    10 becomes a proposal on **Learning → Rules**, in words. Sign, dismiss (never proposed again) or
-   later retire. A signed rule shows on matching **Approvals** cards ("Matches your rule"). Only a
-   signed *approve* rule for student **hold** requests decides by itself (every 15 minutes, through the
-   same steps as your Approve, the rule named as the reason); refunds, plan changes, cashbacks and
-   every T3 action always wait for you.
+   later retire. Hold rules tell apart plans with and without dues. A signed rule shows on matching
+   **Approvals** cards ("Matches your rule"). Only a signed *approve* rule for student **hold**
+   requests decides by itself (every 15 minutes, through the same steps as your Approve, the rule
+   named as the reason), and at most once per student in 30 days — a second hold waits for you;
+   refunds, plan changes, cashbacks and every T3 action always wait for you.
 2. **What if (I6)** — `pssai_digital_twin` = `on`. **Learning → What if** tries a different renewal
    grace, overtime grace or self-hold limit on the last 180 days. It changes nothing.
 3. **Experiments (O6, C20)** — `pssai_experiments` = `on`. **Learning → Experiments**: a win-back
@@ -311,8 +312,11 @@ changes a price or a rule by itself: the owner signs, keeps or changes each one.
    on Mondays members of the same branch, exam and window are paired; first names show only after
    both say yes, never phone numbers.
 7. **Retiring the desk-staff screens (S1, C18)** — last, and only when **Staff → "Desk-staff
-   screens: use in the last 30 days"** has said *Unused for a month*. Then
-   `pssai_retire_staff_ops` = `on`: attendance is no longer marked, End Session and its lock-out go,
+   screens: use in the last 30 days"** has said *Unused for a month* (opening the Staff page
+   yourself doesn't count). First set every remaining staff account's **Duty** to kitchen or
+   housekeeping, or deactivate it: the card lists the desk accounts, and **desk-duty accounts can no
+   longer sign in once this is on**. Then `pssai_retire_staff_ops` = `on`: attendance is no longer
+   marked, End Session and its lock-out go,
    the attendance list, branch-cover board and staff Messages are hidden (system notices still pop
    up), and new staff accounts are kitchen or housekeeping only (set each account's **Duty** on
    **Staff**). Tasks on **Actions** stay. The tables are only marked (migration 070); dropping them
@@ -352,4 +356,15 @@ is used.
 Rollback: set the switch back to `off`. With certificates off the check page answers "not found";
 with the family summary off the links show nothing (they work again when switched back on unless
 the student stopped them).
+
+# Stuck desks
+
+The nightly check (Dashboard card) lists `desks_occupied_without_session`: a floating desk marked
+occupied with nobody checked in (a save that failed half-way, or older data). Checkout can't free it,
+so free it in Supabase → SQL editor, after checking nobody is sitting there:
+
+```sql
+UPDATE desks SET status = 'free', current_booking_id = NULL
+WHERE id = '<desk_id from the report>' AND seat_type = 'floating' AND status = 'occupied';
+```
 

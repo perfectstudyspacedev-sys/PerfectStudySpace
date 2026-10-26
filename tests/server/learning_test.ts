@@ -28,7 +28,7 @@ async function setup() {
   b1 = insert("branches", { name: "Hopes", is_active: true, desk_count: 4 });
   b2 = insert("branches", { name: "Ram Nagar", is_active: true, desk_count: 2 });
   owner = insert("staff", { username: "owner", display_name: "Owner", role: "owner", is_active: true, branch_id: null });
-  priya = insert("staff", { username: "priya", display_name: "Priya", role: "staff", is_active: true, branch_id: b1.id });
+  priya = insert("staff", { username: "priya", display_name: "Priya", role: "staff", is_active: true, branch_id: b1.id, duty: "desk" });
   [tO, tP] = await Promise.all([owner, priya].map((s) => tokenFor(s)));
   setSetting("pssai_portal", "on");
 }
@@ -40,7 +40,7 @@ async function member(name: string, phone: string, extra: any = {}) {
   return { s, m, token };
 }
 const decided = (days: number, status: "approved" | "denied", why = "longer than 7 days", extra: any = {}) =>
-  insert("approvals", { kind: "student_request", action: "hold", payload: { days, why }, requested_by_type: "student", status, decided_at: ts(addDays(TODAY, -20)), policy_rule_id: null, ...extra });
+  insert("approvals", { kind: "student_request", action: "hold", payload: { days, why, dues: false }, requested_by_type: "student", status, decided_at: ts(addDays(TODAY, -20)), policy_rule_id: null, ...extra });
 
 // ── I8: proposed rules ──
 await setup();
@@ -60,11 +60,11 @@ await setup();
   for (let i = 0; i < 6; i++) decided(2, "approved", "second hold this month", { decided_at: ts(addDays(TODAY, -200)) });
   const r = await run("cron_policy_rules");
   const rules = rows("policy_rules");
-  const long = rules.find((x) => x.bucket === "days:8-14|why:long");
-  const perm = rules.find((x) => x.bucket === "days:1-7|why:permanent");
+  const long = rules.find((x) => x.bucket === "days:8-14|why:long|dues:no");
+  const perm = rules.find((x) => x.bucket === "days:1-7|why:permanent|dues:no");
   check(r.proposed === 2 && rules.length === 2 && long?.outcome === "approve" && long.support === 6 && long.status === "proposed" && perm?.outcome === "deny",
     "P2: 6 like decisions become a proposed rule; mixed, rule-made and old decisions do not", { r, rules: rules.map((x) => [x.bucket, x.outcome, x.support]) });
-  check(long.description === "Hold requests of 8–14 days (longer than the self-hold limit): you approved 6 of 6.", "P2: the rule is in words", long.description);
+  check(long.description === "Hold requests of 8–14 days (longer than the self-hold limit) with no dues: you approved 6 of 6.", "P2: the rule is in words", long.description);
   decided(13, "approved");
   const again = await run("cron_policy_rules");
   check(again.proposed === 0 && again.refreshed === 2 && rows("policy_rules").length === 2 && long.support === 7, "P2: the weekly job refreshes a proposal rather than adding a second", { again, support: long.support });
@@ -81,7 +81,7 @@ await setup();
   check(list.on && list.rules.length === 1 && list.rules[0].id === long.id, "P3: the list shows live rules, not dismissed ones", list.rules?.length);
   for (let i = 0; i < 2; i++) decided(4, "denied", "permanent seat (a hold frees the cabin)");
   await run("cron_policy_rules");
-  check(!rows("policy_rules").some((x) => x.bucket === "days:1-7|why:permanent" && x.status !== "dismissed"), "P3: a dismissed rule is never proposed again");
+  check(!rows("policy_rules").some((x) => x.bucket === "days:1-7|why:permanent|dues:no" && x.status !== "dismissed"), "P3: a dismissed rule is never proposed again");
   const signedSupport = long.support;
   decided(10, "approved");
   await run("cron_policy_rules");
@@ -117,6 +117,14 @@ await setup();
   const pauseEv = rows("events").find((e) => e.action === "pause_membership" && e.ok && e.actor_type === "system");
   check(!!pauseEv, "A2: the pause is an event with the system as actor", pauseEv?.actor_type);
   check((await run("cron_apply_policy_rules")).applied === 0, "A2: running the job again changes nothing");
+  // Review fixes: one rule-approved hold per student per 30 days; a request with dues is another bucket.
+  const again = insert("approvals", { kind: "student_request", action: "hold", payload: { days: 9, why: "longer than 7 days", dues: false }, requested_by_type: "student", student_id: asha.s.id, branch_id: b1.id, status: "pending", created_at: ts(TODAY) });
+  const withDues = insert("approvals", { kind: "student_request", action: "hold", payload: { days: 10, why: "longer than 7 days", dues: true }, requested_by_type: "student", student_id: ravi.s.id, branch_id: b1.id, status: "pending", created_at: ts(TODAY) });
+  const capped = await run("cron_apply_policy_rules");
+  check(capped.applied === 0 && again.status === "pending" && withDues.status === "pending", "A5: a second matching hold within 30 days, and a hold with dues, wait for the owner", capped);
+  again.status = "denied"; withDues.status = "denied";
+  const ashaReq = rows("approvals").find((a) => a.id === ashaAp.id);
+  check(ashaReq?.payload?.dues === false, "A5: the request records whether the plan had dues", ashaReq?.payload);
 
   // A matching request whose plan can't be held goes back to the owner.
   const m3 = await call("me_request_hold", { days: 12 }, meena.token);
@@ -130,11 +138,11 @@ await setup();
   check((await call("decide_policy_rule", { ruleId: long().id, decision: "retire" }, tO)).ok && long().status === "retired", "A4: the owner retires the rule");
   check((await run("cron_apply_policy_rules")).applied === 0 && meenaAp.status === "pending", "A4: a retired rule applies to nothing");
   // A deny rule is never applied by the job, only shown.
-  const deny = insert("policy_rules", { scope: "student_request:hold", bucket: "days:8-14|why:long", outcome: "deny", support: 6, agreement: 1, description: "x", status: "active", applied_count: 0 });
+  const deny = insert("policy_rules", { scope: "student_request:hold", bucket: "days:8-14|why:long|dues:no", outcome: "deny", support: 6, agreement: 1, description: "x", status: "active", applied_count: 0 });
   check((await run("cron_apply_policy_rules")).applied === 0 && meenaAp.status === "pending", "A4: a deny rule never decides by itself");
   deny.status = "retired";
 }
-function long() { return rows("policy_rules").find((x) => x.bucket === "days:8-14|why:long")!; }
+function long() { return rows("policy_rules").find((x) => x.bucket === "days:8-14|why:long|dues:no")!; }
 
 // ── I6: the digital twin ──
 await setup();
@@ -156,15 +164,20 @@ await setup();
 
   const w = insert("bookings", { branch_id: b1.id, booking_type: "walkin", status: "completed", scheduled_hours: 3, hours: 3, amount: 50, start_time: ts(addDays(TODAY, -5)), end_time: ts(addDays(TODAY, -5), "09:20") });
   const w2 = insert("bookings", { branch_id: b1.id, booking_type: "walkin", status: "completed", scheduled_hours: 4, hours: 4, amount: 60, start_time: ts(addDays(TODAY, -4)), end_time: ts(addDays(TODAY, -4), "10:50") });
-  insert("overtime_sessions", { booking_id: w.id, membership_id: null, overtime_minutes: 20, session_date: addDays(TODAY, -5) });
-  insert("overtime_sessions", { booking_id: w2.id, membership_id: null, overtime_minutes: 50, session_date: addDays(TODAY, -4) });
-  insert("overtime_sessions", { booking_id: w2.id, membership_id: null, overtime_minutes: 50, session_date: addDays(TODAY, -400) });
+  // Every checkout's overtime minutes come from the event log (review fix): a member's 10 minutes
+  // (under today's grace, never in overtime_sessions) and a re-sent checkout counted once.
+  const m10 = insert("bookings", { branch_id: b1.id, booking_type: "temporary", status: "completed", scheduled_hours: 6, hours: 6, amount: 0, start_time: ts(addDays(TODAY, -3)), end_time: ts(addDays(TODAY, -3), "12:10") });
+  const stillOpen = insert("bookings", { branch_id: b1.id, booking_type: "walkin", status: "active", scheduled_hours: 3, hours: 3, amount: 50, start_time: ts(TODAY) });
+  const co = (bookingId: string, overtimeMinutes: number, day: number, ok = true) => insert("events", { id: rows("events").length + 1, action: "checkout_booking", payload: { bookingId, overtimeMinutes }, ok, actor_type: "staff", occurred_at: ts(addDays(TODAY, day)) });
+  co(w.id, 20, -5); co(w2.id, 0, -4); co(w2.id, 50, -4); co(m10.id, 10, -3); co(stillOpen.id, 30, 0); co(w.id, 90, -5, false); co(w2.id, 50, -400);
   const ot = await call("simulate_policy", { policy: "overtime_grace", value: 30 }, tO);
-  // Today: 20 min → 1 h (₹5 for a 3-hour walk-in), 50 min → 1 h (₹10). At 30: 20 min → free, 50 min → 1 h.
-  check(ot.sessions === 2 && ot.currentTotal === 15 && ot.proposedTotal === 10 && ot.difference === -5 && ot.changed === 1 && ot.current === 15,
+  // Today: 20 min → 1 h (₹5 for a 3-hour walk-in), 50 min → 1 h (₹10), 10 min → free. At 30: 20 → free, 50 → 1 h.
+  check(ot.sessions === 3 && ot.currentTotal === 15 && ot.proposedTotal === 10 && ot.difference === -5 && ot.changed === 1 && ot.current === 15,
     "T2: a 30-minute grace re-prices the last 180 days' overtime: ₹5 less", ot);
   const same15 = await call("simulate_policy", { policy: "overtime_grace", value: 15 }, tO);
   check(same15.difference === 0 && same15.changed === 0, "T2: the same grace changes nothing", same15);
+  const five = await call("simulate_policy", { policy: "overtime_grace", value: 5 }, tO);
+  check(five.changed === 1 && five.difference === 10, "T2b: a shorter grace (5 minutes) prices the member's 10 minutes too: +₹10", five);
 
   const prevA = insert("memberships", { student_id: null, branch_id: b1.id, end_date: addDays(TODAY, -30), is_active: false, renewed_from_membership_id: null, created_at: ts(addDays(TODAY, -60)) });
   insert("memberships", { student_id: null, branch_id: b1.id, end_date: addDays(TODAY, 3), is_active: true, renewed_from_membership_id: prevA.id, plan_amount: 1500, plan_days: 30, monthly_fee: 1500, created_at: ts(addDays(TODAY, -27)) });
@@ -177,8 +190,15 @@ await setup();
   check(rg.renewals === 2 && rg.changed === 1 && rg.difference === -400 && rg.checkinsRefused === 1 && rg.current === 10, "T3: a 5-day renewal grace: one renewal changes (₹400 less) and one check-in would be refused", rg);
 
   for (const days of [3, 5, 9, 12, 20]) insert("events", { id: rows("events").length + 1, action: "me_request_hold", payload: { days }, ok: true, occurred_at: ts(addDays(TODAY, -10)), actor_type: "student" });
+  insert("events", { id: rows("events").length + 1, action: "me_request_hold", payload: { days: 2 }, ok: false, occurred_at: ts(addDays(TODAY, -10)), actor_type: "student" });
+  // Of those, the 5-day one was a second hold in the month and the 9-day one was for a cabin: they go to the owner whatever the limit.
+  insert("approvals", { kind: "student_request", action: "hold", payload: { days: 5, why: "second hold this month" }, status: "approved", requested_by_type: "student", created_at: ts(addDays(TODAY, -10)) });
+  insert("approvals", { kind: "student_request", action: "hold", payload: { days: 9, why: "permanent seat (a hold frees the cabin)" }, status: "approved", requested_by_type: "student", created_at: ts(addDays(TODAY, -10)) });
+  insert("approvals", { kind: "student_request", action: "hold", payload: { days: 12, why: "longer than 7 days" }, status: "approved", requested_by_type: "student", created_at: ts(addDays(TODAY, -10)) });
   const hl = await call("simulate_policy", { policy: "self_hold_days", value: 10 }, tO);
-  check(hl.requests === 5 && hl.autoNow === 2 && hl.autoThen === 3 && hl.toApprovalThen === 2 && hl.current === 7, "T4: a 10-day self-hold limit: 3 of 5 past requests would run by themselves", hl);
+  check(hl.requests === 5 && hl.autoNow === 1 && hl.autoThen === 1 && hl.toApprovalThen === 4 && hl.current === 7, "T4: a 10-day self-hold limit, counting only taken requests and never a cabin or a second hold", hl);
+  const hl14 = await call("simulate_policy", { policy: "self_hold_days", value: 14 }, tO);
+  check(hl14.autoThen === 2, "T4: at 14 days the 12-day request would run by itself too", hl14);
   check(rows("app_settings").every((s) => !/grace|hold_max/.test(s.key)), "T5: a simulation changes no setting");
 }
 
@@ -248,6 +268,15 @@ await setup();
   check(stop.ok && wbRow.status === "ended" && wbRow.result, "E5: the owner stops a test early; its numbers are kept", wbRow.status);
   check((await call("update_experiment", { experimentId: wb.id, decision: "drop" }, tO)).ok && wbRow.status === "dropped" && !rows("app_settings").some((s) => s.key === "winback_discount_pct"), "E5: dropping it writes no setting");
 
+  // Review fix: "kept" only when the real setting is saved; otherwise the experiment goes back.
+  const wb2 = await call("create_experiment", { kind: "winback_offer", name: "Win-back again", variants }, tO);
+  (globalThis as any).__FAKE_CHECK__ = (table: string, row: any) => (table === "app_settings" && row.key === "winback_discount_pct" ? "disk full" : null);
+  const failedKeep = await call("update_experiment", { experimentId: wb2.id, decision: "keep", variant: "B" }, tO);
+  (globalThis as any).__FAKE_CHECK__ = undefined;
+  const wb2Row = rows("experiments").find((x) => x.id === wb2.id)!;
+  check(failedKeep.status === 500 && wb2Row.status === "running" && wb2Row.winner === null && !rows("app_settings").some((x) => x.key === "winback_discount_pct"), "E5b: if the setting can't be saved, the experiment is not marked kept", { failedKeep: failedKeep.error, status: wb2Row.status });
+  await call("update_experiment", { experimentId: wb2.id, decision: "drop" }, tO);
+
   // An experiment past its end date ends by itself.
   const old = await call("create_experiment", { kind: "winback_offer", name: "Short", variants, weeks: 1 }, tO);
   const oldRow = rows("experiments").find((x) => x.id === old.id)!;
@@ -268,7 +297,7 @@ await setup();
   const v = rows("experiment_exposures").find((x) => x.student_id === kid.s.id);
   check(!v && [tea.id, vada.id].includes(shown.featured) && shown.items?.[0]?.id === shown.featured, "E6: the variant's item shows first; no exposure is recorded while the student is not at the hall", { featured: shown.featured, first: shown.items?.[0]?.name });
   check((await call("update_experiment", { experimentId: menu.id, decision: "keep", variant: "B" }, tO)).ok
-    && JSON.parse(rows("app_settings").find((s) => s.key === "featured_food_items")!.value)[b1.id] === vada.id, "E6: keeping it writes the branch's featured item");
+    && rows("app_settings").find((s) => s.key === `featured_food_item:${b1.id}`)?.value === vada.id, "E6: keeping it writes the branch's featured item (one setting per branch)");
   const after = await call("me_food_menu", {}, kid.token);
   check(after.featured === vada.id && after.items[0].id === vada.id, "E6: after the test the kept item stays first", after.featured);
 }
@@ -302,7 +331,11 @@ await setup();
   insert("events", { id: rows("events").length + 1, action: "send_message", actor_type: "staff", ok: true, occurred_at: ts(addDays(TODAY, -40)) });
   check((await call("get_staff_module_usage", {}, tP)).status === 403, "S1: desk staff can't see the usage report");
   const u = await call("get_staff_module_usage", {}, tO);
-  check(u.total === 6 && u.usage.send_message === 3 && u.usage.end_staff_session === 0 && !u.unusedForAMonth && u.on === false, "S1: the report counts each retiring action in the last 30 days", u);
+  check(u.total === 3 && u.views === 3 && u.usage.send_message === 3 && u.usage.end_staff_session === 0 && !u.unusedForAMonth && u.on === false, "S1: the report counts each retiring action in the last 30 days; the owner's own page loads are views, not use", u);
+  check(Array.isArray(u.deskAccounts) && u.deskAccounts.includes("Priya"), "S1: it lists the desk accounts that would stop signing in", u.deskAccounts);
+  for (const e of rows("events").filter((x) => x.action === "send_message")) e.occurred_at = ts(addDays(TODAY, -40));
+  const quiet = await call("get_staff_module_usage", {}, tO);
+  check(quiet.unusedForAMonth && quiet.total === 0 && quiet.views === 3, "S1: with only page views in 30 days it says unused for a month", quiet);
 
   // Switched off (today): attendance marked on every request; reads are logged for the report.
   rows("staff_attendance").length = 0;
@@ -311,19 +344,33 @@ await setup();
   const grid = await call("get_staff_grid", {}, tO);
   check(grid.status === 200 && rows("events").filter((e) => e.action === "get_staff_grid").length === 3, "S2: the staff grid read is logged, so the report sees it", rows("events").filter((e) => e.action === "get_staff_grid").length);
 
+  const cookie = insert("staff", { username: "cookie", display_name: "Cook", role: "staff", is_active: true, branch_id: b1.id, duty: "kitchen" });
+  const tK = await tokenFor(cookie);
   setSetting("pssai_retire_staff_ops", "on");
   resetRetireCache();
   rows("staff_attendance").length = 0;
-  const tasks = await call("list_messages", { branchId: b1.id }, tP);
+  // Review fix (C18): a desk-duty account stops working once the desk-staff modules retire.
+  (globalThis as any).__FAKE_RPC__ = (fn: string, args: any) => {
+    if (fn !== "verify_staff_login") return null;
+    const st = rows("staff").find((x) => x.username === args.p_username);
+    return st ? { data: [{ id: st.id, username: st.username, role: st.role, display_name: st.display_name, branch_id: st.branch_id, branch_name: null }], error: null } : { data: [], error: null };
+  };
+  const deskLogin = await call("login", { username: "priya", password: "pw" });
+  const deskToken = await call("list_messages", { branchId: b1.id }, tP);
+  const cookLogin = await call("login", { username: "cookie", password: "pw" });
+  check(deskLogin.status === 403 && /retired/.test(deskLogin.error) && deskToken.status === 401 && cookLogin.status === 200 && cookLogin.token, "S3: a desk account can't log in or use an old token; a kitchen account can", [deskLogin.status, deskToken.status, cookLogin.status]);
+  (globalThis as any).__FAKE_RPC__ = undefined;
+  rows("staff_attendance").length = 0;
+  const tasks = await call("list_messages", { branchId: b1.id }, tK);
   check(tasks.status === 200 && rows("staff_attendance").length === 0, "S3: with the switch on attendance is no longer marked", tasks.status);
   const gone = await Promise.all([
     call("list_staff_attendance", {}, tO), call("get_staff_grid", {}, tO), call("assign_staff_override", { staffId: priya.id, branchId: b2.id }, tO),
-    call("clear_staff_override", { staffId: priya.id }, tO), call("end_staff_session", { password: "x" }, tP), call("send_message", { branchId: b1.id, content: "hi" }, tP),
+    call("clear_staff_override", { staffId: priya.id }, tO), call("end_staff_session", { password: "x" }, tK), call("send_message", { branchId: b1.id, content: "hi" }, tK),
   ]);
   check(gone.every((x) => x.status === 410), "S3: the six retired actions answer 410", gone.map((x) => x.status));
-  check((await call("list_messages", { branchId: b1.id }, tP)).status === 200 && (await call("list_branch_staff", { branchId: b1.id }, tP)).status === 200, "S3: system notices and assigning tasks stay");
-  insert("staff_attendance", { staff_id: priya.id, branch_id: b1.id, attendance_date: TODAY, first_login_at: ts(TODAY), last_logout_at: ts(TODAY, "07:00") });
-  check((await call("list_messages", { branchId: b1.id }, tP)).status === 200, "S3: an ended session no longer cuts a staff member off");
+  check((await call("list_messages", { branchId: b1.id }, tK)).status === 200 && (await call("list_branch_staff", { branchId: b1.id }, tK)).status === 200, "S3: system notices and assigning tasks stay");
+  insert("staff_attendance", { staff_id: cookie.id, branch_id: b1.id, attendance_date: TODAY, first_login_at: ts(TODAY), last_logout_at: ts(TODAY, "07:00") });
+  check((await call("list_messages", { branchId: b1.id }, tK)).status === 200, "S3: an ended session no longer cuts a staff member off");
 
   const accts = await Promise.all([
     call("create_staff", { username: "desk2", password: "pw-123456", displayName: "Desk", role: "staff", branchId: b1.id }, tO),

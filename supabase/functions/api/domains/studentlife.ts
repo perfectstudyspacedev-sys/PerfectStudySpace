@@ -27,11 +27,21 @@ const CERT_MAX_DAYS = 366;
 const CERTS_PER_30_DAYS = 5;
 const sha256 = async (s: string) => [...new Uint8Array(await crypto.subtle.digest("SHA-256", new TextEncoder().encode(s)))].map((b) => b.toString(16).padStart(2, "0")).join("");
 
-/** Completed sessions with their real length and break minutes. */
+/**
+ * Completed sessions with their real length and break minutes. A session nobody checked out of
+ * (closed at 23:30 at its booked end, C15) is left out: its length is the booking, not the study
+ * — so certificates, the family summary and the student's own pages never count it (review fix).
+ */
 async function sessionsBetween(db: Ctx["db"], studentId: string, from: string, to: string) {
   const rows = await fetchAllRows<any>(() => db.from("bookings").select("id, start_time, end_time, total_pause_minutes, desks!desk_id(label)")
     .eq("student_id", studentId).eq("status", "completed").gte("start_time", istDayStart(from)).lte("start_time", istDayEnd(to)).order("start_time").order("id"));
-  return rows.map((b) => ({ id: b.id, start: Date.parse(b.start_time), end: Date.parse(b.end_time ?? b.start_time), pauseMinutes: Number(b.total_pause_minutes ?? 0), desk: b.desks?.label ?? null }));
+  const autoClosed = new Set<string>();
+  for (let i = 0; i < rows.length; i += 200) {
+    const { data } = await db.from("anomaly_flags").select("ref_id").eq("kind", "session_auto_closed").eq("ref_table", "bookings").in("ref_id", rows.slice(i, i + 200).map((b) => b.id));
+    for (const f of data ?? []) autoClosed.add(f.ref_id);
+  }
+  return rows.filter((b) => !autoClosed.has(b.id))
+    .map((b) => ({ id: b.id, start: Date.parse(b.start_time), end: Date.parse(b.end_time ?? b.start_time), pauseMinutes: Number(b.total_pause_minutes ?? 0), desk: b.desks?.label ?? null }));
 }
 
 async function hallName(db: Ctx["db"], branchId: string | null) {
@@ -173,15 +183,25 @@ export function handlers(): Record<string, Handler> {
       const { db } = ctx;
       if (!(await featureOn(db, "study_buddy"))) return err("Study buddies are not open yet", 403);
       const s = me(ctx);
-      const { data: m } = await db.from("study_buddy_matches").select("*").eq("id", payload.matchId).maybeSingle();
-      if (!m || (m.student_a !== s.id && m.student_b !== s.id)) return err("Not found", 404);
-      if (m.status !== "proposed") return err("This match is already decided", 409);
-      const side = m.student_a === s.id ? "a_answer" : "b_answer";
       const answer = payload.accept === true ? "yes" : "no";
-      const other = side === "a_answer" ? m.b_answer : m.a_answer;
-      const status = answer === "no" || other === "no" ? "declined" : other === "yes" ? "connected" : "proposed";
-      const { data } = await db.from("study_buddy_matches").update({ [side]: answer, status }).eq("id", m.id).eq("status", "proposed").is(side, null).select("id");
-      if (!data?.length) return err("You already answered", 409);
+      // The write also checks the other side's answer as read, so two answers at the same moment
+      // can't leave yes/yes stuck as "proposed": the second one re-reads and settles it (review fix).
+      let m: any = null, status = "proposed", written = false;
+      for (let attempt = 0; attempt < 3 && !written; attempt++) {
+        ({ data: m } = await db.from("study_buddy_matches").select("*").eq("id", payload.matchId).maybeSingle());
+        if (!m || (m.student_a !== s.id && m.student_b !== s.id)) return err("Not found", 404);
+        if (m.status !== "proposed") return err("This match is already decided", 409);
+        const side = m.student_a === s.id ? "a_answer" : "b_answer";
+        const otherSide = side === "a_answer" ? "b_answer" : "a_answer";
+        if (m[side] != null) return err("You already answered", 409);
+        const other = m[otherSide];
+        status = answer === "no" || other === "no" ? "declined" : other === "yes" ? "connected" : "proposed";
+        let q = db.from("study_buddy_matches").update({ [side]: answer, status }).eq("id", m.id).eq("status", "proposed").is(side, null);
+        q = other == null ? q.is(otherSide, null) : q.eq(otherSide, other);
+        const { data } = await q.select("id");
+        written = !!data?.length;
+      }
+      if (!written) return err("Someone answered at the same moment — please try again", 409);
       if (status === "connected") {
         for (const id of [m.student_a, m.student_b]) await notifyStudent(db, id, { kind: "buddy", title: "You have a study buddy", body: "You both said yes — see who in the portal, and say hi at the hall.", actionUrl: "/me/buddy", dedupeKey: `buddy:${m.id}:${id}` });
       }
@@ -227,10 +247,17 @@ export function handlers(): Record<string, Handler> {
       const row: any = {
         id: randomCode(10, CODE_ALPHABET), student_id: s.id, branch_id: st?.branch_id ?? null, hall_name: await hallName(db, st?.branch_id ?? null),
         student_name: String(st?.name ?? s.name).trim(), date_from: dateFrom, date_to: dateTo, hours: Math.round((minutes / 60) * 100) / 100, days: perDay.size,
+        issued_at: new Date().toISOString(),   // set here, so the signed issue date is the stored one
       };
       row.signature = await hmacHex(secret, certificateText(row));
       const { data, error } = await db.from("study_certificates").insert(row).select("*").single();
       if (error || !data) return err(error?.message ?? "Could not make the certificate", 500);
+      // Two taps at once could both pass the count above: the one past the cap is taken back.
+      const { count: after } = await db.from("study_certificates").select("*", { count: "exact", head: true }).eq("student_id", s.id).gte("issued_at", new Date(Date.now() - 30 * 86400e3).toISOString());
+      if ((after ?? 0) > CERTS_PER_30_DAYS) {
+        await db.from("study_certificates").delete().eq("id", data.id);
+        return err(`At most ${CERTS_PER_30_DAYS} certificates a month`, 429);
+      }
       return json({ ok: true, certificate: certView(data) });
     },
 
@@ -253,9 +280,11 @@ export function handlers(): Record<string, Handler> {
       if (typeof payload.id !== "string" || !/^[0-9a-z]{10}$/.test(payload.id)) return json({ found: false });
       const { data: c } = await db.from("study_certificates").select("*").eq("id", payload.id).maybeSingle();
       if (!c) return json({ found: false });
+      // A withdrawn certificate shows only that it was withdrawn — no name or hours (review fix).
+      if (c.revoked_at) return json({ found: true, valid: false, revoked: true });
       const secret = Deno.env.get("CERTIFICATE_SECRET") ?? "";
       const valid = secret.length >= 16 && sameKey(await hmacHex(secret, certificateText(c)), c.signature);
-      return json({ found: true, valid: valid && !c.revoked_at, revoked: !!c.revoked_at, hall: c.hall_name, name: c.student_name, from: c.date_from, to: c.date_to, hours: Number(c.hours), days: c.days, issuedAt: c.issued_at });
+      return json({ found: true, valid, revoked: false, hall: c.hall_name, name: c.student_name, from: c.date_from, to: c.date_to, hours: Number(c.hours), days: c.days, issuedAt: c.issued_at });
     },
 
     // ─── I34 parent digest ───

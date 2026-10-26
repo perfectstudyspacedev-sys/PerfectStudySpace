@@ -38,13 +38,25 @@ export async function integrityFindings(db: Ctx["db"]) {
   // 6–8. Phase 4 (O2 part 2): self check-ins with no session, staff check-ins at branches with a
   //      poster, and paid walk-ins with no desk payment.
   const self = await selfCheckinFindings(db);
+  // 9. Floating desks marked occupied with no open session linked (a link that failed, or an
+  //    older session): checkout can't free them, so the desk does (Phase 5 review).
+  const occupied = await fetchAllRows<any>(() => db.from("desks").select("id, label, branch_id, current_booking_id").eq("seat_type", "floating").eq("status", "occupied").order("id"));
+  const openIds = new Set<string>();
+  const linked = occupied.map((d) => d.current_booking_id).filter(Boolean);
+  for (let i = 0; i < linked.length; i += 200) {
+    const { data } = await db.from("bookings").select("id").in("id", linked.slice(i, i + 200)).eq("status", "active");
+    for (const b of data ?? []) openIds.add(b.id);
+  }
+  const strayDesks = occupied.filter((d) => !d.current_booking_id || !openIds.has(d.current_booking_id));
   return {
     counts: {
       membership_dates: membershipDates.length, negative_food_pass: passes.length, stale_active_bookings: stale.length,
       proofs_without_transactions: noTx.length, stuck_agent_runs: stuck.length,
       selfcheckins_without_session: self.orphan.length, staff_checkins_at_poster_branches: self.staffIns.length,
       walkins_without_payment: self.unpaid.length, unpaid_food_on_closed_walkins: self.foodUnpaid.length,
+      desks_occupied_without_session: strayDesks.length,
     },
+    desks_occupied_without_session: strayDesks.slice(0, LIST_LIMIT).map((d) => ({ desk_id: d.id, label: d.label, branch_id: d.branch_id, booking_id: d.current_booking_id ?? null })),
     selfcheckins_without_session: self.orphan.slice(0, LIST_LIMIT).map((r) => ({ record_id: r.id, student_id: r.student_id, branch_id: r.branch_id, at: r.created_at })),
     staff_checkins_at_poster_branches: self.staffIns.slice(0, LIST_LIMIT).map((e) => ({ event_id: e.id, branch_id: e.branch_id, student_id: e.student_id, staff_id: e.actor_id, at: e.occurred_at })),
     walkins_without_payment: self.unpaid.slice(0, LIST_LIMIT).map((w) => ({ booking_id: w.id, student_id: w.student_id, branch_id: w.branch_id, amount: w.amount, at: w.created_at })),

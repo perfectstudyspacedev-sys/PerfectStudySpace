@@ -26,7 +26,9 @@ export function bucketOf(a: Decision): { scope: string; bucket: string } {
   const scope = `${a.kind}:${a.action ?? "?"}`;
   const p = a.payload ?? {};
   if (scope === "student_request:hold") {
-    return { scope, bucket: `days:${band(Number(p.days) || 0, [[1, 7, "1-7"], [8, 14, "8-14"], [15, 31, "15-31"]], "31+")}|why:${whyKind(p.why)}` };
+    // Requests from before dues were recorded fall into dues:? and never match a newer rule.
+    const dues = p.dues === true ? "yes" : p.dues === false ? "no" : "?";
+    return { scope, bucket: `days:${band(Number(p.days) || 0, [[1, 7, "1-7"], [8, 14, "8-14"], [15, 31, "15-31"]], "31+")}|why:${whyKind(p.why)}|dues:${dues}` };
   }
   const value = Number(p.cashbackValue ?? p.discountValue ?? p.amount);
   if (Number.isFinite(value) && value > 0) {
@@ -49,6 +51,7 @@ export function describeRule(scope: string, bucket: string, outcome: "approve" |
     parts.days ? `of ${parts.days.replace("-", "–")} days` : "",
     parts.value ? `of ₹${parts.value.replace("-", "–")}` : "",
     parts.why && WHY_WORDS[parts.why] ? `(${WHY_WORDS[parts.why]})` : "",
+    parts.dues === "yes" ? "with dues" : parts.dues === "no" ? "with no dues" : "",
     parts.by === "system" ? "queued by the system" : parts.by === "agent" ? "asked by an AI agent" : "",
   ].filter(Boolean).join(" ");
   return `${what}${detail ? ` ${detail}` : ""}: you ${outcome === "approve" ? "approved" : "denied"} ${agree} of ${support}.`.slice(0, 300);
