@@ -29,7 +29,13 @@ create two **private** Storage buckets, `payment-proofs` and `id-photos` (no pub
 ## 3. Secrets and extensions
 - Database → Extensions: turn on **pg_cron** and **pg_net**.
 - Edge Functions → Secrets:
+  - `STAFF_JWT_SECRET` — a long random value. It signs staff logins. The live project may already
+    have it as `JWT_SECRET` (either name works); a **new** project must have it, or every function
+    restart logs the staff out.
   - `CRON_SECRET` — a long random value (e.g. `openssl rand -hex 32`). Keep a copy for step 5.
+  - `PORTAL_URL` — the student site's address (default `https://join.perfectstudyspace.in`). Set it
+    when this project serves another student site, so setup codes, check-in posters, certificates and
+    family links point there.
   - `ALLOWED_ORIGINS` — optional. Without it the built-in list is used:
     `https://perfect-study-space.pages.dev, https://join.perfectstudyspace.in, https://perfectstudyspace.in, https://www.perfectstudyspace.in, http://localhost:5173`.
     Set it only if the staff site is also opened from another address.
@@ -44,11 +50,14 @@ create two **private** Storage buckets, `payment-proofs` and `id-photos` (no pub
     none checks. Changing it later makes every certificate issued before stop checking — keep it.
 
 ## 4. Functions
+From the repo root, naming the project every time (the repo's `config.toml` and a previous
+`supabase link` may point at another project):
 ```bash
-supabase functions deploy api
-supabase functions deploy cron
-supabase functions deploy agent
+supabase functions deploy api   --project-ref <PROJECT_REF> --no-verify-jwt
+supabase functions deploy cron  --project-ref <PROJECT_REF> --no-verify-jwt
+supabase functions deploy agent --project-ref <PROJECT_REF> --no-verify-jwt
 ```
+`PUBLIC_SITE_KEY` (optional) is only for the marketing website's enquiry form.
 
 ## 5. Schedules
 Open `docs/ops/cron.sql`, replace `<PROJECT_REF>` and `<CRON_SECRET>`, run it in the SQL editor.
