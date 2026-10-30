@@ -10,7 +10,7 @@ export default function ReferralLink() {
   const [error, setError] = useState('')
   useEffect(() => {
     api('public_referral_info', { ref })
-      .then((r) => navigate(`/${r.code}?r=${encodeURIComponent(r.ref)}`, { replace: true }))
+      .then((r) => navigate(`/join/${encodeURIComponent(r.code)}?r=${encodeURIComponent(r.ref)}`, { replace: true }))
       .catch((e) => setError(e.message || 'This link is not active.'))
   }, [ref, navigate])
   return (

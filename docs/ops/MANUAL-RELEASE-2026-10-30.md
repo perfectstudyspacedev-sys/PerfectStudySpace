@@ -43,7 +43,7 @@ findings (vite and source-map-js); the production-dependency audit reported zero
    still used. The default source list contains a different, hyphenated Pages origin.
 5. Set PORTAL_URL to https://perfectstudyspace.pages.dev if students use the same site; otherwise
    use their actual deployed site's origin without a /me suffix. Signup routing is a separate
-   known code gap; changing PORTAL_URL alone does not repair the self-signup redirect.
+   frontend setting; the same-origin redirect fix is documented in [SIGNUP-LINKS.md](SIGNUP-LINKS.md).
 6. Run [prepare-missing-schedules.sql](prepare-missing-schedules.sql) if schedules are missing.
    It installs pg_cron and creates 27 missing schedules paused. Existing jobs are preserved.
 
@@ -86,9 +86,9 @@ Open Workers & Pages → perfectstudyspace → Settings. Locate the Git/build co
 | VITE_SUPABASE_ANON_KEY, Production environment | The public anon key from this same Supabase project |
 
 1. Save the settings. Apply the same public build variables to Preview only if you use previews.
-2. Verify VITE_SIGNUP_SITE_URL separately against your actual signup host; the known same-site
-   signup redirect is outside this release's requested fixes. Do not assume setting it to this
-   site's /join solves the issue.
+2. With the signup-routing fix deployed, leave VITE_SIGNUP_SITE_URL unset to use this
+   deployment's /join route, or set it to https://perfectstudyspace.pages.dev/join. An existing
+   /join link displays the form directly. See [SIGNUP-LINKS.md](SIGNUP-LINKS.md).
 3. Open Deployments and deploy/retry the **newest commit on pss-ai/all-phases**. Confirm the
    displayed commit is the newly pushed release, not an older failed deployment.
 4. Wait for the build and deployment to report success, then open https://perfectstudyspace.pages.dev.

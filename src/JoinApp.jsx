@@ -10,10 +10,8 @@ const ParentDigest = lazy(() => import('./pages/PublicStudyPages.jsx').then((m) 
 // The student portal (PSS-AI P2.1) is a separate file, downloaded only for /me pages.
 const PortalRoutes = lazy(() => import('./portal/PortalRoutes.jsx'))
 
-// HSL — everything served on join.<domain>: the student sign-up form, and since PSS-AI P2.1 the
-// student portal under /me. Sign-up links look like https://join.perfectstudyspace.in/<code>;
-// /me comes first (codes are 12 characters, so "me" never collides). Any other path shows "link
-// no longer valid".
+// Public student pages on any deployment, including same-origin /join/<code> links.
+// Dedicated join.<domain> hosts and previously shared short /<code> links also work.
 export default function JoinApp() {
   return (
     <BrowserRouter>
