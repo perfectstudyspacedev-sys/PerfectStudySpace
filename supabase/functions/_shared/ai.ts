@@ -1,37 +1,34 @@
-// AI calls for the PSS-AI agents (P1.8 onwards, Appendix F). Claude is called only from edge
-// functions; the key lives in Supabase secrets (AI_API_KEY) and never reaches the browser (R7).
+// Shared AI execution and budgets. Providers are called only from edge functions; their keys
+// stay in Supabase secrets and never reach the browser (R7). Routing lives in ai-providers.ts.
 // Every run is one agent_runs row (057) with its token counts and estimated cost, and the monthly
 // budget (app_settings pssai_ai_budget_usd) is checked before a run starts. Tool calls go through
 // the action registry, so each one writes an events row with the run's id (Appendix F rules 1–2).
 // deno-lint-ignore-file no-explicit-any
-import Anthropic from "npm:@anthropic-ai/sdk@0.131.0";
+import type Anthropic from "npm:@anthropic-ai/sdk@0.131.0";
+import { attemptsFromError, createAIClient, initialModel, modelLabel, AI_SETUP_MESSAGE, type AIClient, type AIMessage, type ProviderAttempt } from "./ai-providers.ts";
+import { schemaProblem } from "./ai-schema.ts";
+export { MODELS, providerStatus, AI_SETUP_MESSAGE } from "./ai-providers.ts";
+export type { AIClient } from "./ai-providers.ts";
 import { istDayStart, todayISO } from "./dates.ts";
 import { isSecretKey } from "./audit.ts";
 
 type Db = { from: (table: string) => any };
 
-// D3: Claude Haiku 5.5 for routine work, Claude Sonnet 5.5 for hard cases and screenshots.
-// AI_MODEL / AI_MODEL_HARD (Supabase secrets) replace them without a deploy.
-export const MODELS = {
-  routine: () => Deno.env.get("AI_MODEL")?.trim() || "claude-haiku-5-5",
-  hard: () => Deno.env.get("AI_MODEL_HARD")?.trim() || "claude-sonnet-5-5",
-};
-
-/** The Claude client, or null when AI_API_KEY is not set (every agent then says it is not set up). */
-export function aiClient(): Anthropic | null {
-  const apiKey = Deno.env.get("AI_API_KEY")?.trim();
-  if (!apiKey) return null;
-  return new Anthropic({ apiKey, timeout: 60_000, maxRetries: 1 });
-}
+/** Configured providers, in the owner's preference order; null when none has a key. */
+export const aiClient = createAIClient;
 
 // ── Cost ──
 // US dollars per million tokens. Cache reads cost a tenth of the input price and cache writes
 // 1.25 times it. Claude Haiku 5.5 charges more when one request's prompt is over 100K tokens.
 // A model not listed here is counted at a high price, so the budget errs on the safe side.
-type Price = { in: number; out: number };
+type Price = { in: number; out: number; cached?: number };
 const PRICES: Record<string, Price & { over?: Price & { tokens: number } }> = {
   "claude-haiku-5-5": { in: 0.10, out: 0.50, over: { tokens: 100_000, in: 0.50, out: 2.50 } },
   "claude-sonnet-5-5": { in: 2, out: 10 },
+  "ollama/gemma4:31b": { in: 0.14, out: 0.40, cached: 0.05 },
+  "ollama/gpt-oss:120b": { in: 0.15, out: 0.60, cached: 0.014 },
+  "ollama/gpt-oss:20b": { in: 0.07, out: 0.30, cached: 0.035 },
+  "gemini/gemini-3.5-flash-lite": { in: 0.30, out: 2.50, cached: 0.03 },
 };
 const UNKNOWN_PRICE: Price = { in: 10, out: 50 };
 
@@ -44,11 +41,17 @@ export interface Usage {
 
 /** Estimated cost of one model call, in US dollars. */
 export function costUsd(model: string, u: Usage): number {
-  const p = PRICES[model];
+  // Published Gemini 3.8 Flash standard rates change on 2027-01-01. No free-tier assumption.
+  const p = model === "gemini/gemini-3.8-flash"
+    ? (Date.now() < Date.parse("2027-01-01T00:00:00Z")
+      ? { in: 0.75, out: 3.75, cached: 0.075 } : { in: 1.50, out: 7.50, cached: 0.15 })
+    : PRICES[model];
   const read = u.cache_read_input_tokens ?? 0;
   const write = u.cache_creation_input_tokens ?? 0;
-  const rate: Price = !p ? UNKNOWN_PRICE : p.over && u.input_tokens + read + write > p.over.tokens ? p.over : p;
-  return (u.input_tokens * rate.in + write * rate.in * 1.25 + read * rate.in * 0.1 + u.output_tokens * rate.out) / 1e6;
+  const over = p && "over" in p ? p.over : undefined;
+  const rate: Price = !p ? UNKNOWN_PRICE : over && u.input_tokens + read + write > over.tokens ? over : p;
+  const cached = rate.cached ?? (model.startsWith("ollama/") || model.startsWith("gemini/") ? rate.in : rate.in * 0.1);
+  return (u.input_tokens * rate.in + write * rate.in * 1.25 + read * cached + u.output_tokens * rate.out) / 1e6;
 }
 
 // ── Monthly budget (D3) ──
@@ -91,26 +94,46 @@ export async function publicAiAllowed(db: Db): Promise<boolean> {
 export interface RunTotals {
   tokensIn: number; tokensOut: number; cacheRead: number; cacheWrite: number;
   modelCalls: number; toolCalls: number; costUsd: number;
+  models: string[]; providerAttempts: ProviderAttempt[];
 }
-export const emptyTotals = (): RunTotals => ({ tokensIn: 0, tokensOut: 0, cacheRead: 0, cacheWrite: 0, modelCalls: 0, toolCalls: 0, costUsd: 0 });
+export const emptyTotals = (): RunTotals => ({ tokensIn: 0, tokensOut: 0, cacheRead: 0, cacheWrite: 0, modelCalls: 0, toolCalls: 0, costUsd: 0, models: [], providerAttempts: [] });
 export type RunStatus = "ok" | "refused" | "cut_short" | "error";
 
 export async function startRun(db: Db, row: { agent: string; model: string; staffId?: string | null; studentId?: string | null }): Promise<string> {
   const { data, error } = await db.from("agent_runs")
-    .insert({ agent: row.agent, model: row.model, staff_id: row.staffId ?? null, student_id: row.studentId ?? null, status: "running" })
+    .insert({ agent: row.agent, model: initialModel(row.model), staff_id: row.staffId ?? null, student_id: row.studentId ?? null, status: "running" })
     .select("id").single();
   if (error || !data?.id) throw new Error(`Could not start the run (is migration 057 applied?): ${error?.message ?? "no id"}`);
   return data.id;
 }
 
 export async function finishRun(db: Db, id: string, status: RunStatus, t: RunTotals, error?: string) {
-  const { error: e } = await db.from("agent_runs").update({
+  const row = {
     status, finished_at: new Date().toISOString(),
     tokens_in: t.tokensIn, tokens_out: t.tokensOut, cache_read_tokens: t.cacheRead, cache_write_tokens: t.cacheWrite,
     model_calls: t.modelCalls, tool_calls: t.toolCalls, cost_usd: Math.round(t.costUsd * 1e6) / 1e6,
     error: error ? error.slice(0, 500) : null,
-  }).eq("id", id);
+    ...(t.models.length ? { model: [...new Set(t.models)].join(" -> ") } : {}),
+  };
+  let { error: e } = await db.from("agent_runs").update({ ...row, provider_attempts: t.providerAttempts }).eq("id", id);
+  // Migration 073 should precede deployment. During a rolling upgrade still finish the old log.
+  if (e && (e.code === "42703" || e.code === "PGRST204") && /provider_attempts/.test(e.message ?? "")) {
+    console.error("Migration 073 is missing: detailed AI provider attempts could not be saved");
+    ({ error: e } = await db.from("agent_runs").update(row).eq("id", id));
+  }
   if (e) console.error("agent_runs update failed:", e.message);
+}
+
+function addUsage(t: RunTotals, response: AIMessage, requested: string) {
+  t.modelCalls++;
+  t.tokensIn += response.usage.input_tokens;
+  t.tokensOut += response.usage.output_tokens;
+  t.cacheRead += response.usage.cache_read_input_tokens ?? 0;
+  t.cacheWrite += response.usage.cache_creation_input_tokens ?? 0;
+  const model = response._pss ? modelLabel(response._pss.provider, response._pss.model) : initialModel(requested);
+  t.models.push(model);
+  t.providerAttempts.push(...(response._pss?.attempts ?? []));
+  t.costUsd += costUsd(model, response.usage);
 }
 
 // ── What a tool result may show the model ──
@@ -171,12 +194,12 @@ export function describeAiError(e: unknown): string {
   return `${status ? `HTTP ${status}: ` : ""}${message}`.slice(0, 300);
 }
 
-// Runs Claude with the given tools until it answers, refuses, or hits the step or time limit
+// Runs the preferred eligible provider until it answers, refuses, or hits the step/time limit
 // (Appendix F rule 9). Tool errors go back to the model as is_error results; parallel tool calls
 // are answered together in one message. Thinking blocks are passed back unchanged. A failed AI
 // call ends the loop with stop "error" and the totals so far, so the run's cost is still logged.
 export async function toolLoop(opts: {
-  client: Anthropic; model: string; system: string; messages: Anthropic.MessageParam[];
+  client: AIClient; model: string; system: string; messages: Anthropic.MessageParam[];
   tools: AgentTool[]; maxModelCalls?: number; maxTokens?: number; deadlineMs?: number;
 }): Promise<LoopResult> {
   const { client, model, system, tools } = opts;
@@ -190,7 +213,7 @@ export async function toolLoop(opts: {
 
   for (let i = 0; i < (opts.maxModelCalls ?? 8); i++) {
     if (Date.now() > deadline) break;
-    let response: Anthropic.Message;
+    let response: AIMessage;
     try {
       response = await client.messages.create({
         model,
@@ -198,16 +221,13 @@ export async function toolLoop(opts: {
         system: [{ type: "text", text: system, cache_control: { type: "ephemeral" } }],
         tools: defs as Anthropic.Tool[],
         messages,
+        _pssDeadline: deadline,
       });
     } catch (e) {
+      totals.providerAttempts.push(...attemptsFromError(e));
       return { text: lastText, stop: "error", error: describeAiError(e), toolCalls, totals };
     }
-    totals.modelCalls++;
-    totals.tokensIn += response.usage.input_tokens;
-    totals.tokensOut += response.usage.output_tokens;
-    totals.cacheRead += response.usage.cache_read_input_tokens ?? 0;
-    totals.cacheWrite += response.usage.cache_creation_input_tokens ?? 0;
-    totals.costUsd += costUsd(model, response.usage);
+    addUsage(totals, response, model);
 
     if (response.stop_reason === "refusal") return { text: "", stop: "refused", toolCalls, totals };
     const text = response.content.filter((b) => b.type === "text").map((b) => (b as Anthropic.TextBlock).text).join("\n").trim();
@@ -241,11 +261,11 @@ export async function toolLoop(opts: {
 // For jobs that read or draft one thing: the answer must match `schema` (structured outputs), so
 // nothing is parsed from free text. Returns the parsed object, or null with the reason.
 export async function structuredCall<T>(opts: {
-  client: Anthropic; model: string; system: string; content: Anthropic.ContentBlockParam[] | string;
+  client: AIClient; model: string; system: string; content: Anthropic.ContentBlockParam[] | string;
   schema: Record<string, unknown>; maxTokens?: number;
 }): Promise<{ data: T | null; stop: LoopResult["stop"]; error?: string; totals: RunTotals }> {
   const totals = emptyTotals();
-  let response: Anthropic.Message;
+  let response: AIMessage;
   try {
     response = await opts.client.messages.create({
       model: opts.model,
@@ -255,19 +275,18 @@ export async function structuredCall<T>(opts: {
       output_config: { format: { type: "json_schema", schema: opts.schema } },
     });
   } catch (e) {
+    totals.providerAttempts.push(...attemptsFromError(e));
     return { data: null, stop: "error", error: describeAiError(e), totals };
   }
-  totals.modelCalls = 1;
-  totals.tokensIn = response.usage.input_tokens;
-  totals.tokensOut = response.usage.output_tokens;
-  totals.cacheRead = response.usage.cache_read_input_tokens ?? 0;
-  totals.cacheWrite = response.usage.cache_creation_input_tokens ?? 0;
-  totals.costUsd = costUsd(opts.model, response.usage);
+  addUsage(totals, response, opts.model);
   if (response.stop_reason === "refusal") return { data: null, stop: "refused", totals };
   if (response.stop_reason !== "end_turn") return { data: null, stop: "cut_short", error: `stop_reason ${response.stop_reason}`, totals };
   const text = response.content.filter((b) => b.type === "text").map((b) => (b as Anthropic.TextBlock).text).join("");
   try {
-    return { data: JSON.parse(text) as T, stop: "done", totals };
+    const data = JSON.parse(text);
+    const problem = schemaProblem(data, opts.schema);
+    if (problem) return { data: null, stop: "error", error: "The answer did not match its schema: " + problem, totals };
+    return { data: data as T, stop: "done", totals };
   } catch {
     return { data: null, stop: "error", error: "The answer was not valid JSON", totals };
   }
@@ -282,7 +301,7 @@ export async function loggedStructuredCall<T>(db: Db, meta: { agent: string; mod
   opts: Omit<Parameters<typeof structuredCall>[0], "client" | "model">,
 ): Promise<{ skipped: string } | { data: T | null; stop: LoopResult["stop"]; error?: string; runId: string; costUsd: number }> {
   const client = aiClient();
-  if (!client) return { skipped: "AI_API_KEY is not set" };
+  if (!client) return { skipped: AI_SETUP_MESSAGE };
   const budget = await monthSpend(db);
   if (budget.usedUsd >= budget.capUsd) return { skipped: "this month's AI budget is used up" };
   const runId = await startRun(db, meta);

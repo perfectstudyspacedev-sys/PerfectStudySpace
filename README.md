@@ -1,6 +1,13 @@
 # Perfect Study Space
 
-Multi-branch reading hall / study desk rental management app for **owner and staff only** (no student login).
+Source: [PerfectStudySpace — pss-ai/all-phases](https://github.com/perfectstudyspacedev-sys/PerfectStudySpace/tree/pss-ai/all-phases).
+Backend project: `zripsszkprhtyccukrir`. Cloudflare Pages project: `perfectstudyspace`.
+Manual backend/frontend deployment and live checks: [release guide](docs/ops/MANUAL-RELEASE-2026-10-30.md).
+
+AI additions support **Ollama Cloud → Gemini → Claude**. Provider setup, supported capabilities,
+model overrides and rollout steps: [AI provider guide](docs/ops/AI-PROVIDERS.md).
+
+Multi-branch reading hall / study desk rental management app with an owner/staff dashboard and an optional student portal.
 
 Built with the same stack and black-and-yellow UI theme as [Cue Court Coffee](../CUE-COURT-COFFEE).
 

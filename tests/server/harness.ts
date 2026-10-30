@@ -9,6 +9,8 @@ Deno.env.set("STUDENT_JWT_SECRET", "student-test-secret");
 Deno.env.set("SUPABASE_URL", "http://fake.local");
 Deno.env.set("SUPABASE_SERVICE_ROLE_KEY", "fake");
 Deno.env.set("PUBLIC_SITE_KEY", "site-key");
+// Unit/server suites never discover real provider keys inherited from a developer's shell.
+for (const key of ["OLLAMA_API_KEY", "GEMINI_API_KEY", "OLLAMA_MODEL", "OLLAMA_MODEL_HARD", "GEMINI_MODEL", "GEMINI_MODEL_HARD"]) Deno.env.delete(key);
 
 let handler: ((req: Request) => Promise<Response>) | null = null;
 Object.defineProperty(Deno, "serve", { value: (h: any) => { handler = h; return { finished: Promise.resolve(), shutdown() {}, ref() {}, unref() {}, addr: {} }; }, configurable: true, writable: true });

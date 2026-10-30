@@ -1,4 +1,4 @@
-// The agent edge function (PSS-AI P1.8 onwards): the Claude-backed agents. Three kinds of caller:
+// The agent edge function: agents use the shared Ollama -> Gemini -> Claude provider router.
 //  - the owner's app: { agent: "analyst", question, history?, deep? } with an owner or admin staff
 //    token ({ agent: "analyst", op: "usage" } returns this month's AI spend);
 //  - the student portal (P2.4 A1): { agent: "concierge", message } with a student token;
@@ -7,14 +7,14 @@
 //  - pg_cron through pg_net: { job: "owner_brief" | "collections" | "enquiry_dedupe" | "exam_radar" |
 //    "winback" | "exception_desk" } with the x-cron-secret header (the same CRON_SECRET as the cron
 //    function) — see docs/ops/cron.sql.
-// Every run needs its switch on (pssai_analyst), the AI_API_KEY secret, and room in the monthly
-// AI budget (pssai_ai_budget_usd). The key never leaves this function.
+// Every run needs its feature switch, a configured provider key, and room in the monthly
+// AI budget (pssai_ai_budget_usd). Keys never reach the browser.
 // deno-lint-ignore-file no-explicit-any
 import { err, json, sameSecret, withCors } from "../_shared/http.ts";
 import { adminClient, authStaff, isOwnerOrAdmin, type StaffRow } from "../_shared/auth.ts";
 import { featureOn } from "../_shared/flags.ts";
 import { todayISO } from "../_shared/dates.ts";
-import { aiClient, MODELS, monthSpend } from "../_shared/ai.ts";
+import { aiClient, MODELS, monthSpend, providerStatus, AI_SETUP_MESSAGE } from "../_shared/ai.ts";
 import { askAnalyst, writeOwnerBrief } from "./analyst.ts";
 import { answerStudent, DAILY_LIMIT, studentMessagesToday } from "./concierge.ts";
 import { runCollections } from "./collections.ts";
@@ -56,7 +56,7 @@ async function handleRequest(req: Request): Promise<Response> {
       // A7 on demand: one approval's suggestion, from the Approvals page.
       const db = adminClient();
       if (typeof body.approvalId !== "string") return err("Choose an approval");
-      if (!aiClient()) return err("AI is not set up yet: the AI_API_KEY secret is missing", 503);
+      if (!aiClient()) return err(AI_SETUP_MESSAGE, 503);
       const r = await runExceptionDesk(db, staff, [body.approvalId]);
       if ("skipped" in r && !("noted" in r)) return err(r.skipped as string, 403);
       const { data } = await db.from("approvals").select("ai_note, ai_note_at").eq("id", body.approvalId).maybeSingle();
@@ -65,14 +65,14 @@ async function handleRequest(req: Request): Promise<Response> {
     if (body?.agent !== "analyst") return err("Unknown agent");
     const db = adminClient();
     if (!(await featureOn(db, "analyst"))) return err("The owner analyst is switched off (pssai_analyst)", 403);
-    if (body.op === "usage") return json(await monthSpend(db));
+    if (body.op === "usage") return json({ ...await monthSpend(db), providers: providerStatus() });
 
     const question = typeof body.question === "string" ? body.question.trim() : "";
     if (!question || question.length > MAX_QUESTION) return err(`Ask a question of up to ${MAX_QUESTION} characters`);
     const history = parseHistory(body.history);
     if (!history) return err("Invalid chat history");
     const client = aiClient();
-    if (!client) return err("AI is not set up yet: the AI_API_KEY secret is missing", 503);
+    if (!client) return err(AI_SETUP_MESSAGE, 503);
     const budget = await monthSpend(db);
     if (budget.usedUsd >= budget.capUsd) return err(`This month's AI budget ($${budget.capUsd}) is used up. The owner can raise pssai_ai_budget_usd.`, 429);
 
@@ -156,7 +156,7 @@ async function handleJob(req: Request): Promise<Response> {
     if (body?.job !== "owner_brief") return err(`Unknown job: ${body?.job}`);
     if (!(await featureOn(db, "analyst"))) return json({ skipped: "pssai_analyst is off" });
     const client = aiClient();
-    if (!client) return json({ skipped: "AI_API_KEY is not set" });
+    if (!client) return json({ skipped: AI_SETUP_MESSAGE });
     const { data: existing } = await db.from("owner_briefs").select("brief_date").eq("brief_date", todayISO()).maybeSingle();
     if (existing && body.force !== true) return json({ skipped: "today's brief is already written" });
     const budget = await monthSpend(db);

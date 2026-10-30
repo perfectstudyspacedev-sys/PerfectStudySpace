@@ -5,7 +5,7 @@ import { spawnSync } from 'node:child_process'
 import { join } from 'node:path'
 
 const dir = 'tests/server'
-const deno = process.platform === 'win32' ? 'node_modules/.bin/deno.cmd' : 'node_modules/.bin/deno'
+const deno = process.platform === 'win32' ? 'node_modules/deno/deno.exe' : 'node_modules/.bin/deno'
 const args = process.argv.slice(2)
 const only = args.filter((a) => !a.startsWith('--'))   // name filters, e.g. `golden`
 const flags = args.filter((a) => a.startsWith('--'))   // passed to each suite, e.g. --update

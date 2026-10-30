@@ -1,4 +1,4 @@
-project_id = "ozatixapvxwrwbpdxuzt"
+project_id = "zripsszkprhtyccukrir"
 
 # This function performs its own authentication: every request carries a Bearer token that
 # authStaff() verifies against JWT_SECRET and checks against the staff table, and each action

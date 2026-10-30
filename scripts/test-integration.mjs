@@ -5,7 +5,7 @@ import { spawnSync } from 'node:child_process'
 import { join } from 'node:path'
 
 const dir = 'tests/integration'
-const deno = process.platform === 'win32' ? 'node_modules/.bin/deno.cmd' : 'node_modules/.bin/deno'
+const deno = process.platform === 'win32' ? 'node_modules/deno/deno.exe' : 'node_modules/.bin/deno'
 const only = process.argv.slice(2).filter((a) => !a.startsWith('--'))
 const suites = readdirSync(dir).filter((f) => f.endsWith('_test.ts') && (!only.length || only.some((o) => f.includes(o)))).sort()
 let failed = 0

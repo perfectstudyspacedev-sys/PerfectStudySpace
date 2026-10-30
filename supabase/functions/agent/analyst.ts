@@ -7,8 +7,9 @@
 import type Anthropic from "npm:@anthropic-ai/sdk@0.131.0";
 import type { StaffRow } from "../_shared/auth.ts";
 import { addDays, todayISO } from "../_shared/dates.ts";
-import { type AgentTool, compactJson, emptyTotals, finishRun, type LoopResult, type RunStatus, startRun, stripPersonal, toolLoop } from "../_shared/ai.ts";
+import { type AIClient, type AgentTool, compactJson, emptyTotals, finishRun, type LoopResult, type RunStatus, startRun, stripPersonal, toolLoop } from "../_shared/ai.ts";
 import { REGISTRY } from "../api/actions.ts";
+import { initialModel } from "../_shared/ai-providers.ts";
 import { runAction } from "../api/run.ts";
 import type { Ctx } from "../api/registry.ts";
 
@@ -99,7 +100,7 @@ export interface AnalystAnswer {
 
 /** One owner question (with the earlier turns of this chat as plain text). */
 export async function askAnalyst(opts: {
-  db: Ctx["db"]; client: Anthropic; model: string; owner: StaffRow; staffId: string | null;
+  db: Ctx["db"]; client: AIClient; model: string; owner: StaffRow; staffId: string | null;
   question: string; history: { role: "user" | "assistant"; text: string }[];
 }): Promise<AnalystAnswer> {
   const { db, client, model, owner } = opts;
@@ -112,7 +113,7 @@ export async function askAnalyst(opts: {
     ];
     const result = await toolLoop({ client, model, system: systemPrompt(todayISO(), branches ?? []), messages, tools: analystTools(db, owner, runId) });
     await finishRun(db, runId, runStatus(result), result.totals, result.error);
-    return { answer: answerText(result), stop: result.stop, runId, model, toolCalls: result.toolCalls, costUsd: result.totals.costUsd };
+    return { answer: answerText(result), stop: result.stop, runId, model: result.totals.models.at(-1) ?? initialModel(model), toolCalls: result.toolCalls, costUsd: result.totals.costUsd };
   } catch (e) {
     await finishRun(db, runId, "error", emptyTotals(), e instanceof Error ? e.message : String(e));
     throw e;
@@ -130,7 +131,7 @@ function answerText(r: LoopResult): string {
 }
 
 /** The 07:00 brief: yesterday's figures for every branch, saved through save_owner_brief. */
-export async function writeOwnerBrief(opts: { db: Ctx["db"]; client: Anthropic; model: string; owner: StaffRow }) {
+export async function writeOwnerBrief(opts: { db: Ctx["db"]; client: AIClient; model: string; owner: StaffRow }) {
   const { db, client, model, owner } = opts;
   const today = todayISO();
   const yesterday = addDays(today, -1);

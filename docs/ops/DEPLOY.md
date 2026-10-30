@@ -1,5 +1,25 @@
 # Deploying PSS-AI
 
+For the current manual deployment, start with [MANUAL-RELEASE-2026-10-30.md](MANUAL-RELEASE-2026-10-30.md).
+
+Confirmed source: [perfectstudyspacedev-sys/PerfectStudySpace, branch pss-ai/all-phases](https://github.com/perfectstudyspacedev-sys/PerfectStudySpace/tree/pss-ai/all-phases).
+Confirmed backend: `zripsszkprhtyccukrir`. Cloudflare Pages project: `perfectstudyspace`.
+The local Supabase configuration now targets that backend. Verify the Cloudflare deployment branch
+and build environment against these details; the local workspace has no Git metadata.
+
+Read-only SQL readiness report: [full-system-diagnostic.sql](full-system-diagnostic.sql).
+Run the complete file as postgres in the confirmed project's SQL Editor. It changes no business
+data and does not execute jobs or AI. Read the result's scope/status notes before treating it as a test result.
+See [DATABASE-DIAGNOSTIC.md](DATABASE-DIAGNOSTIC.md) for result meanings and local validation.
+The first user-run report is interpreted in [LIVE-READINESS-2026-10-29.md](LIVE-READINESS-2026-10-29.md).
+For its missing pg_cron/schedules, [prepare-missing-schedules.sql](prepare-missing-schedules.sql)
+installs missing jobs paused, preserving existing configuration; activate per job after live checks.
+
+**AI provider update:** Ollama Cloud → Gemini → Claude is now implemented. Apply migration 073
+before deploying the functions, configure backend provider keys, and follow
+[AI-PROVIDERS.md](AI-PROVIDERS.md) for supported tasks, model overrides and tests. Older Claude-only
+setup instructions below remain valid when only AI_API_KEY is configured.
+
 Branch `pss-ai/all-phases` — every phase is built on it. One deploy brings in every phase built
 so far; every new feature stays switched off until you turn it on (parts 2 and 3 below).
 Order matters (plan rule R10): **database → functions → website**.
@@ -27,6 +47,8 @@ only. Phase 1 and 2 tables are unused until you switch their features on. `059` 
 create two **private** Storage buckets, `payment-proofs` and `id-photos` (no public links).
 
 ## 3. Secrets and extensions
+For the complete current names, values and optional settings, use [SUPABASE-SECRETS.md](SUPABASE-SECRETS.md).
+
 - Database → Extensions: turn on **pg_cron** and **pg_net**.
 - Edge Functions → Secrets:
   - `STAFF_JWT_SECRET` — a long random value. It signs staff logins. The live project may already

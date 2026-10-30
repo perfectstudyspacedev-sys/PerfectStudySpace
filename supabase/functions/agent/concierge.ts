@@ -7,7 +7,7 @@
 import type Anthropic from "npm:@anthropic-ai/sdk@0.131.0";
 import type { StudentScope } from "../_shared/student.ts";
 import { todayISO } from "../_shared/dates.ts";
-import { type AgentTool, compactJson, emptyTotals, finishRun, type LoopResult, type RunStatus, startRun, stripPersonal, toolLoop } from "../_shared/ai.ts";
+import { type AIClient, type AgentTool, compactJson, emptyTotals, finishRun, type LoopResult, type RunStatus, startRun, stripPersonal, toolLoop } from "../_shared/ai.ts";
 import { REGISTRY } from "../api/actions.ts";
 import { runAction } from "../api/run.ts";
 import type { Ctx } from "../api/registry.ts";
@@ -88,7 +88,7 @@ export async function chatContext(db: Ctx["db"], studentId: string): Promise<Ant
 const runStatus = (r: LoopResult): RunStatus => (r.stop === "done" ? "ok" : r.stop);
 
 /** Runs the concierge on the student's latest message and saves its reply (a draft in shadow mode). */
-export async function answerStudent(opts: { db: Ctx["db"]; client: Anthropic; model: string; student: StudentScope; messageId: string; shadow: boolean }) {
+export async function answerStudent(opts: { db: Ctx["db"]; client: AIClient; model: string; student: StudentScope; messageId: string; shadow: boolean }) {
   const { db, client, model, student, shadow } = opts;
   const runId = await startRun(db, { agent: AGENT_NAME, model, studentId: student.id });
   try {

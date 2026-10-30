@@ -56,8 +56,8 @@ export default function AnalystPage() {
       .flatMap((t) => [{ role: 'user', text: t.question }, { role: 'assistant', text: t.answer.slice(0, 4000) }])
     try {
       const res = await agentApi({ agent: 'analyst', question: q, history, deep })
-      setChat((c) => [...c, { question: q, answer: res.answer, stop: res.stop, tools: res.toolCalls ?? [], deep }])
-      if (res.budget) setBudget(res.budget)
+      setChat((c) => [...c, { question: q, answer: res.answer, stop: res.stop, tools: res.toolCalls ?? [], deep, model: res.model }])
+      if (res.budget) setBudget((b) => ({ ...b, ...res.budget }))
       setQuestion('')
     } catch (err) {
       setError(err.message)
@@ -79,6 +79,19 @@ export default function AnalystPage() {
         figures on the Revenue and Reports pages.
         {budget && <> · AI spend this month: ${Number(budget.usedUsd).toFixed(2)} of ${Number(budget.capUsd).toFixed(2)}</>}
       </p>
+      {budget?.providers && (
+        <details className="card" style={{ marginBottom: '1rem' }}>
+          <summary style={{ cursor: 'pointer' }}>AI models: Ollama → Gemini → Claude</summary>
+          <p style={{ color: 'var(--text-muted)', fontSize: '0.8rem' }}>The first configured provider that supports the task is used. Structured results use Gemini or Claude.</p>
+          <table className="data-table" style={{ width: '100%', fontSize: '0.8rem' }}>
+            <thead><tr><th scope="col">Provider</th><th scope="col">Setup</th><th scope="col">Routine model</th><th scope="col">Deep model</th></tr></thead>
+            <tbody>{budget.providers.map((p) => <tr key={p.provider}>
+              <td>{{ ollama: 'Ollama Cloud', gemini: 'Gemini', claude: 'Claude' }[p.provider] ?? p.provider}</td>
+              <td>{p.configured ? 'Key configured' : 'Key needed'}</td><td>{p.routine}</td><td>{p.hard}</td>
+            </tr>)}</tbody>
+          </table>
+        </details>
+      )}
       {!analyst && (
         <p className="error-msg" style={{ marginBottom: '1rem' }}>The analyst is switched off (pssai_analyst).</p>
       )}
@@ -102,6 +115,7 @@ export default function AnalystPage() {
               {t.tools.length ? `Looked at: ${[...new Set(t.tools.map((x) => TOOL_LABEL[x.name] ?? x.name))].join(', ')}` : 'No reports looked at'}
               {t.tools.some((x) => !x.ok) && ' (some reports could not be read)'}
               {t.deep && ' · deep answer'}
+              {t.model && ` · ${t.model}`}
             </p>
           </div>
         ))}
