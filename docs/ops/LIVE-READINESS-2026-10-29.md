@@ -27,7 +27,7 @@ the original migration. No additional RLS repair is indicated by the submitted r
 **Immediate database preparation**
 
 Run [prepare-missing-schedules.sql](prepare-missing-schedules.sql) as postgres in this project's
-SQL Editor. It installs pg_cron using Supabase's documented schema/grants, verifies the existing
+SQL Editor. It installs pg_cron using Supabase's documented schema, verifies the existing
 Vault target/secret and helper prerequisites, and creates the 27 missing schedules **paused**.
 It preserves existing jobs and settings and makes no HTTP/model/business-action calls.
 No placeholders or credentials need to be pasted into the script.
@@ -48,6 +48,13 @@ The revised diagnostic passed isolated empty/incomplete/populated-schema tests a
 001–073 migration execution. Schedule setup logic passed contract tests with simulated cron
 APIs for exact job/cadence/helper mapping, new-job pausing, rerun preservation, wrong-project
 rejection and duplicate detection. The real Supabase pg_cron engine was not executed locally.
+
+**Update, 30 October:** the user reported a Supabase-managed cron privilege error on setup,
+then listed all 27 expected jobs as paused. The failure may have occurred during extension
+setup or a managed event trigger; it does not establish what committed in the failed run.
+The setup file skips CREATE EXTENSION when pg_cron is installed and avoids broad grants on
+managed cron tables. The revised file changes the live project only if someone runs it.
+Verify extension/helper/job configuration read-only; do not run CASCADE to force revocation.
 
 References: [Supabase Cron installation](https://supabase.com/docs/guides/cron/install),
 [activation/deactivation](https://supabase.com/docs/guides/cron/quickstart).

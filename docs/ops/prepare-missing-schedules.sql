@@ -10,10 +10,15 @@ BEGIN;
 SET LOCAL lock_timeout = '5s';
 SELECT pg_advisory_xact_lock(hashtext('pss:prepare-missing-schedules'));
 
--- Supabase documented pg_cron install schema and postgres grants.
-CREATE EXTENSION IF NOT EXISTS pg_cron WITH SCHEMA pg_catalog;
-GRANT USAGE ON SCHEMA cron TO postgres;
-GRANT ALL PRIVILEGES ON ALL TABLES IN SCHEMA cron TO postgres;
+-- Supabase manages cron privileges. Avoid re-running extension setup when it is
+-- already installed, and do not grant broad access to Supabase-managed tables.
+DO $extension$
+BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_extension WHERE extname = 'pg_cron') THEN
+    EXECUTE 'CREATE EXTENSION pg_cron WITH SCHEMA pg_catalog';
+  END IF;
+END;
+$extension$;
 
 CREATE TEMP TABLE pss_schedule_setup_report (
   job_name text, outcome text, schedule_utc text, active boolean
