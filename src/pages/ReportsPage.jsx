@@ -263,7 +263,7 @@ export default function ReportsPage() {
           )}
 
           {(report.attendanceTrend?.length > 0 || report.registrationsTrend?.length > 0) && (
-            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(340px, 1fr))', gap: '1rem', marginBottom: '1rem' }}>
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(min(100%, 340px), 1fr))', gap: '1rem', marginBottom: '1rem' }}>
               {report.attendanceTrend?.length > 0 && (
                 <div className="card chart-card">
                   <p style={{ color: 'var(--accent)', fontWeight: 700, fontSize: '0.78rem', letterSpacing: '0.08em', marginBottom: '1.25rem', textTransform: 'uppercase' }}>

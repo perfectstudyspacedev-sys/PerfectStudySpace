@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState } from 'react'
 import { api } from '../lib/api'
 import { formatCurrency, formatDate, todayISO } from '../lib/utils'
 import { useFeatureFlags } from '../hooks/useFeatureFlags'
+import { copyText } from '../lib/clipboard'
 
 // PSS-AI Phase 3 — the owner's growth tools, one tab each: today's walk-in prices (I3), seat hours
 // resold (O1/SP10), referral links (C10) and the exam calendar (I25). Each tab shows only when
@@ -141,13 +142,14 @@ function ResalesTab() {
 function ReferralsTab() {
   const { data, error, setError, load } = useLoad('list_referral_links')
   const [form, setForm] = useState({ branchId: '', channel: 'instagram', label: '' })
+  const [copyNotice, setCopyNotice] = useState('')
   const { data: branches } = useLoad('list_walkin_prices')
   if (!data) return error ? <p className="error-msg">{error}</p> : <p style={{ color: 'var(--text-muted)' }}>Loading…</p>
   const create = async () => {
     try { await api('create_referral_link', form); setForm((f) => ({ ...f, label: '' })); load() } catch (e) { setError(e.message) }
   }
   const toggle = async (l) => { try { await api('update_referral_link', { id: l.id, isActive: !l.isActive }); load() } catch (e) { setError(e.message) } }
-  const copy = (url) => { try { navigator.clipboard?.writeText(url) } catch { /* the link is shown anyway */ } }
+  const copy = async url => setCopyNotice(await copyText(url) ? 'Link copied.' : `Copy this link: ${url}`)
   return (
     <>
       <p style={{ color: 'var(--text-muted)', fontSize: '0.85rem' }}>One link per place you advertise. People who sign up or chat through it are counted; "joined" means they took a membership. Making a new sign-up link never breaks these.</p>
@@ -165,6 +167,8 @@ function ReferralsTab() {
           <button type="button" className="btn btn-primary" disabled={!form.branchId} onClick={create}>Make link</button>
         </div>
       </div>
+      {copyNotice && <p role="status" style={{ overflowWrap: 'anywhere', marginBottom: '0.75rem' }}>{copyNotice}</p>}
+      <div className="table-scroll">
       <table style={{ width: '100%', fontSize: '0.85rem' }} data-testid="referral-table">
         <thead><tr><th align="left">Link</th><th align="left">Channel</th><th align="right">Sign-ups</th><th align="right">Chats</th><th align="right">Joined</th><th /></tr></thead>
         <tbody>
@@ -178,6 +182,7 @@ function ReferralsTab() {
           ))}
         </tbody>
       </table>
+      </div>
     </>
   )
 }

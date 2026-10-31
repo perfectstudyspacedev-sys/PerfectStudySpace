@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { NavLink, useLocation } from 'react-router-dom'
 import { filterNavigation } from '../../lib/navigation'
+import { lockBodyScroll } from '../../lib/bodyScroll'
 
 export default function WorkspaceNavigation({ groups, open, onClose }) {
   const [query, setQuery] = useState('')
@@ -12,8 +13,7 @@ export default function WorkspaceNavigation({ groups, open, onClose }) {
   useEffect(() => {
     if (!open || !window.matchMedia('(max-width: 1023px)').matches) return undefined
     const previousFocus = document.activeElement
-    const previousOverflow = document.body.style.overflow
-    document.body.style.overflow = 'hidden'
+    const unlock = lockBodyScroll()
     navRef.current?.querySelector('input')?.focus()
     const keydown = (event) => {
       if (event.key === 'Escape') { event.preventDefault(); onClose(); return }
@@ -27,7 +27,7 @@ export default function WorkspaceNavigation({ groups, open, onClose }) {
     document.addEventListener('keydown', keydown)
     window.addEventListener('resize', resize)
     return () => {
-      document.body.style.overflow = previousOverflow
+      unlock()
       document.removeEventListener('keydown', keydown)
       window.removeEventListener('resize', resize)
       if (previousFocus?.isConnected) previousFocus.focus()

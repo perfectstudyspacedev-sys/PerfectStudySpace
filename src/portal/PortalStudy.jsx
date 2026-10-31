@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useState } from 'react'
+import { copyText } from '../lib/clipboard'
 import qrcode from 'qrcode-generator'
 import { portalApi } from '../lib/api'
 import { fmtDate, hoursText } from './portalUtils'
@@ -152,6 +153,7 @@ export function PortalCertificates() {
   const today = new Date(Date.now() + 5.5 * 3600e3).toISOString().slice(0, 10)
   const [from, setFrom] = useState(`${today.slice(0, 7)}-01`)
   const [to, setTo] = useState(today)
+  const [copyNotice, setCopyNotice] = useState('')
   const [busy, setBusy] = useState(false)
   if (!data) return <Loading error={error} />
   if (!data.on) return <Off />
@@ -180,13 +182,14 @@ export function PortalCertificates() {
             {!c.revoked && (
               <div style={{ display: 'flex', gap: '0.4rem', marginTop: '0.3rem', flexWrap: 'wrap' }}>
                 <button type="button" className="btn btn-ghost" onClick={() => printCertificate(c)}>🖨 Print</button>
-                <button type="button" className="btn btn-ghost" onClick={() => navigator.clipboard?.writeText(c.verifyUrl)}>Copy check link</button>
+                <button type="button" className="btn btn-ghost" onClick={async () => setCopyNotice(await copyText(c.verifyUrl) ? 'Check link copied.' : `Copy this check link: ${c.verifyUrl}`)}>Copy check link</button>
                 <button type="button" className="btn btn-ghost" onClick={() => revoke(c)}>Withdraw</button>
               </div>
             )}
           </li>
         ))}
       </ul>
+      {copyNotice && <p role="status" style={{ overflowWrap: 'anywhere', marginTop: '0.75rem' }}>{copyNotice}</p>}
     </div>
   )
 }
@@ -194,6 +197,7 @@ export function PortalCertificates() {
 export function PortalFamily() {
   const { data, error, load, setError } = useMe('me_parent_info')
   const [url, setUrl] = useState('')
+  const [copyNotice, setCopyNotice] = useState('')
   const [busy, setBusy] = useState(false)
   if (!data) return <Loading error={error} />
   if (!data.on) return <Off />
@@ -218,10 +222,11 @@ export function PortalFamily() {
           <code>{url}</code>
           <div style={{ display: 'flex', gap: '0.4rem', marginTop: '0.4rem' }}>
             <button type="button" className="btn btn-primary" onClick={share}>Share on WhatsApp</button>
-            <button type="button" className="btn btn-ghost" onClick={() => navigator.clipboard?.writeText(url)}>Copy</button>
+            <button type="button" className="btn btn-ghost" onClick={async () => setCopyNotice(await copyText(url) ? 'Link copied.' : 'Copy the link shown above manually.')}>Copy</button>
           </div>
         </div>
       )}
+      {copyNotice && <p role="status">{copyNotice}</p>}
       {data.link ? (
         <p>A link is live since {fmtDate(String(data.link.createdAt).slice(0, 10))}{data.link.lastViewedAt ? `; last opened ${fmtDate(String(data.link.lastViewedAt).slice(0, 10))}` : '; not opened yet'}.</p>
       ) : !url && <p>No link yet.</p>}

@@ -1,4 +1,5 @@
-import { useState, useEffect, useCallback } from 'react'
+import { useState, useEffect, useCallback, useRef } from 'react'
+import useDialogFocus from '../hooks/useDialogFocus'
 import { api } from '../lib/api'
 import { useFeatureFlags } from '../hooks/useFeatureFlags'
 import { nowTimeStr, localTimeStrToISO, formatCurrency, openWhatsApp, DEFAULT_WELCOME_TEMPLATE } from '../lib/utils'
@@ -17,6 +18,8 @@ export default function WalkInModal({ branchId, onClose, onDone }) {
   const [startTime, setStartTime] = useState(nowTimeStr)
   const [error, setError] = useState('')
   const [loading, setLoading] = useState(false)
+  const dialog = useRef(null)
+  useDialogFocus(dialog, { onClose, busy: loading })
   const [receipt, setReceipt] = useState(null)
   const [isNewStudent, setIsNewStudent] = useState(false)
   const [waSent, setWaSent] = useState(false)
@@ -154,8 +157,8 @@ export default function WalkInModal({ branchId, onClose, onDone }) {
   }
 
   return (
-    <div className="modal-overlay" onClick={onClose}>
-      <div className="modal" style={{ maxWidth: 420 }} onClick={(e) => e.stopPropagation()}>
+    <div className="modal-overlay" onClick={loading ? undefined : onClose}>
+      <div ref={dialog} role="dialog" aria-modal="true" aria-label="Walk-in booking" tabIndex={-1} className="modal" style={{ maxWidth: 420 }} onClick={(e) => e.stopPropagation()}>
         {receipt ? (
           <>
             <h2 style={{ color: 'var(--accent)' }}>Walk-in Confirmed</h2>
@@ -197,7 +200,7 @@ export default function WalkInModal({ branchId, onClose, onDone }) {
             <form onSubmit={handleSubmit}>
               <div className="form-group" style={{ position: 'relative' }}>
                 <label>Name</label>
-                <input value={name} onChange={(e) => setName(e.target.value)} placeholder="Enter your Full Name" autoComplete="off" autoFocus required />
+                <input value={name} onChange={(e) => setName(e.target.value)} placeholder="Enter your Full Name" autoComplete="off" data-initial-focus required />
                 {selectedStudent && (
                   <p style={{ fontSize: '0.75rem', color: '#4ade80', marginTop: '0.3rem' }}>✓ Matched existing student</p>
                 )}
@@ -270,7 +273,7 @@ export default function WalkInModal({ branchId, onClose, onDone }) {
               {priceNote && <p data-testid="walkin-price-note" style={{ fontSize: '0.75rem', color: 'var(--text-muted)', marginBottom: '1rem' }}>{priceNote}</p>}
               {error && <p className="error-msg">{error}</p>}
               <div className="modal-actions">
-                <button type="button" className="btn btn-ghost" onClick={onClose}>Cancel</button>
+                <button type="button" className="btn btn-ghost" disabled={loading} onClick={onClose}>Cancel</button>
                 <button type="submit" className="btn btn-primary" disabled={loading || !branchId}>
                   {loading ? 'Registering…' : `Register — ${formatCurrency(walkinFee(hours))}`}
                 </button>

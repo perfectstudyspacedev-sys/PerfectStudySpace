@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef, useCallback } from 'react'
+import { useState, useEffect, useRef, useCallback, useId } from 'react'
 import { Outlet, useNavigate } from 'react-router-dom'
 import { useAuth } from '../../context/AuthContext'
 import { useSessionAlerts } from '../../hooks/useSessionAlerts'
@@ -9,6 +9,8 @@ import { useFeatureFlags } from '../../hooks/useFeatureFlags'
 import { api, COMBINED_HALL_ID } from '../../lib/api'
 import { staffNavigation } from '../../lib/navigation'
 import WorkspaceNavigation from './WorkspaceNavigation'
+import BranchSwitcher from './BranchSwitcher'
+import useDialogFocus from '../../hooks/useDialogFocus'
 
 const TOAST_META = {
   end: { icon: '🔔', title: 'Session Ended', color: '#ff8888', bg: '#1a0000', border: '#ff4444', shadow: 'rgba(255,60,60,0.35)' },
@@ -67,6 +69,7 @@ function SessionToasts({ toasts, dismiss, dismissAll }) {
             <button
               type="button"
               onClick={() => dismiss(t.id)}
+              aria-label={`Dismiss ${meta.title} notification`}
               style={{
                 background: 'none', border: 'none', color: 'var(--text-muted)',
                 cursor: 'pointer', fontSize: '1rem', padding: '0.2rem 0.4rem', lineHeight: 1,
@@ -96,82 +99,41 @@ function SessionToasts({ toasts, dismiss, dismissAll }) {
 function NotificationBell({ toasts, dismiss, dismissAll }) {
   const [open, setOpen] = useState(false)
   const wrapRef = useRef(null)
-  const warnCount = toasts.filter(t => t.level === 'warn').length
-  const endCount = toasts.filter(t => t.level === 'end').length
-  const messageCount = toasts.filter(t => t.level === 'message').length
-  const crossBranchCount = toasts.filter(t => t.level === 'cross_branch').length
-  const taskCount = toasts.filter(t => t.level === 'task').length
-  const newEnquiryCount = toasts.filter(t => t.level === 'new_enquiry').length
-  const newSignupCount = toasts.filter(t => t.level === 'new_signup').length
+  const buttonRef = useRef(null)
+  const popoverId = useId()
 
   useEffect(() => {
     if (!open) return
     const handler = (e) => {
       if (wrapRef.current && !wrapRef.current.contains(e.target)) setOpen(false)
     }
+    const keydown = event => {
+      if (event.key === 'Escape') { event.preventDefault(); setOpen(false); buttonRef.current?.focus() }
+    }
     document.addEventListener('mousedown', handler)
-    return () => document.removeEventListener('mousedown', handler)
+    document.addEventListener('keydown', keydown)
+    return () => {
+      document.removeEventListener('mousedown', handler)
+      document.removeEventListener('keydown', keydown)
+    }
   }, [open])
 
   return (
-    <div ref={wrapRef} style={{ position: 'relative', display: 'flex', alignItems: 'center', flexShrink: 0 }}>
+    <div className="notification-wrap" ref={wrapRef} style={{ position: 'relative', display: 'flex', alignItems: 'center', flexShrink: 0 }}>
       <button
+        ref={buttonRef}
         type="button"
         onClick={() => setOpen(o => !o)}
         style={{ background: 'none', border: 'none', cursor: 'pointer', fontSize: '1.2rem', padding: '0.2rem', position: 'relative', lineHeight: 1 }}
         aria-label="Notifications"
+        aria-expanded={open} aria-controls={open ? popoverId : undefined}
       >
         🔔
-        {(warnCount > 0 || endCount > 0 || messageCount > 0 || crossBranchCount > 0 || taskCount > 0 || newEnquiryCount > 0 || newSignupCount > 0) && (
-          <span style={{ position: 'absolute', top: -6, right: -10, display: 'flex', gap: 2 }}>
-            {warnCount > 0 && (
-              <span style={{
-                background: '#ffb800', color: '#1a1200', borderRadius: '50%', width: 16, height: 16,
-                fontSize: '0.62rem', fontWeight: 700, display: 'flex', alignItems: 'center', justifyContent: 'center',
-              }}>{warnCount}</span>
-            )}
-            {endCount > 0 && (
-              <span style={{
-                background: '#ff4444', color: '#fff', borderRadius: '50%', width: 16, height: 16,
-                fontSize: '0.62rem', fontWeight: 700, display: 'flex', alignItems: 'center', justifyContent: 'center',
-              }}>{endCount}</span>
-            )}
-            {messageCount > 0 && (
-              <span style={{
-                background: '#ff9500', color: '#1a1000', borderRadius: '50%', width: 16, height: 16,
-                fontSize: '0.62rem', fontWeight: 700, display: 'flex', alignItems: 'center', justifyContent: 'center',
-              }}>{messageCount}</span>
-            )}
-            {crossBranchCount > 0 && (
-              <span style={{
-                background: '#8b5cf6', color: '#fff', borderRadius: '50%', width: 16, height: 16,
-                fontSize: '0.62rem', fontWeight: 700, display: 'flex', alignItems: 'center', justifyContent: 'center',
-              }}>{crossBranchCount}</span>
-            )}
-            {taskCount > 0 && (
-              <span style={{
-                background: '#4ade80', color: '#0d1a0d', borderRadius: '50%', width: 16, height: 16,
-                fontSize: '0.62rem', fontWeight: 700, display: 'flex', alignItems: 'center', justifyContent: 'center',
-              }}>{taskCount}</span>
-            )}
-            {newEnquiryCount > 0 && (
-              <span style={{
-                background: '#38bdf8', color: '#0a1a24', borderRadius: '50%', width: 16, height: 16,
-                fontSize: '0.62rem', fontWeight: 700, display: 'flex', alignItems: 'center', justifyContent: 'center',
-              }}>{newEnquiryCount}</span>
-            )}
-            {newSignupCount > 0 && (
-              <span style={{
-                background: '#f472b6', color: '#1f0a17', borderRadius: '50%', width: 16, height: 16,
-                fontSize: '0.62rem', fontWeight: 700, display: 'flex', alignItems: 'center', justifyContent: 'center',
-              }}>{newSignupCount}</span>
-            )}
-          </span>
-        )}
+        {toasts.length > 0 && <span className="notification-count" aria-hidden="true">{toasts.length > 99 ? '99+' : toasts.length}</span>}
       </button>
 
       {open && (
-        <div style={{
+        <div className="notification-popover" id={popoverId} role="region" aria-label="Notifications" style={{
           position: 'absolute', top: 'calc(100% + 10px)', right: 0,
           width: 'min(320px, calc(100vw - 2rem))', maxHeight: 360, overflowY: 'auto',
           background: '#141414', border: '1px solid var(--border)', borderRadius: 10, boxShadow: '0 16px 44px rgba(0,0,0,0.55)',
@@ -202,7 +164,7 @@ function NotificationBell({ toasts, dismiss, dismissAll }) {
                     </p>
                     <p style={{ fontSize: '0.78rem', color: 'var(--text-muted)' }}>{t.message}</p>
                   </div>
-                  <button type="button" onClick={() => dismiss(t.id)} style={{ background: 'none', border: 'none', color: 'var(--text-muted)', cursor: 'pointer' }}>✕</button>
+                  <button type="button" onClick={() => dismiss(t.id)} aria-label={`Dismiss ${meta.title} notification`} style={{ background: 'none', border: 'none', color: 'var(--text-muted)', cursor: 'pointer' }}>✕</button>
                 </div>
               )
             })
@@ -239,6 +201,8 @@ export default function Shell() {
   const [endSessionPassword, setEndSessionPassword] = useState('')
   const [endSessionError, setEndSessionError] = useState('')
   const [endSessionLoading, setEndSessionLoading] = useState(false)
+  const endSessionRef = useRef(null)
+  useDialogFocus(endSessionRef, { onClose: () => setEndSessionModal(false), busy: endSessionLoading, enabled: endSessionModal })
   const [navOpen, setNavOpen] = useState(false)
   const closeNav = useCallback(() => setNavOpen(false), [])
   const navigation = staffNavigation({ isOwner, flags, pendingSignups: signups.requests.length })
@@ -282,12 +246,9 @@ export default function Shell() {
           <div className="topbar-branch-label">
             <span className="workspace-eyebrow">Working branch</span>
             {isOwner && branches.length > 1 && (
-              <div className="branch-switcher">
-                <select
-                  aria-label="Working branch"
+              <BranchSwitcher
                   value={branchId || ''}
-                  onChange={(e) => {
-                    const next = e.target.value
+                  onChange={(next) => {
                     selectBranch(next)
                     // Combined Hall has no dedicated route anymore — every nav page renders
                     // a combined view when isCombinedHall is true. Only force a jump to
@@ -296,15 +257,13 @@ export default function Shell() {
                     // page staff is already on, same as it's always worked.
                     if (next === COMBINED_HALL_ID) navigate('/')
                   }}
-                >
-                  {[...branches].sort((a, b) => (a.name === 'Ram Nagar' ? -1 : b.name === 'Ram Nagar' ? 1 : 0)).map(b => (
-                    <option key={b.id} value={b.id}>{b.name}</option>
-                  ))}
-                  <option value={COMBINED_HALL_ID}>All branches</option>
-                </select>
-              </div>
+                  options={[
+                    ...[...branches].sort((a, b) => (a.name === 'Ram Nagar' ? -1 : b.name === 'Ram Nagar' ? 1 : 0)).map(branch => ({ value: branch.id, label: branch.name })),
+                    { value: COMBINED_HALL_ID, label: 'All branches' },
+                  ]}
+              />
             )}
-            {!isOwner && activeBranch && (
+            {(!isOwner || branches.length <= 1) && activeBranch && (
               <span className="mono" style={{ fontSize: '1.1rem', color: 'var(--accent)' }}>{activeBranch.name}</span>
             )}
           </div>
@@ -338,19 +297,20 @@ export default function Shell() {
       <SessionToasts toasts={toasts} dismiss={dismiss} dismissAll={dismissAll} />
 
       {endSessionModal && (
-        <div className="modal-overlay" onClick={() => setEndSessionModal(false)}>
-          <div className="modal" style={{ maxWidth: 380 }} onClick={(e) => e.stopPropagation()}>
-            <h2>End Session</h2>
+        <div className="modal-overlay" onClick={endSessionLoading ? undefined : () => setEndSessionModal(false)}>
+          <div ref={endSessionRef} className="modal" role="dialog" aria-modal="true" aria-labelledby="end-session-title" tabIndex={-1} style={{ maxWidth: 380 }} onClick={(e) => e.stopPropagation()}>
+            <h2 id="end-session-title">End Session</h2>
             <p style={{ color: 'var(--text-muted)', fontSize: '0.9rem', marginBottom: '1rem' }}>
               This logs you out immediately and locks your account for the rest of today — enter your password to confirm.
             </p>
             <form onSubmit={confirmEndSession}>
               <div className="form-group">
-                <label>Password</label>
+                <label htmlFor="end-session-password">Password</label>
                 <input
+                  id="end-session-password" data-initial-focus
                   type="password" value={endSessionPassword}
                   onChange={(e) => setEndSessionPassword(e.target.value)}
-                  autoFocus required
+                  required
                 />
               </div>
               {endSessionError && <p className="error-msg">{endSessionError}</p>}
