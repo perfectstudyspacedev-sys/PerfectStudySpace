@@ -33,14 +33,16 @@ export default function LoginPage() {
         <h1>Perfect Study Space</h1>
       </div>
       <div className="card login-card">
+        <h2>Welcome back</h2>
+        <p className="login-caption">Sign in to manage your study space.</p>
         <form onSubmit={handleSubmit}>
           <div className="form-group">
-            <label>Username</label>
-            <input value={username} onChange={(e) => setUsername(e.target.value)} autoComplete="username" required />
+            <label htmlFor="staff-username">Username</label>
+            <input id="staff-username" value={username} onChange={(e) => setUsername(e.target.value)} autoComplete="username" required />
           </div>
           <div className="form-group">
-            <label>Password</label>
-            <input type="password" value={password} onChange={(e) => setPassword(e.target.value)} autoComplete="current-password" required />
+            <label htmlFor="staff-password">Password</label>
+            <input id="staff-password" type="password" value={password} onChange={(e) => setPassword(e.target.value)} autoComplete="current-password" required />
           </div>
           {error && <p className="error-msg">{error}</p>}
           <button type="submit" className="btn btn-primary" style={{ width: '100%', marginTop: '0.5rem' }} disabled={loading}>

@@ -609,7 +609,7 @@ export default function DashboardPage() {
   return (
     <>
       <div className="page-header">
-        <h1>{activeBranch?.name ?? 'Dashboard'}</h1>
+        <div><h1>Dashboard</h1><p className="page-caption">Today at {activeBranch?.name ?? 'your study space'}</p></div>
         <button type="button" className="btn btn-primary" onClick={() => setShowCheckIn(true)}>
           ✓ Attendance
         </button>
@@ -618,7 +618,7 @@ export default function DashboardPage() {
       <OwnerBriefCard />
       <IntegrityReportCard />
 
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(300px, 1fr))', gap: '1rem', marginBottom: '1.5rem' }}>
+      <div className="overview-panels">
         <div className="card">
           <h3 style={{ color: 'var(--accent)', marginBottom: '0.75rem' }}>Today&apos;s Action Items</h3>
           {(data?.actionable?.expiredToday?.length ?? 0) === 0 ? (
@@ -711,11 +711,11 @@ export default function DashboardPage() {
       )}
 
       <div className="action-boxes">
-        <div className="action-box card" onClick={() => setShowWalkIn(true)} role="button" tabIndex={0}>
+        <div className="action-box card" onClick={() => setShowWalkIn(true)} onKeyDown={event => { if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); setShowWalkIn(true) } }} role="button" tabIndex={0}>
           <h2>Walk-in</h2>
           <p>Hourly desk booking for visiting students</p>
         </div>
-        <div className="action-box card" onClick={() => navigate('/membership')} role="button" tabIndex={0}>
+        <div className="action-box card" onClick={() => navigate('/membership')} onKeyDown={event => { if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); navigate('/membership') } }} role="button" tabIndex={0}>
           <h2>Membership</h2>
           <p>Temporary or permanent monthly membership</p>
         </div>

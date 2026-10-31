@@ -1252,8 +1252,12 @@ function NewMembershipForm({ branchId, onCreated, tempPackages, permPackages, si
           <button type="button" className="btn btn-ghost" style={{ marginLeft: '0.5rem', fontSize: '0.75rem', padding: '0.2rem 0.6rem' }} onClick={putBackSignup}>Put back</button>
         </div>
       )}
-      <form onSubmit={handleSubmit}>
-        <div className="form-group" style={{ position: 'relative' }}>
+      <form onSubmit={handleSubmit} className="membership-registration-form">
+        <section className="form-section">
+          <h3>Student details</h3>
+          <p className="section-caption">Contact information for the new membership.</p>
+          <div className="form-fields">
+        <div className="form-group form-field-wide" style={{ position: 'relative' }}>
           <label>Full Name *</label>
           <input value={name} onChange={(e) => setName(e.target.value)} placeholder="Enter your Full Name" autoComplete="off" required />
           {selectedStudent && !selectedStudent.is_member && !selectedStudent.is_returning && (
@@ -1343,6 +1347,12 @@ function NewMembershipForm({ branchId, onCreated, tempPackages, permPackages, si
           <label>Course (NEET PG, UPSC, CA, etc.)</label>
           <input value={course} onChange={(e) => setCourse(e.target.value)} placeholder="What are they preparing for?" />
         </div>
+          </div>
+        </section>
+        <section className="form-section">
+          <h3>Membership plan</h3>
+          <p className="section-caption">Choose the seat, study hours and duration.</p>
+          <div className="form-fields">
         <div className="form-group">
           <label>Category</label>
           <select value={category} onChange={(e) => setCategory(e.target.value)}>
@@ -1463,7 +1473,13 @@ function NewMembershipForm({ branchId, onCreated, tempPackages, permPackages, si
             </p>
           )}
         </div>
-        <div className="form-group">
+          </div>
+        </section>
+        <section className="form-section">
+          <h3>Payment</h3>
+          <p className="section-caption">Review the amount and record how it is paid.</p>
+          <div className="form-fields">
+        <div className="form-group form-field-wide">
           <label>Payment Mode</label>
           <PaymentModeSelector value={paymentMode} onChange={setPaymentMode} total={amountPaid} />
         </div>
@@ -1494,7 +1510,9 @@ function NewMembershipForm({ branchId, onCreated, tempPackages, permPackages, si
             />
           </div>
         )}
-        <div className="card" style={{ marginBottom: '1rem', background: 'rgba(255,215,0,0.05)' }}>
+          </div>
+        </section>
+        <div className="card registration-total" style={{ marginBottom: '1rem', background: 'rgba(255,215,0,0.05)' }}>
           <p className="mono">
             {isCustomDays
               ? `${customDays || 0} day${Number(customDays) === 1 ? '' : 's'} = ${formatCurrency(gross)}`
@@ -1612,7 +1630,7 @@ function WaitlistTab({ branchId }) {
   }
 
   return (
-    <div style={{ display: 'grid', gridTemplateColumns: 'minmax(280px, 380px) 1fr', gap: '1rem', alignItems: 'start' }}>
+    <div className="tasks-layout-grid">
       <div className="card">
         <h3 style={{ color: 'var(--accent)', marginBottom: '0.5rem' }}>Add to Waitlist</h3>
         <p style={{ color: 'var(--text-muted)', fontSize: '0.82rem', marginBottom: '1rem' }}>
@@ -1875,12 +1893,8 @@ export default function MembershipPage() {
         <button type="button" className={tab === 'locker' ? 'active' : ''} onClick={() => setTab('locker')}>Locker</button>
         <button
           type="button"
-          className="btn btn-primary"
+          className={tab === 'waitlist' ? 'active' : ''}
           onClick={() => setTab('waitlist')}
-          style={{
-            marginLeft: 'auto', padding: '0.6rem 1.4rem', fontSize: '1rem',
-            background: 'var(--accent)', color: 'var(--bg)', border: 'none',
-          }}
         >Waitlist</button>
       </div>
 

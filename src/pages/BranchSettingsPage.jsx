@@ -197,7 +197,7 @@ export default function BranchSettingsPage() {
 
       {(flags.selfCheckin || flags.seatMatching) && selectedBranch && <SelfCheckinCard branchId={selectedBranch} />}
 
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(320px, 1fr))', gap: '1rem', marginBottom: '1.5rem', alignItems: 'stretch' }}>
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(min(100%, 320px), 1fr))', gap: '1rem', marginBottom: '1.5rem', alignItems: 'stretch' }}>
       <div className="card" data-testid="signup-link-card">
         <h3 style={{ color: 'var(--accent)', marginBottom: '0.5rem' }}>
           Self Sign-up Link{selectedBranchName && <span style={{ color: 'var(--text-muted)', fontWeight: 400 }}> — {selectedBranchName}</span>}
@@ -234,7 +234,7 @@ export default function BranchSettingsPage() {
       </div>
       </div>
 
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(320px, 1fr))', gap: '1rem' }}>
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(min(100%, 320px), 1fr))', gap: '1rem' }}>
         <div className="card">
           <h3 style={{ color: 'var(--accent)', marginBottom: '1rem' }}>Walk-in Fees</h3>
           <div style={{ display: 'flex', flexDirection: 'column', gap: '0.6rem', marginBottom: '1rem' }}>

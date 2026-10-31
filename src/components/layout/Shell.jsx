@@ -1,5 +1,5 @@
-import { useState, useEffect, useRef } from 'react'
-import { NavLink, Outlet, useNavigate } from 'react-router-dom'
+import { useState, useEffect, useRef, useCallback } from 'react'
+import { Outlet, useNavigate } from 'react-router-dom'
 import { useAuth } from '../../context/AuthContext'
 import { useSessionAlerts } from '../../hooks/useSessionAlerts'
 import { useMessageAlerts } from '../../hooks/useMessageAlerts'
@@ -7,22 +7,8 @@ import { useTaskAlerts } from '../../hooks/useTaskAlerts'
 import { usePendingSignups } from '../../hooks/usePendingSignups'
 import { useFeatureFlags } from '../../hooks/useFeatureFlags'
 import { api, COMBINED_HALL_ID } from '../../lib/api'
-
-function BackgroundSketches() {
-  return (
-    <div className="bg-sketches" aria-hidden>
-      <svg className="bg-sketch pool" width="90" height="90" viewBox="0 0 90 90" fill="none">
-        <rect x="15" y="20" width="60" height="50" rx="4" stroke="#FFD700" strokeWidth="2" fill="none" opacity="0.5" />
-        <line x1="25" y1="35" x2="65" y2="35" stroke="#FFD700" strokeWidth="1.5" opacity="0.4" />
-        <line x1="25" y1="45" x2="55" y2="45" stroke="#FFD700" strokeWidth="1.5" opacity="0.4" />
-      </svg>
-      <svg className="bg-sketch snooker" width="80" height="80" viewBox="0 0 80 80" fill="none">
-        <rect x="10" y="15" width="25" height="35" rx="2" stroke="#FFD700" strokeWidth="2" opacity="0.4" />
-        <rect x="45" y="15" width="25" height="35" rx="2" stroke="#FFD700" strokeWidth="2" opacity="0.4" />
-      </svg>
-    </div>
-  )
-}
+import { staffNavigation } from '../../lib/navigation'
+import WorkspaceNavigation from './WorkspaceNavigation'
 
 const TOAST_META = {
   end: { icon: '🔔', title: 'Session Ended', color: '#ff8888', bg: '#1a0000', border: '#ff4444', shadow: 'rgba(255,60,60,0.35)' },
@@ -253,6 +239,9 @@ export default function Shell() {
   const [endSessionPassword, setEndSessionPassword] = useState('')
   const [endSessionError, setEndSessionError] = useState('')
   const [endSessionLoading, setEndSessionLoading] = useState(false)
+  const [navOpen, setNavOpen] = useState(false)
+  const closeNav = useCallback(() => setNavOpen(false), [])
+  const navigation = staffNavigation({ isOwner, flags, pendingSignups: signups.requests.length })
 
   const handleLogout = () => {
     logout()
@@ -284,23 +273,18 @@ export default function Shell() {
 
   return (
     <div className="app-shell">
-      <BackgroundSketches />
+      <a className="skip-link" href="#main-content">Skip to content</a>
+      <WorkspaceNavigation groups={navigation} open={navOpen} onClose={closeNav} />
       <header className="topbar">
-        <div className="topbar-left" role="button" tabIndex={0} onClick={() => navigate('/')} style={{ cursor: 'pointer' }}>
-          <img src="/pss-logo.png" alt="" className="topbar-brand-logo-mobile" />
-          <span className="nav-brand topbar-brand-text-mobile">Perfect Study Space</span>
-        </div>
-
-        <div className="topbar-brand" role="button" tabIndex={0} onClick={() => navigate('/')} style={{ cursor: 'pointer', pointerEvents: 'auto' }}>
-          <img src="/pss-logo.png" alt="" className="topbar-brand-logo" />
-          <span className="nav-brand" style={{ margin: 0 }}>Perfect Study Space</span>
-        </div>
+        <button type="button" className="nav-toggle" aria-label="Open navigation" aria-controls="workspace-navigation" aria-expanded={navOpen} onClick={() => setNavOpen(true)}>☰</button>
 
         <div className="topbar-info-row">
           <div className="topbar-branch-label">
+            <span className="workspace-eyebrow">Working branch</span>
             {isOwner && branches.length > 1 && (
               <div className="branch-switcher">
                 <select
+                  aria-label="Working branch"
                   value={branchId || ''}
                   onChange={(e) => {
                     const next = e.target.value
@@ -316,7 +300,7 @@ export default function Shell() {
                   {[...branches].sort((a, b) => (a.name === 'Ram Nagar' ? -1 : b.name === 'Ram Nagar' ? 1 : 0)).map(b => (
                     <option key={b.id} value={b.id}>{b.name}</option>
                   ))}
-                  <option value={COMBINED_HALL_ID}>🏢 Combined Hall</option>
+                  <option value={COMBINED_HALL_ID}>All branches</option>
                 </select>
               </div>
             )}
@@ -328,21 +312,13 @@ export default function Shell() {
           <div className="topbar-right">
             <NotificationBell toasts={toasts} dismiss={dismiss} dismissAll={dismissAll} />
 
-            <span style={{
-              display: 'inline-block',
-              padding: '0.55rem 1.4rem', borderRadius: 30,
-              background: 'rgba(255,215,0,0.1)', border: '1px solid rgba(255,215,0,0.35)',
-            }}>
-              <span className="mono" style={{ fontSize: '1rem', fontWeight: 700, color: 'var(--accent)', display: 'block', lineHeight: 1.2, whiteSpace: 'nowrap' }}>
-                {staff?.displayName || staff?.username}
-              </span>
-              <span style={{ fontSize: '0.72rem', color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
-                {staff?.role}
-              </span>
-            </span>
+            <div className="staff-profile">
+              <span className="staff-avatar" aria-hidden="true">{(staff?.displayName || staff?.username || 'P').slice(0, 1).toUpperCase()}</span>
+              <span className="staff-profile-copy"><strong>{staff?.displayName || staff?.username}</strong><small>{staff?.role}</small></span>
+            </div>
             {!isOwner && flags.loaded && !flags.retireStaffOps && (
               <button
-                type="button" className="btn btn-ghost"
+                type="button" className="btn btn-ghost end-session-button"
                 onClick={openEndSessionModal}
                 disabled={sessionEnded}
                 title="Mark that you're ending your session for the day"
@@ -350,60 +326,12 @@ export default function Shell() {
                 {sessionEnded ? '✓ Session Ended' : 'End Session'}
               </button>
             )}
-            <button type="button" className="btn btn-ghost" onClick={handleLogout}>Logout</button>
+            <button type="button" className="btn btn-ghost" onClick={handleLogout}>Log out</button>
           </div>
         </div>
       </header>
 
-      <nav className="subnav">
-        <div className="nav-links">
-          <NavLink to="/" end>Dashboard</NavLink>
-          <NavLink to="/bookings">Active Session</NavLink>
-          <NavLink to="/membership">
-            Membership
-            {signups.requests.length > 0 && (
-              <span
-                data-testid="signup-nav-badge" title={`${signups.requests.length} self sign-up${signups.requests.length === 1 ? '' : 's'} waiting`}
-                style={{ marginLeft: '0.35rem', background: '#f472b6', color: '#1f0a17', borderRadius: 999, padding: '0 0.4rem', fontSize: '0.7rem', fontWeight: 700 }}
-              >{signups.requests.length}</span>
-            )}
-          </NavLink>
-          <NavLink to="/students">Students</NavLink>
-          <NavLink to="/enquiries">Enquiries</NavLink>
-          <NavLink to="/food-menu">Food Menu</NavLink>
-          {(flags.foodOrders || (isOwner && flags.foodStock)) && <NavLink to="/food-orders">Food orders</NavLink>}
-          {flags.tickets && <NavLink to="/tickets">Problems</NavLink>}
-          {isOwner && <NavLink to="/revenue">Revenue</NavLink>}
-          {/* PSS-AI S1: staff-to-staff Messages retire with the desk-staff modules (system notices still pop up). */}
-          {isOwner ? (
-            <>
-              <NavLink to="/reports">Reports</NavLink>
-              {!flags.retireStaffOps && <NavLink to="/messages">Messages</NavLink>}
-            </>
-          ) : (
-            <>
-              {!flags.retireStaffOps && <NavLink to="/messages">Messages</NavLink>}
-              <NavLink to="/reports">Reports</NavLink>
-            </>
-          )}
-          <NavLink to="/actions">Actions</NavLink>
-          {isOwner && (flags.anomaly || flags.sessionWatch) && <NavLink to="/flags">Flags</NavLink>}
-          {isOwner && flags.analyst && <NavLink to="/analyst">Analyst</NavLink>}
-          {isOwner && (flags.portal || flags.upiPay || flags.exceptionDesk || flags.referralLinks) && <NavLink to="/approvals">Approvals</NavLink>}
-          {flags.portal && <NavLink to="/chat-replies">Chat replies</NavLink>}
-          {isOwner && (flags.collections || flags.winback || flags.nextExam) && <NavLink to="/send-list">Send list</NavLink>}
-          {isOwner && (flags.yieldPricing || flags.hourRelease || flags.overbooking || flags.referralLinks || flags.examRadar || flags.nextExam || flags.winback) && <NavLink to="/growth">Growth</NavLink>}
-          {isOwner && (flags.policyLearner || flags.digitalTwin || flags.experiments || flags.spaceYield) && <NavLink to="/learning">Learning</NavLink>}
-          {isOwner && flags.ownerOverview && <NavLink to="/overview">Every branch</NavLink>}
-          {isOwner && (
-            <>
-              <NavLink to="/settings/branches">Branches</NavLink>
-              <NavLink to="/settings/staff">Staff</NavLink>
-            </>
-          )}
-        </div>
-      </nav>
-      <main className="main-content">
+      <main className="main-content" id="main-content" tabIndex={-1}>
         <Outlet context={{ signups }} />
       </main>
 

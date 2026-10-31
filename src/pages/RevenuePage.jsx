@@ -437,7 +437,7 @@ export default function RevenuePage() {
               {pieData.length === 0 ? <EmptyChart>No revenue in this period.</EmptyChart> : (
                 <ResponsiveContainer width="100%" height={240}>
                   <PieChart>
-                    <Pie data={pieData} dataKey="value" nameKey="name" cx="50%" cy="50%" outerRadius={90} labelLine={false} label={PieLabel}>
+                    <Pie isAnimationActive={false} data={pieData} dataKey="value" nameKey="name" cx="50%" cy="50%" outerRadius={90} labelLine={false} label={PieLabel}>
                       {pieData.map((_, i) => <Cell key={i} fill={COLORS[i % COLORS.length]} />)}
                     </Pie>
                     <Tooltip formatter={(v) => formatCurrency(v)} {...TOOLTIP_STYLE} />
@@ -453,7 +453,7 @@ export default function RevenuePage() {
                 <>
                   <ResponsiveContainer width="100%" height={240}>
                     <PieChart>
-                      <Pie data={modeData} dataKey="value" nameKey="name" cx="50%" cy="50%" outerRadius={90} labelLine={false} label={PieLabel}>
+                      <Pie isAnimationActive={false} data={modeData} dataKey="value" nameKey="name" cx="50%" cy="50%" outerRadius={90} labelLine={false} label={PieLabel}>
                         {modeData.map((_, i) => <Cell key={i} fill={COLORS[i % COLORS.length]} />)}
                       </Pie>
                       <Tooltip formatter={(v) => formatCurrency(v)} {...TOOLTIP_STYLE} />
@@ -504,7 +504,7 @@ export default function RevenuePage() {
                     allowDecimals={false}
                   />
                   <Tooltip content={chartTooltip({ formatLabel: formatDateTick, formatValue: formatCurrency })} />
-                  <Area
+                  <Area isAnimationActive={false}
                     type="monotone"
                     dataKey="amount"
                     stroke="var(--accent)"
@@ -544,7 +544,7 @@ export default function RevenuePage() {
                     formatter={(v) => [formatCurrency(v), 'Revenue']}
                     {...TOOLTIP_STYLE}
                   />
-                  <Bar dataKey="amount" radius={[0, 6, 6, 0]} barSize={28}>
+                  <Bar isAnimationActive={false} dataKey="amount" radius={[0, 6, 6, 0]} barSize={28}>
                     {revenue.byBranch.map((b, i) => (
                       <Cell key={b.name} fill={COLORS[i % COLORS.length]} />
                     ))}
@@ -577,7 +577,7 @@ export default function RevenuePage() {
               </p>
               <ResponsiveContainer width="100%" height={260}>
                 <PieChart>
-                  <Pie data={referralPieData} dataKey="value" nameKey="name" cx="50%" cy="50%" outerRadius={95} labelLine={false} label={PieLabel}>
+                  <Pie isAnimationActive={false} data={referralPieData} dataKey="value" nameKey="name" cx="50%" cy="50%" outerRadius={95} labelLine={false} label={PieLabel}>
                     {referralPieData.map((_, i) => <Cell key={i} fill={COLORS[i % COLORS.length]} />)}
                   </Pie>
                   <Tooltip formatter={(v) => `${v} student${v === 1 ? '' : 's'}`} {...TOOLTIP_STYLE} />

@@ -281,7 +281,7 @@ export default function ReportsPage() {
                       <XAxis dataKey="label" tickFormatter={formatDateTick} tick={{ fill: '#666', fontSize: 10 }} axisLine={false} tickLine={false} interval={0} />
                       <YAxis allowDecimals={false} tick={{ fill: '#666', fontSize: 11 }} axisLine={false} tickLine={false} width={32} />
                       <Tooltip content={chartTooltip({ formatLabel: formatDateTick, formatValue: (v) => `${v} students` })} />
-                      <Area
+                      <Area isAnimationActive={false}
                         type="monotone" dataKey="count"
                         stroke="var(--accent)" strokeWidth={2.5} fill="url(#attendanceGrad)"
                         dot={false} activeDot={{ r: 5, fill: 'var(--accent)', stroke: '#111', strokeWidth: 2 }}
@@ -307,7 +307,7 @@ export default function ReportsPage() {
                       <XAxis dataKey="label" tickFormatter={formatDateTick} tick={{ fill: '#666', fontSize: 10 }} axisLine={false} tickLine={false} interval={0} />
                       <YAxis allowDecimals={false} tick={{ fill: '#666', fontSize: 11 }} axisLine={false} tickLine={false} width={32} />
                       <Tooltip content={chartTooltip({ formatLabel: formatDateTick, formatValue: (v) => `${v} new memberships` })} />
-                      <Area
+                      <Area isAnimationActive={false}
                         type="monotone" dataKey="count"
                         stroke="#4ade80" strokeWidth={2.5} fill="url(#registrationsGrad)"
                         dot={false} activeDot={{ r: 5, fill: '#4ade80', stroke: '#111', strokeWidth: 2 }}

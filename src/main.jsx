@@ -2,6 +2,7 @@ import { StrictMode, lazy, Suspense } from 'react'
 import { createRoot } from 'react-dom/client'
 import { usesPublicApp } from './lib/signupLink'
 import './styles/theme.css'
+import './styles/workspace.css'
 
 // HSL — on the sign-up address (join.<domain>) load only the sign-up form; the staff app (login,
 // every staff screen) is a separate file that's never downloaded there.

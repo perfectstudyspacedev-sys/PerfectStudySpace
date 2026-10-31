@@ -96,11 +96,11 @@ export default function AnalystPage() {
         <p className="error-msg" style={{ marginBottom: '1rem' }}>The analyst is switched off (pssai_analyst).</p>
       )}
 
-      <div aria-live="polite" style={{ display: 'grid', gap: '0.9rem', marginBottom: '1rem' }}>
+      <div className="analyst-conversation" aria-live="polite" style={{ display: 'grid', gap: '0.9rem', marginBottom: '1rem' }}>
         {chat.length === 0 && analyst && (
           <div className="card">
             <p style={{ marginTop: 0, marginBottom: '0.5rem', fontSize: '0.9rem' }}>Try asking:</p>
-            <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.5rem' }}>
+            <div className="analyst-examples">
               {EXAMPLES.map((ex) => (
                 <button key={ex} type="button" className="btn btn-ghost" disabled={busy} onClick={() => ask(ex)}>{ex}</button>
               ))}
@@ -108,7 +108,7 @@ export default function AnalystPage() {
           </div>
         )}
         {chat.map((t, i) => (
-          <div key={i} className="card" data-testid="analyst-turn">
+          <div key={i} className="card analyst-turn" data-testid="analyst-turn">
             <p style={{ marginTop: 0, fontWeight: 600 }}>{t.question}</p>
             <p style={{ whiteSpace: 'pre-wrap', lineHeight: 1.55, marginBottom: '0.5rem' }}>{t.answer}</p>
             <p style={{ color: 'var(--text-muted)', fontSize: '0.78rem', margin: 0 }}>
@@ -124,7 +124,7 @@ export default function AnalystPage() {
       </div>
 
       {error && <p className="error-msg" style={{ marginBottom: '0.75rem' }}>{error}</p>}
-      <form onSubmit={submit} className="card" style={{ display: 'grid', gap: '0.6rem' }}>
+      <form onSubmit={submit} className="card analyst-composer" style={{ display: 'grid', gap: '0.6rem' }}>
         <label htmlFor="analyst-q" style={{ fontSize: '0.85rem' }}>Your question</label>
         <textarea id="analyst-q" rows={2} maxLength={2000} value={question} disabled={!analyst || busy}
           onChange={(e) => setQuestion(e.target.value)}
