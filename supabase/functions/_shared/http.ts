@@ -41,6 +41,17 @@ export function err(message: string, status = 400) {
   return json({ error: message }, status);
 }
 
+// Signed Storage links that a browser opens. supabase-js builds them on SUPABASE_URL. On a
+// self-hosted stack that is the internal gateway (http://kong:8000), which a browser cannot reach,
+// so when SUPABASE_PUBLIC_URL is set the link is built on it instead. Unset (Supabase cloud), or a
+// link that does not start with SUPABASE_URL: returned unchanged.
+export function publicStorageLink(signedUrl: string): string {
+  const base = (name: string) => Deno.env.get(name)?.trim().replace(/\/+$/, "") ?? "";
+  const publicUrl = base("SUPABASE_PUBLIC_URL"), internalUrl = base("SUPABASE_URL");
+  if (!publicUrl || !internalUrl || publicUrl === internalUrl || !signedUrl.startsWith(internalUrl + "/")) return signedUrl;
+  return publicUrl + signedUrl.slice(internalUrl.length);
+}
+
 // Compares a secret in time that does not depend on where the strings differ (cron and agent jobs).
 export function sameSecret(given: string, expected: string): boolean {
   const a = new TextEncoder().encode(given);

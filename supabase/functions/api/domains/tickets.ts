@@ -8,7 +8,7 @@
 //    short-lived links; cron_purge_images removes them after task_photo_keep_days.
 // deno-lint-ignore-file no-explicit-any
 import type { Ctx, Handler } from "../registry.ts";
-import { err, json } from "../../_shared/http.ts";
+import { err, json, publicStorageLink } from "../../_shared/http.ts";
 import { isOwnerOrAdmin, requireBranch } from "../../_shared/auth.ts";
 import { featureOn } from "../../_shared/flags.ts";
 import { addDays, istDayStart, todayISO } from "../../_shared/dates.ts";
@@ -155,7 +155,7 @@ export function handlers(): Record<string, Handler> {
       if (!p) return err("No photo for that day", 404);
       const { data, error } = await db.storage.from(TASK_PHOTO_BUCKET).createSignedUrl(p.photo_path, 300);
       if (error || !data?.signedUrl) return err(error?.message ?? "Could not open the photo", 500);
-      return json({ url: data.signedUrl });
+      return json({ url: publicStorageLink(data.signedUrl) });
     },
   };
 }

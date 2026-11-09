@@ -4,7 +4,7 @@
 // upi, so no money logic is new (R1, R3). The AI may read a screenshot; it never confirms.
 // deno-lint-ignore-file no-explicit-any
 import type { Ctx, Handler } from "../registry.ts";
-import { err, json } from "../../_shared/http.ts";
+import { err, json, publicStorageLink } from "../../_shared/http.ts";
 import { isOwnerOrAdmin } from "../../_shared/auth.ts";
 import { featureOn } from "../../_shared/flags.ts";
 import { notifyStudent } from "../../_shared/notify.ts";
@@ -108,7 +108,7 @@ export function handlers(): Record<string, Handler> {
       if (!p?.image_path) return err("No screenshot", 404);
       const { data, error } = await ctx.db.storage.from(BUCKET).createSignedUrl(p.image_path, 120);
       if (error || !data?.signedUrl) return err(error?.message ?? "Could not open the screenshot", 500);
-      return json({ url: data.signedUrl });
+      return json({ url: publicStorageLink(data.signedUrl) });
     },
 
     read_payment_proof: async (ctx: Ctx, payload: any): Promise<Response | undefined> => {
