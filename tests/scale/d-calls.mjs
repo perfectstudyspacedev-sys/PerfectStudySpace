@@ -1,7 +1,7 @@
 // 2b-D on the local dummy stack: batch parts equal their own calls; the light pollers give
 // what the hooks used to take from the heavy lists. Reads only.
 import { execFileSync } from "node:child_process";
-const sql = (q) => execFileSync("docker", ["exec", "psslocal-db", "psql", "-U", "postgres", "-d", "postgres", "-tAc", q], { encoding: "utf8" }).trim();
+const sql = (q) => execFileSync("docker", ["exec", `${process.env.SCALE_PREFIX || "psslocal"}-db`, "psql", "-U", "postgres", "-d", "postgres", "-tAc", q], { encoding: "utf8" }).trim();
 const call = async (body, token) => {
   const r = await fetch("http://127.0.0.1:8010/functions/v1/api", { method: "POST",
     headers: { "content-type": "application/json", ...(token ? { authorization: `Bearer ${token}` } : {}) }, body: JSON.stringify(body) });

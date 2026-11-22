@@ -44,10 +44,10 @@ if (!args.includes("--skip-setup")) {
   if (!run(`2. stack (setup.sh${ref ? `, reference ${ref}` : ""})`, "bash", [join(here, "setup.sh"), work, ...(ref ? [ref] : [])])) process.exit(1);
   const seedFile = join(here, seed === "large" ? "seed-large.sql" : "seed-small.sql");
   if (!existsSync(seedFile)) { console.log(`no such seed: ${seed}`); process.exit(1); }
-  if (!run(`3. seed (${seed})`, "docker", ["exec", "-i", "psslocal-db", "psql", "-U", "postgres", "-d", "postgres", "-v", "ON_ERROR_STOP=1", "-q"], { input: readFileSync(seedFile) })) process.exit(1);
+  if (!run(`3. seed (${seed})`, "docker", ["exec", "-i", `${process.env.SCALE_PREFIX || "psslocal"}-db`, "psql", "-U", "postgres", "-d", "postgres", "-v", "ON_ERROR_STOP=1", "-q"], { input: readFileSync(seedFile) })) process.exit(1);
 }
 
-const hasOrig = spawnSync("docker", ["exec", "psslocal-functions", "test", "-d", "/home/deno/functions/apiorig"]).status === 0;
+const hasOrig = spawnSync("docker", ["exec", `${process.env.SCALE_PREFIX || "psslocal"}-functions`, "test", "-d", "/home/deno/functions/apiorig"]).status === 0;
 run("4a. database numbers, create_staff roles, branch isolation, URL lengths (check.mjs)", process.execPath, [join(here, "check.mjs"), ...(hasOrig ? [] : ["--fixed-only"])]);
 run("4b. students list pages (students-pages.mjs)", process.execPath, [join(here, "students-pages.mjs")]);
 run("4c. batch and light pollers (calls.mjs)", process.execPath, [join(here, "calls.mjs")]);

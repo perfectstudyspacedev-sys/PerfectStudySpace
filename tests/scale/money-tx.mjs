@@ -10,7 +10,7 @@
 import { execFileSync } from "node:child_process";
 
 const REF = process.env.REF_FN || "apiorig";
-const sql = (q) => execFileSync("docker", ["exec", "-i", "psslocal-db", "psql", "-U", "postgres", "-d", "postgres", "-tA", "-v", "ON_ERROR_STOP=1"],
+const sql = (q) => execFileSync("docker", ["exec", "-i", `${process.env.SCALE_PREFIX || "psslocal"}-db`, "psql", "-U", "postgres", "-d", "postgres", "-tA", "-v", "ON_ERROR_STOP=1"],
   { input: q, encoding: "utf8" }).trim();
 const json1 = (q) => JSON.parse(sql(q) || "null");
 const tokens = {};

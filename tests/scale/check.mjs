@@ -12,8 +12,8 @@
 import { execFileSync, spawnSync } from "node:child_process";
 
 const BASE = "http://127.0.0.1:8010/functions/v1";
-const DB = "psslocal-db";
-const KONG = "psslocal-kong";
+const DB = `${process.env.SCALE_PREFIX || "psslocal"}-db`;
+const KONG = `${process.env.SCALE_PREFIX || "psslocal"}-kong`;
 
 const sql = (q) => execFileSync("docker", ["exec", DB, "psql", "-U", "postgres", "-d", "postgres", "-tAc", q], { encoding: "utf8" }).trim();
 const num = (q) => Number(sql(q));
@@ -115,7 +115,7 @@ const CHECKS = [
 
 const mode = process.argv[2] ?? "";
 const startedAt = new Date().toISOString();
-const restartsBefore = Number(execFileSync("docker", ["inspect", "-f", "{{.RestartCount}}", "psslocal-functions"], { encoding: "utf8" }).trim());
+const restartsBefore = Number(execFileSync("docker", ["inspect", "-f", "{{.RestartCount}}", `${process.env.SCALE_PREFIX || "psslocal"}-functions`], { encoding: "utf8" }).trim());
 
 // ── --alerts: batched expiry alerts give the same end state as the old loop ──
 // Needs function "apiprev" (the fixed code before batching). Sets up every case the
@@ -252,14 +252,14 @@ for (const fn of fns) {
 
 // ── the runtime itself: supervisor cancels and container restarts during this run ──
 // docker logs writes the container's stderr to its own stderr: keep both.
-const lg = spawnSync("docker", ["logs", "--since", startedAt, "psslocal-functions"], { encoding: "utf8", maxBuffer: 1 << 28 });
+const lg = spawnSync("docker", ["logs", "--since", startedAt, `${process.env.SCALE_PREFIX || "psslocal"}-functions`], { encoding: "utf8", maxBuffer: 1 << 28 });
 const fnLog = (lg.stdout ?? "") + (lg.stderr ?? "");
 const countOf = (re) => (fnLog.match(re) ?? []).length;
 const cancels = countOf(/cancelled by supervisor/g);
 const hard = countOf(/CPU time hard limit reached/g);
 const soft = countOf(/CPU time soft limit reached/g);
 const retries = countOf(/retrying once on a new worker/g);
-const restarts = Number(execFileSync("docker", ["inspect", "-f", "{{.RestartCount}}", "psslocal-functions"], { encoding: "utf8" }).trim()) - restartsBefore;
+const restarts = Number(execFileSync("docker", ["inspect", "-f", "{{.RestartCount}}", `${process.env.SCALE_PREFIX || "psslocal"}-functions`], { encoding: "utf8" }).trim()) - restartsBefore;
 console.log(`\n-- edge runtime during this run: ${cancels} supervisor cancels, ${hard} CPU hard-limit hits, ${soft} soft-limit retirements, ${retries} retries, ${restarts} functions restarts`);
 if (cancels > 0 || hard > 0 || restarts > 0) { fails++; console.log("  FAIL: must be 0 cancels, 0 hard-limit hits, 0 restarts"); }
 

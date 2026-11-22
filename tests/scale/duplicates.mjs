@@ -1,6 +1,6 @@
 // 2b-E: no duplicates, on the local dummy stack. Writes test rows (dummy data only).
 import { execFileSync } from "node:child_process";
-const sql = (q) => execFileSync("docker", ["exec", "psslocal-db", "psql", "-U", "postgres", "-d", "postgres", "-tAc", q], { encoding: "utf8" }).trim();
+const sql = (q) => execFileSync("docker", ["exec", `${process.env.SCALE_PREFIX || "psslocal"}-db`, "psql", "-U", "postgres", "-d", "postgres", "-tAc", q], { encoding: "utf8" }).trim();
 const call = async (body, { token, key } = {}) => {
   const r = await fetch("http://127.0.0.1:8010/functions/v1/api", { method: "POST",
     headers: { "content-type": "application/json", ...(token ? { authorization: `Bearer ${token}` } : {}), ...(key ? { "idempotency-key": key } : {}) },

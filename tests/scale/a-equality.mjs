@@ -1,7 +1,7 @@
 // 2b-A: the SQL-summed reports ("api") must equal the JavaScript method ("apiprev",
 // committed bfe2cb1) on the local dummy data: money to the paisa, counts exactly.
 import { execFileSync } from "node:child_process";
-const sql = (q) => execFileSync("docker", ["exec", "psslocal-db", "psql", "-U", "postgres", "-d", "postgres", "-tAc", q], { encoding: "utf8" }).trim();
+const sql = (q) => execFileSync("docker", ["exec", `${process.env.SCALE_PREFIX || "psslocal"}-db`, "psql", "-U", "postgres", "-d", "postgres", "-tAc", q], { encoding: "utf8" }).trim();
 const call = async (fn, body, token) => {
   const t0 = performance.now();
   const r = await fetch(`http://127.0.0.1:8010/functions/v1/${fn}`, { method: "POST",
