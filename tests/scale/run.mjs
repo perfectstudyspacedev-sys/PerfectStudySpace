@@ -53,6 +53,8 @@ run("4b. students list pages (students-pages.mjs)", process.execPath, [join(here
 run("4c. batch and light pollers (calls.mjs)", process.execPath, [join(here, "calls.mjs")]);
 run("4d. duplicates: double-click payment, simultaneous check-ins (duplicates.mjs)", process.execPath, [join(here, "duplicates.mjs")]);
 run("4e. login lockout and worker cache (login-and-cache.mjs)", process.execPath, [join(here, "login-and-cache.mjs")], { env: hasOrig ? {} : { REF_FN: "none" } });
+if (hasOrig) run("4f. money actions: old steps vs one transaction, rollback, same-moment requests (money-tx.mjs)", process.execPath, [join(here, "money-tx.mjs")]);
+else console.log("\n=== 4f. money-tx.mjs skipped (needs the original api as apiorig)");
 
 console.log("\n=== Summary");
 for (const r of results) console.log(`  ${r.ok ? "PASS" : "FAIL"}  ${r.label}  (${r.s} s)`);

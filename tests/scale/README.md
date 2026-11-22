@@ -27,6 +27,7 @@ every pull request (`.github/workflows/scale-test.yml`).
 | 4c | `calls.mjs` | Each `batch` part equals its own call; the light pollers give what the hooks need |
 | 4d | `duplicates.mjs` | A double-clicked payment is recorded once; simultaneous check-ins give one open session per student and per desk |
 | 4e | `login-and-cache.mjs` | Login lockout (5 failures, 15 minutes, per username and per IP); cached reads equal the original api |
+| 4f | `money-tx.mjs` | The five money actions in one database transaction each (migration 054) leave the same rows and reply as the original api's step-by-step code (twin students in the same state, amounts to the paisa); a failure half way leaves nothing; payments, top-ups and pass bills at the same moment lose nothing. `TWINS_ONLY=1` with the 054 functions hidden proves the fallback |
 
 ## Step 2b proofs (run by hand)
 

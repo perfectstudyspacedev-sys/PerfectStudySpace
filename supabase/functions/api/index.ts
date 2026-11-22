@@ -1045,6 +1045,26 @@ async function unpaidFoodBillsFor(db: ReturnType<typeof adminClient>, studentId:
   return { bills, total: Math.round(bills.reduce((sum, b) => sum + Number(b.total), 0) * 100) / 100 };
 }
 
+// Migration 054: the five money actions (record_payment, record_locker_payment,
+// topup_food_pass, create_food_bill, apply_loyalty_discount) as ONE database transaction
+// each, with the changed row locked, so a failure half way leaves nothing behind and two
+// requests at the same moment cannot both work from the old balance. Returns null when the
+// database does not have 054 yet (PostgREST PGRST202): the caller then runs its old steps.
+// A rule broken (SQLSTATE P0001) comes back as the same 400 message staff saw before.
+async function moneyTx(
+  db: ReturnType<typeof adminClient>, fn: string, params: Record<string, unknown>,
+): Promise<{ data?: Record<string, unknown>; fail?: Response } | null> {
+  const { data, error } = await db.rpc(fn, params);
+  if (!error) return { data: data as Record<string, unknown> };
+  if (error.code === "PGRST202") {
+    console.error(`${fn} unavailable (migration 054 missing), using the step-by-step path`);
+    return null;
+  }
+  if (error.code === "P0001") return { fail: err(error.message) };
+  console.error(`${fn} failed:`, error.message);
+  return { fail: err(error.message, 500) };
+}
+
 async function insertPaymentTransactions(
   db: ReturnType<typeof adminClient>,
   base: Record<string, unknown>,
@@ -3480,6 +3500,16 @@ async function handleStaffAction(db: ReturnType<typeof adminClient>, staff: Staf
         return err(`Payment exceeds the pending due of ₹${currentDue} — collect at most that amount.`);
       }
 
+      const tx = await moneyTx(db, "money_record_payment", {
+        p_membership: membershipId, p_branch: mem.branch_id, p_staff: staff.id, p_amount: payAmount,
+        p_mode: paymentMode ?? null, p_cash: Number(cashAmount) || 0, p_upi: Number(upiAmount) || 0,
+      });
+      if (tx) {
+        if (tx.fail) return tx.fail;
+        await refreshStudentStatus(db, mem.student_id);
+        return json({ ok: true });
+      }
+
       const newDue = Math.max(currentDue - payAmount, 0);
       // Only push the due date forward once the balance is fully cleared — otherwise a
       // partial payment would make a still-overdue membership vanish from overdue views.
@@ -3517,6 +3547,16 @@ async function handleStaffAction(db: ReturnType<typeof adminClient>, staff: Staf
       const { data: mem } = await db.from("memberships").select("*").eq("id", membershipId).single();
       if (!mem) return err("Membership not found");
       if (!requireBranch(staff, mem.branch_id)) return err("Branch access denied", 403);
+
+      const tx = await moneyTx(db, "money_apply_loyalty_discount", {
+        p_membership: membershipId, p_branch: mem.branch_id, p_staff: staff.id,
+        p_type: discountType, p_value: value, p_remarks: remarks || null,
+      });
+      if (tx) {
+        if (tx.fail) return tx.fail;
+        await refreshStudentStatus(db, mem.student_id);
+        return json(tx.data);
+      }
 
       // Available even with nothing pending — a discount on a fully-paid membership (or one
       // larger than what's left owing) banks the leftover as a cashback instead of being wasted.
@@ -3681,6 +3721,16 @@ async function handleStaffAction(db: ReturnType<typeof adminClient>, staff: Staf
         return err(`Payment exceeds the pending due of ₹${currentDue} — collect at most that amount.`);
       }
 
+      const tx = await moneyTx(db, "money_record_locker_payment", {
+        p_locker: lockerId, p_branch: locker.branch_id, p_staff: staff.id, p_amount: payAmount,
+        p_mode: paymentMode ?? null, p_cash: Number(cashAmount) || 0, p_upi: Number(upiAmount) || 0,
+      });
+      if (tx) {
+        if (tx.fail) return tx.fail;
+        await refreshStudentStatus(db, locker.student_id);
+        return json({ ok: true });
+      }
+
       const newDue = Math.max(currentDue - payAmount, 0);
       await db.from("lockers").update({
         fee_due: newDue, amount_paid: Number(locker.amount_paid) + payAmount,
@@ -3798,6 +3848,11 @@ async function handleStaffAction(db: ReturnType<typeof adminClient>, staff: Staf
       const amt = Number(amount);
       if (!(amt > 0)) return err("Top-up amount must be greater than 0");
 
+      const tx = await moneyTx(db, "money_topup_food_pass", {
+        p_student: studentId, p_branch: branchId, p_staff: staff.id, p_amount: amt, p_mode: paymentMode ?? null,
+      });
+      if (tx) return tx.fail ?? json(tx.data);
+
       // Same eligibility rule as cashback — a currently active membership, not just having
       // held one at some point (so a walk-in, or a student whose membership has since ended,
       // can't top up a Food Pass).
@@ -3889,6 +3944,15 @@ async function handleStaffAction(db: ReturnType<typeof adminClient>, staff: Staf
         const { data: billStudent } = await db.from("students").select("branch_id").eq("id", studentId).single();
         if (!billStudent || billStudent.branch_id !== branchId) return err("Student does not belong to this branch", 403);
       }
+
+      const tx = await moneyTx(db, "money_create_food_bill", {
+        p_branch: branchId, p_staff: staff.id, p_student: studentId ?? null,
+        p_student_name: studentName ?? null, p_student_phone: studentPhone ?? null, p_booking: bookingId ?? null,
+        p_items: items ?? [], p_mode: paymentMode ?? null, p_discount_type: discountType ?? null,
+        p_discount_value: discountValue ?? 0, p_discount_amount: Number(discountAmount) || 0,
+        p_skip_pass: !!skipFoodPass,
+      });
+      if (tx) return tx.fail ?? json(tx.data);
 
       let subtotal = 0;
       const lineItems = [];
