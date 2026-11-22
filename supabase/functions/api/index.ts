@@ -1,5 +1,7 @@
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2.49.1";
-import { SignJWT, jwtVerify } from "https://esm.sh/jose@5";
+// Exact version: "jose@5" is a moving range resolved by esm.sh at each cold start. 5.10.0
+// is what that range resolved to (the last 5.x release), so the code that runs is unchanged.
+import { SignJWT, jwtVerify } from "https://esm.sh/jose@5.10.0";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -371,6 +373,39 @@ async function fetchAllRows<T = Record<string, any>>(buildQuery: () => any, page
     if (!data?.length) return rows;
     rows.push(...data);
   }
+}
+
+// fetchAllRows in the { data, error } shape of a plain query, for lists that grow with the
+// data (students, memberships, sessions, transactions…): a call site swaps `await q` for
+// `await allRows(() => q)` and keeps its own handling (most read `data ?? []`). An
+// `.order("id")` is appended as the last sort key so pages never overlap or skip rows; any
+// order the query already has stays first, so the list comes back in the same order.
+type RowsResult<T> = { data: T[] | null; error: { message: string } | null };
+// deno-lint-ignore no-explicit-any
+async function allRows<T = any>(buildQuery: () => any): Promise<RowsResult<T>> {
+  try {
+    return { data: await fetchAllRows<T>(() => buildQuery().order("id")), error: null };
+  } catch (e) {
+    return { data: null, error: { message: e instanceof Error ? e.message : String(e) } };
+  }
+}
+
+// .in() over a list that grows with the data (every student id on an all-branches page,
+// every open booking…). Each id lands in the request URL — about 39 bytes per UUID once
+// encoded — and the gateway refuses a URL over 8 KB ("URI too long", 414), so the ids go in
+// chunks of IN_CHUNK (150 ids ≈ 6 KB), each chunk paged like allRows. Chunks run in
+// parallel and their rows are concatenated, so use this where rows are grouped or summed
+// per id, not where the overall row order matters.
+const IN_CHUNK = 150;
+// deno-lint-ignore no-explicit-any
+async function allRowsIn<T = any>(ids: readonly string[], buildQuery: (chunk: string[]) => any): Promise<RowsResult<T>> {
+  const unique = [...new Set(ids)];
+  const chunks: string[][] = [];
+  for (let i = 0; i < unique.length; i += IN_CHUNK) chunks.push(unique.slice(i, i + IN_CHUNK));
+  const results = await Promise.all(chunks.map((chunk) => allRows<T>(() => buildQuery(chunk))));
+  const failed = results.find((r) => r.error);
+  if (failed) return { data: null, error: failed.error };
+  return { data: results.flatMap((r) => r.data ?? []), error: null };
 }
 
 // Splits a [from, to] range into day-sized or week-sized buckets for trend charts — a
@@ -1123,11 +1158,11 @@ Deno.serve(async (req) => {
 
       // Not just "due/expired exactly today" — any membership that's overdue and hasn't
       // been settled/renewed yet should keep showing up until it's dealt with.
-      const { data: dueToday } = await db.from("memberships").select("*, students(name, phone)")
-        .eq("branch_id", branchId).eq("is_active", true).lte("due_date", today).gt("fee_due", 0);
+      const { data: dueToday } = await allRows(() => db.from("memberships").select("*, students(name, phone)")
+        .eq("branch_id", branchId).eq("is_active", true).lte("due_date", today).gt("fee_due", 0));
 
-      const { data: expiredToday } = await db.from("memberships").select("*, students(name, phone)")
-        .eq("branch_id", branchId).eq("is_active", true).lt("end_date", today);
+      const { data: expiredToday } = await allRows(() => db.from("memberships").select("*, students(name, phone)")
+        .eq("branch_id", branchId).eq("is_active", true).lt("end_date", today));
 
       // By when the session started, not when the row was written — past attendance added
       // from a student's profile today would otherwise count as someone who came in today.
@@ -1172,21 +1207,22 @@ Deno.serve(async (req) => {
       const fromMs = new Date(fromTs).getTime();
       const toMs = new Date(toTs).getTime();
 
+      // A month of one branch's sessions passes 1000 rows easily, so every list is paged.
       const [{ data: recentBookings }, { data: recentMemberships }, { data: recentTxns }, { data: recentCashbacks }, { data: recentPayouts }] = await Promise.all([
-        db.from("bookings").select("id, booking_type, status, created_at, start_time, end_time, students(name, phone)")
-          .eq("branch_id", branchId).gte("created_at", fromTs).lte("created_at", toTs),
-        db.from("memberships").select("id, category, total_paid, created_at, students(name, phone)")
-          .eq("branch_id", branchId).gte("created_at", fromTs).lte("created_at", toTs),
-        db.from("transactions").select("id, category, amount, payment_mode, created_at, students(name, phone)")
-          .eq("branch_id", branchId).gte("created_at", fromTs).lte("created_at", toTs),
+        allRows(() => db.from("bookings").select("id, booking_type, status, created_at, start_time, end_time, students(name, phone)")
+          .eq("branch_id", branchId).gte("created_at", fromTs).lte("created_at", toTs)),
+        allRows(() => db.from("memberships").select("id, category, total_paid, created_at, students(name, phone)")
+          .eq("branch_id", branchId).gte("created_at", fromTs).lte("created_at", toTs)),
+        allRows(() => db.from("transactions").select("id, category, amount, payment_mode, created_at, students(name, phone)")
+          .eq("branch_id", branchId).gte("created_at", fromTs).lte("created_at", toTs)),
         // Granted and redeemed/settled can each fall in range independently of one
         // another, so fetch anything touched (created OR redeemed) within the window.
-        db.from("cashbacks").select("id, cashback_type, cashback_value, status, redeemed_amount, created_at, redeemed_at, students(name, phone)")
+        allRows(() => db.from("cashbacks").select("id, cashback_type, cashback_value, status, redeemed_amount, created_at, redeemed_at, students(name, phone)")
           .eq("branch_id", branchId)
-          .or(`and(created_at.gte.${fromTs},created_at.lte.${toTs}),and(redeemed_at.gte.${fromTs},redeemed_at.lte.${toTs})`),
-        db.from("payouts").select("id, payout_type, amount, created_at, students(name, phone)")
+          .or(`and(created_at.gte.${fromTs},created_at.lte.${toTs}),and(redeemed_at.gte.${fromTs},redeemed_at.lte.${toTs})`)),
+        allRows(() => db.from("payouts").select("id, payout_type, amount, created_at, students(name, phone)")
           .eq("branch_id", branchId).eq("payout_type", "membership_refund")
-          .gte("created_at", fromTs).lte("created_at", toTs),
+          .gte("created_at", fromTs).lte("created_at", toTs)),
       ]);
 
       const cashbackFeed: Record<string, unknown>[] = [];
@@ -1334,14 +1370,14 @@ Deno.serve(async (req) => {
       // always set a month out even on a same-day partial payment, so gating on it would
       // hide a real balance for a full month. Still sorted by due_date so overdue-longest
       // shows first.
-      const { data: duePayments } = await db.from("memberships")
+      const { data: duePayments } = await allRows(() => db.from("memberships")
         .select("*, students(name, phone, course), branches(name)")
         .eq("is_active", true).gt("fee_due", 0)
-        .order("due_date");
-      const { data: expiredMemberships } = await db.from("memberships")
+        .order("due_date"));
+      const { data: expiredMemberships } = await allRows(() => db.from("memberships")
         .select("*, students(name, phone, course), branches(name)")
         .eq("is_active", true).eq("end_date", targetDate)
-        .order("end_date");
+        .order("end_date"));
 
       return json({ date: targetDate, duePayments: duePayments ?? [], expiredMemberships: expiredMemberships ?? [] });
     }
@@ -2722,9 +2758,12 @@ Deno.serve(async (req) => {
         branchIds = [branchId];
       }
 
-      const { data: students } = await db.from("students").select("*, branches(name)").in("branch_id", branchIds).order("s_no");
-      const { data: memberships } = await db.from("memberships").select("*").in("branch_id", branchIds).eq("is_active", true);
-      const { data: lockers } = await db.from("lockers").select("*").in("branch_id", branchIds).eq("is_active", true);
+      // All branches together hold well over 1000 students and active memberships.
+      const [{ data: students }, { data: memberships }, { data: lockers }] = await Promise.all([
+        allRows(() => db.from("students").select("*, branches(name)").in("branch_id", branchIds).order("s_no")),
+        allRows(() => db.from("memberships").select("*").in("branch_id", branchIds).eq("is_active", true)),
+        allRows(() => db.from("lockers").select("*").in("branch_id", branchIds).eq("is_active", true)),
+      ]);
 
       const memByStudent = new Map(memberships?.map(m => [m.student_id, m]) ?? []);
       const lockerByStudent = new Map(lockers?.map(l => [l.student_id, l]) ?? []);
@@ -2963,8 +3002,9 @@ Deno.serve(async (req) => {
     // it's safe to run more than once and only touches rows that actually drifted.
     if (action === "fix_membership_dates") {
       if (!isOwnerOrAdmin(staff)) return err("Owner only", 403);
-      const { data: memberships } = await db.from("memberships")
-        .select("id, start_date, months_paid, hold_days, end_date, due_date");
+      // Every membership ever made — unpaged, this repair silently stopped at the first 1000.
+      const { data: memberships } = await allRows(() => db.from("memberships")
+        .select("id, start_date, months_paid, hold_days, end_date, due_date"));
       let fixed = 0;
       for (const m of memberships ?? []) {
         const correctEndDate = addDays(endDateForMonths(m.start_date, m.months_paid), m.hold_days ?? 0);
@@ -2986,7 +3026,7 @@ Deno.serve(async (req) => {
     // 0. Safe to run more than once — it only touches rows still sitting below zero.
     if (action === "fix_negative_food_pass_balances") {
       if (!isOwnerOrAdmin(staff)) return err("Owner only", 403);
-      const { data: passes } = await db.from("food_passes").select("*").lt("balance", 0);
+      const { data: passes } = await allRows(() => db.from("food_passes").select("*").lt("balance", 0));
       let fixed = 0;
       for (const p of passes ?? []) {
         const shortfall = -Number(p.balance);
@@ -3010,9 +3050,10 @@ Deno.serve(async (req) => {
         const monthStart = `${todayISO().slice(0, 7)}-01`;
         // Sessions that happened this month (start_time) — not rows typed in this month, which
         // would credit a backfilled last-month session to this month's leaderboard.
-        const { data: bookings } = await db.from("bookings")
+        // A month of one branch's sessions passes 1000 rows easily.
+        const { data: bookings } = await allRows(() => db.from("bookings")
           .select("student_id, hours, students(id, name, phone, course)")
-          .eq("branch_id", branchId).gte("start_time", istDayStart(monthStart));
+          .eq("branch_id", branchId).gte("start_time", istDayStart(monthStart)));
         const byStudent = new Map<string, { id: string; name: string; phone: string; course: string | null; visits: number; hours: number }>();
         for (const b of bookings ?? []) {
           const s = b.students as unknown as { id: string; name: string; phone: string; course: string | null } | null;
@@ -3198,10 +3239,11 @@ Deno.serve(async (req) => {
       const { branchId } = payload;
       if (!requireBranch(staff, branchId)) return err("Branch access denied", 403);
 
-      const { data: cashbacks } = await db.from("cashbacks")
+      // Every cashback the branch ever granted, so it grows without end.
+      const { data: cashbacks } = await allRows(() => db.from("cashbacks")
         .select("*, students(name, phone)")
         .eq("branch_id", branchId)
-        .order("created_at", { ascending: false });
+        .order("created_at", { ascending: false }));
 
       // Percent-type cashbacks that are still pending have no fixed rupee value yet — the
       // amount depends on the membership fee it's applied against at renewal/closure. Estimate
@@ -3210,9 +3252,8 @@ Deno.serve(async (req) => {
       const pendingStudentIds = [...new Set(
         (cashbacks ?? []).filter((c) => c.status === "pending" && c.cashback_type === "percent").map((c) => c.student_id),
       )];
-      const { data: activeMems } = pendingStudentIds.length
-        ? await db.from("memberships").select("student_id, monthly_fee, months_paid").in("student_id", pendingStudentIds).eq("is_active", true)
-        : { data: [] };
+      const { data: activeMems } = await allRowsIn(pendingStudentIds, (ids) =>
+        db.from("memberships").select("student_id, monthly_fee, months_paid").in("student_id", ids).eq("is_active", true));
       const memByStudent = new Map((activeMems ?? []).map((m: { student_id: string; monthly_fee: number; months_paid: number }) => [m.student_id, m]));
 
       const rows = (cashbacks ?? []).map((c: Record<string, unknown>) => {
@@ -3656,16 +3697,15 @@ Deno.serve(async (req) => {
 
     if (action === "list_food_bills") {
       const { branchId, dateFrom, dateTo, allBranches } = payload;
-      let q = db.from("food_bills").select("*, food_bill_items(*), branches(name)")
-        .gte("created_at", istDayStart(dateFrom)).lte("created_at", istDayEnd(dateTo))
-        .order("created_at", { ascending: false });
-      if (allBranches && isOwnerOrAdmin(staff)) {
-        // no branch filter — every branch's bills, for the Combined Hall read-only view
-      } else {
-        if (!requireBranch(staff, branchId)) return err("Branch access denied", 403);
-        q = q.eq("branch_id", branchId);
-      }
-      const { data } = await q;
+      const everyBranch = allBranches && isOwnerOrAdmin(staff);
+      // no branch filter for everyBranch — every branch's bills, for the Combined Hall read-only view
+      if (!everyBranch && !requireBranch(staff, branchId)) return err("Branch access denied", 403);
+      const { data } = await allRows(() => {
+        const q = db.from("food_bills").select("*, food_bill_items(*), branches(name)")
+          .gte("created_at", istDayStart(dateFrom)).lte("created_at", istDayEnd(dateTo))
+          .order("created_at", { ascending: false });
+        return everyBranch ? q : q.eq("branch_id", branchId);
+      });
       return json({ bills: data ?? [] });
     }
 
@@ -3994,12 +4034,13 @@ Deno.serve(async (req) => {
       const fromTs = istDayStart(range.from);
       const toTs = istDayEnd(range.to);
 
-      const { data: walkins } = await db.from("bookings").select("*, students(name)")
+      // Month and custom ranges across every branch pass 1000 rows, so these lists are paged.
+      const { data: walkins } = await allRows(() => db.from("bookings").select("*, students(name)")
         .in("branch_id", branchFilter).eq("booking_type", "walkin")
-        .gte("created_at", fromTs).lte("created_at", toTs);
+        .gte("created_at", fromTs).lte("created_at", toTs));
 
-      const { data: newMembers } = await db.from("memberships").select("*, students(name)")
-        .in("branch_id", branchFilter).gte("created_at", fromTs).lte("created_at", toTs);
+      const { data: newMembers } = await allRows(() => db.from("memberships").select("*, students(name)")
+        .in("branch_id", branchFilter).gte("created_at", fromTs).lte("created_at", toTs));
 
       // Attendance breakdown over the range — how many sessions were temporary vs permanent
       // members vs plain walk-ins, counted by distinct student (not by session, so a member
@@ -4008,8 +4049,8 @@ Deno.serve(async (req) => {
       // branch visit") is one person, counted once in the combined total. Ranged on
       // start_time (when they attended), not created_at (when the row was written) — past
       // attendance added from a profile would otherwise land on the day it was typed in.
-      const { data: rangeBookingsRaw } = await db.from("bookings").select("student_id, booking_type, start_time, branch_id, branches(name)")
-        .in("branch_id", branchFilter).gte("start_time", fromTs).lte("start_time", toTs);
+      const { data: rangeBookingsRaw } = await allRows(() => db.from("bookings").select("student_id, booking_type, start_time, branch_id, branches(name)")
+        .in("branch_id", branchFilter).gte("start_time", fromTs).lte("start_time", toTs));
       const rangeBookings = (rangeBookingsRaw ?? []) as { student_id: string; booking_type: string; start_time: string; branch_id: string; branches: { name: string } | null }[];
       const attendanceBreakdown = {
         temporary: new Set(rangeBookings.filter(b => b.booking_type === "temporary").map(b => b.student_id)).size,
@@ -4021,8 +4062,8 @@ Deno.serve(async (req) => {
       // Active memberships right now (not "new in range" — currently valid, any branch in
       // scope) — the "how many memberships are in use" number the owner actually wants
       // alongside the attendance breakdown above.
-      const { data: activeMembershipRows } = await db.from("memberships")
-        .select("branch_id").in("branch_id", branchFilter).eq("is_active", true).gte("end_date", todayISO());
+      const { data: activeMembershipRows } = await allRows<{ branch_id: string }>(() => db.from("memberships")
+        .select("branch_id").in("branch_id", branchFilter).eq("is_active", true).gte("end_date", todayISO()));
       const activeMemberships = (activeMembershipRows ?? []).length;
 
       // Per-branch breakdown — only meaningful (and only computed) once more than one branch
@@ -4230,24 +4271,25 @@ Deno.serve(async (req) => {
     if (action === "list_tasks") {
       const { branchId, allBranches, date } = payload;
       const targetDate = date || todayISO();
-      let q = db.from("tasks").select("*, assigned_to:assigned_to_staff_id(display_name, username, is_active), assigned_by:assigned_by_staff_id(display_name, username), branches(name)")
-        .order("created_at", { ascending: false });
-      if (isOwnerOrAdmin(staff)) {
-        if (!allBranches && branchId) q = q.eq("branch_id", branchId);
-      } else {
-        const bid = staff.branch_id;
-        if (!bid) return err("Branch access denied", 403);
-        q = q.eq("branch_id", bid).or(`assigned_to_staff_id.eq.${staff.id},assigned_by_staff_id.eq.${staff.id}`);
-        const ownerIds = await getOwnerStaffIds(db);
-        if (ownerIds.length) q = q.not("assigned_to_staff_id", "in", `(${ownerIds.join(",")})`);
-      }
-      const { data, error: lErr } = await q;
+      if (!isOwnerOrAdmin(staff) && !staff.branch_id) return err("Branch access denied", 403);
+      const ownerIds = isOwnerOrAdmin(staff) ? [] : await getOwnerStaffIds(db);
+      // Every task ever created (done one-offs included), so the list grows without end.
+      const { data, error: lErr } = await allRows(() => {
+        let q = db.from("tasks").select("*, assigned_to:assigned_to_staff_id(display_name, username, is_active), assigned_by:assigned_by_staff_id(display_name, username), branches(name)")
+          .order("created_at", { ascending: false });
+        if (isOwnerOrAdmin(staff)) {
+          if (!allBranches && branchId) q = q.eq("branch_id", branchId);
+        } else {
+          q = q.eq("branch_id", staff.branch_id!).or(`assigned_to_staff_id.eq.${staff.id},assigned_by_staff_id.eq.${staff.id}`);
+          if (ownerIds.length) q = q.not("assigned_to_staff_id", "in", `(${ownerIds.join(",")})`);
+        }
+        return q;
+      });
       if (lErr) return err(lErr.message);
 
       const recurringIds = (data ?? []).filter(t => t.repeat_interval !== "none").map(t => t.id);
-      const { data: completions } = recurringIds.length
-        ? await db.from("task_completions").select("task_id").eq("completion_date", targetDate).in("task_id", recurringIds)
-        : { data: [] };
+      const { data: completions } = await allRowsIn(recurringIds, (ids) =>
+        db.from("task_completions").select("task_id").eq("completion_date", targetDate).in("task_id", ids));
       const completedSet = new Set((completions ?? []).map(c => c.task_id));
 
       const tasks = (data ?? []).map(t => ({
@@ -4286,13 +4328,12 @@ Deno.serve(async (req) => {
     }
 
     if (action === "get_my_tasks_today") {
-      const { data } = await db.from("tasks").select("*, branches(name)").eq("assigned_to_staff_id", staff.id);
+      const { data } = await allRows(() => db.from("tasks").select("*, branches(name)").eq("assigned_to_staff_id", staff.id));
       const today = todayISO();
       const dueTasks = (data ?? []).filter(t => isTaskDueOn(t, today));
       const recurringIds = dueTasks.filter(t => t.repeat_interval !== "none").map(t => t.id);
-      const { data: completions } = recurringIds.length
-        ? await db.from("task_completions").select("task_id").eq("completion_date", today).in("task_id", recurringIds)
-        : { data: [] };
+      const { data: completions } = await allRowsIn(recurringIds, (ids) =>
+        db.from("task_completions").select("task_id").eq("completion_date", today).in("task_id", ids));
       const completedSet = new Set((completions ?? []).map(c => c.task_id));
       const tasks = dueTasks.map(t => ({
         ...t,
@@ -4304,24 +4345,24 @@ Deno.serve(async (req) => {
     if (action === "get_task_completion_report") {
       const { branchId, allBranches, date } = payload;
       const targetDate = date || todayISO();
-      let q = db.from("tasks").select("*, assigned_to:assigned_to_staff_id(display_name, username, is_active), branches(name)");
-      if (isOwnerOrAdmin(staff)) {
-        if (!allBranches && branchId) q = q.eq("branch_id", branchId);
-      } else {
-        const bid = staff.branch_id;
-        if (!bid) return err("Branch access denied", 403);
-        q = q.eq("branch_id", bid);
-        const ownerIds = await getOwnerStaffIds(db);
-        if (ownerIds.length) q = q.not("assigned_to_staff_id", "in", `(${ownerIds.join(",")})`);
-      }
-      const { data, error: rErr } = await q;
+      if (!isOwnerOrAdmin(staff) && !staff.branch_id) return err("Branch access denied", 403);
+      const ownerIds = isOwnerOrAdmin(staff) ? [] : await getOwnerStaffIds(db);
+      const { data, error: rErr } = await allRows(() => {
+        let q = db.from("tasks").select("*, assigned_to:assigned_to_staff_id(display_name, username, is_active), branches(name)");
+        if (isOwnerOrAdmin(staff)) {
+          if (!allBranches && branchId) q = q.eq("branch_id", branchId);
+        } else {
+          q = q.eq("branch_id", staff.branch_id!);
+          if (ownerIds.length) q = q.not("assigned_to_staff_id", "in", `(${ownerIds.join(",")})`);
+        }
+        return q;
+      });
       if (rErr) return err(rErr.message);
 
       const dueTasks = (data ?? []).filter(t => isTaskDueOn(t, targetDate) && (t.assigned_to?.is_active !== false || targetDate < todayISO()));
       const recurringIds = dueTasks.filter(t => t.repeat_interval !== "none").map(t => t.id);
-      const { data: completions } = recurringIds.length
-        ? await db.from("task_completions").select("task_id").eq("completion_date", targetDate).in("task_id", recurringIds)
-        : { data: [] };
+      const { data: completions } = await allRowsIn(recurringIds, (ids) =>
+        db.from("task_completions").select("task_id").eq("completion_date", targetDate).in("task_id", ids));
       const completedSet = new Set((completions ?? []).map(c => c.task_id));
 
       const tasks = dueTasks.map(t => ({
@@ -4334,27 +4375,28 @@ Deno.serve(async (req) => {
 
     if (action === "list_incomplete_tasks") {
       const { branchId, allBranches } = payload;
-      let q = db.from("tasks").select("*, assigned_to:assigned_to_staff_id(display_name, username), assigned_by:assigned_by_staff_id(display_name, username), branches(name)");
-      if (isOwnerOrAdmin(staff)) {
-        if (!allBranches && branchId) q = q.eq("branch_id", branchId);
-      } else {
-        const bid = staff.branch_id;
-        if (!bid) return err("Branch access denied", 403);
-        q = q.eq("branch_id", bid).or(`assigned_to_staff_id.eq.${staff.id},assigned_by_staff_id.eq.${staff.id}`);
-        const ownerIds = await getOwnerStaffIds(db);
-        if (ownerIds.length) q = q.not("assigned_to_staff_id", "in", `(${ownerIds.join(",")})`);
-      }
-      const { data, error: tErr } = await q;
+      if (!isOwnerOrAdmin(staff) && !staff.branch_id) return err("Branch access denied", 403);
+      const ownerIds = isOwnerOrAdmin(staff) ? [] : await getOwnerStaffIds(db);
+      const { data, error: tErr } = await allRows(() => {
+        let q = db.from("tasks").select("*, assigned_to:assigned_to_staff_id(display_name, username), assigned_by:assigned_by_staff_id(display_name, username), branches(name)");
+        if (isOwnerOrAdmin(staff)) {
+          if (!allBranches && branchId) q = q.eq("branch_id", branchId);
+        } else {
+          q = q.eq("branch_id", staff.branch_id!).or(`assigned_to_staff_id.eq.${staff.id},assigned_by_staff_id.eq.${staff.id}`);
+          if (ownerIds.length) q = q.not("assigned_to_staff_id", "in", `(${ownerIds.join(",")})`);
+        }
+        return q;
+      });
       if (tErr) return err(tErr.message);
 
       const today = todayISO();
       const LOOKBACK_DAYS = 7;
       const windowStart = addDays(today, -LOOKBACK_DAYS);
 
+      // Recurring tasks × 7 days of completions can pass 1000 rows, so this is paged too.
       const recurringIds = (data ?? []).filter(t => t.repeat_interval !== "none").map(t => t.id);
-      const { data: completions } = recurringIds.length
-        ? await db.from("task_completions").select("task_id, completion_date").in("task_id", recurringIds).gte("completion_date", windowStart)
-        : { data: [] };
+      const { data: completions } = await allRowsIn(recurringIds, (ids) =>
+        db.from("task_completions").select("task_id, completion_date").in("task_id", ids).gte("completion_date", windowStart));
       const completedSet = new Set((completions ?? []).map(c => `${c.task_id}:${c.completion_date}`));
 
       const missed: Array<Record<string, unknown>> = [];
@@ -4430,9 +4472,16 @@ Deno.serve(async (req) => {
     if (action === "create_staff") {
       if (!isOwnerOrAdmin(staff)) return err("Owner only", 403);
       const { username, password, displayName, role, branchId } = payload;
+      // The role is taken from the request, so it is checked here: only the staff_role
+      // values exist, and only an admin may create an admin — admin outranks owner, so an
+      // owner able to mint one could promote themselves past their own role. The staff
+      // page itself only ever sends "staff".
+      const newRole = role ?? "staff";
+      if (!["staff", "owner", "admin"].includes(newRole)) return err("Invalid role");
+      if (newRole === "admin" && !isAdmin(staff)) return err("Only an admin can create an admin account", 403);
       const { data: hash } = await db.rpc("hash_staff_password", { plain_password: password });
       const { error } = await db.from("staff").insert({
-        username, password_hash: hash, role: role ?? "staff",
+        username, password_hash: hash, role: newRole,
         display_name: displayName, branch_id: branchId,
       });
       if (error) return err(error.code === "23505" ? "That username is already taken (usernames aren't case-sensitive)" : error.message);
@@ -4528,8 +4577,8 @@ Deno.serve(async (req) => {
     if (action === "list_alerts") {
       const { branchId } = payload;
       if (!requireBranch(staff, branchId)) return err("Branch access denied", 403);
-      const { data } = await db.from("alerts").select("*, students(name, phone)")
-        .eq("branch_id", branchId).eq("status", "pending").order("due_date");
+      const { data } = await allRows(() => db.from("alerts").select("*, students(name, phone)")
+        .eq("branch_id", branchId).eq("status", "pending").order("due_date"));
       return json({ alerts: data ?? [] });
     }
 
@@ -4559,18 +4608,18 @@ Deno.serve(async (req) => {
       // Any outstanding balance is actionable, regardless of due_date — due_date is always
       // set a month out even on a same-day partial payment, so gating on it would hide a
       // real balance for a full month.
-      const { data: dueToday } = await db.from("memberships").select("*, students(name, phone, course), branches(name)")
-        .in("branch_id", branchFilter).eq("is_active", true).gt("fee_due", 0);
-
-      const { data: expiringSoon } = await db.from("memberships").select("*, students(name, phone), branches(name)")
-        .in("branch_id", branchFilter).eq("is_active", true)
-        .gte("end_date", today).lte("end_date", addDays(today, 7));
-
-      const { data: expiredMemberships } = await db.from("memberships").select("*, students(name, phone), branches(name)")
-        .in("branch_id", branchFilter).eq("is_active", true).lt("end_date", today);
-
-      const { data: overdueLockers } = await db.from("lockers").select("*, students(name, phone), branches(name)")
-        .in("branch_id", branchFilter).eq("is_active", true).lt("locker_due_date", today);
+      // Across every branch each of these lists can pass 1000 rows, so all four are paged.
+      const [{ data: dueToday }, { data: expiringSoon }, { data: expiredMemberships }, { data: overdueLockers }] = await Promise.all([
+        allRows(() => db.from("memberships").select("*, students(name, phone, course), branches(name)")
+          .in("branch_id", branchFilter).eq("is_active", true).gt("fee_due", 0)),
+        allRows(() => db.from("memberships").select("*, students(name, phone), branches(name)")
+          .in("branch_id", branchFilter).eq("is_active", true)
+          .gte("end_date", today).lte("end_date", addDays(today, 7))),
+        allRows(() => db.from("memberships").select("*, students(name, phone), branches(name)")
+          .in("branch_id", branchFilter).eq("is_active", true).lt("end_date", today)),
+        allRows(() => db.from("lockers").select("*, students(name, phone), branches(name)")
+          .in("branch_id", branchFilter).eq("is_active", true).lt("locker_due_date", today)),
+      ]);
 
       return json({
         dueToday: dueToday ?? [], expiringSoon: expiringSoon ?? [],
@@ -4595,17 +4644,18 @@ Deno.serve(async (req) => {
       // session staff forgot to check out would silently vanish from this tab the next day
       // even though it was still genuinely open; sessions now only ever leave this list when
       // checkout_booking explicitly closes them.
-      const { data, error: bErr } = await db.from("bookings")
+      // Every open session in every branch can pass 1000 rows; the lookups below then carry
+      // that many ids each, so they go through allRowsIn (chunked and paged).
+      const { data, error: bErr } = await allRows(() => db.from("bookings")
         .select("*, students(name, phone, course), desks!desk_id(label, seat_type), memberships:membership_id(total_paid, fee_due, monthly_fee, category, end_date), branches(name)")
         .in("branch_id", branchIds)
         .eq("status", "active")
-        .order("created_at", { ascending: false });
+        .order("created_at", { ascending: false }));
       if (bErr) return err(bErr.message);
 
       const bookingIds = (data ?? []).map(b => b.id);
-      const { data: foodBills } = bookingIds.length
-        ? await db.from("food_bills").select("booking_id, total, paid").in("booking_id", bookingIds)
-        : { data: [] };
+      const { data: foodBills } = await allRowsIn(bookingIds, (ids) =>
+        db.from("food_bills").select("booking_id, total, paid").in("booking_id", ids));
       const foodTotals = new Map<string, number>();
       const unpaidFoodTotalsByBooking = new Map<string, number>();
       for (const fb of foodBills ?? []) {
@@ -4616,17 +4666,15 @@ Deno.serve(async (req) => {
       // A student can renew mid-session — pull each member's *current* active membership
       // rather than trusting the (possibly now-superseded) membership_id stored on the booking.
       const memberStudentIds = [...new Set((data ?? []).filter((b: any) => b.booking_type !== "walkin").map((b: any) => b.student_id))];
-      const { data: activeMems } = memberStudentIds.length
-        ? await db.from("memberships").select("student_id, total_paid, fee_due, monthly_fee, category, end_date")
-            .in("student_id", memberStudentIds).eq("is_active", true)
-        : { data: [] };
+      const { data: activeMems } = await allRowsIn(memberStudentIds, (ids) =>
+        db.from("memberships").select("student_id, total_paid, fee_due, monthly_fee, category, end_date")
+          .in("student_id", ids).eq("is_active", true));
       const activeMemByStudent = new Map((activeMems ?? []).map((m: any) => [m.student_id, m]));
 
       // Members can carry an unpaid food bill across days (different booking_id each day),
       // so their unpaid total must be summed by student, not by today's booking alone.
-      const { data: memberUnpaidBills } = memberStudentIds.length
-        ? await db.from("food_bills").select("student_id, total").in("student_id", memberStudentIds).eq("paid", false)
-        : { data: [] };
+      const { data: memberUnpaidBills } = await allRowsIn(memberStudentIds, (ids) =>
+        db.from("food_bills").select("student_id, total").in("student_id", ids).eq("paid", false));
       const unpaidFoodTotalsByStudent = new Map<string, number>();
       for (const fb of memberUnpaidBills ?? []) {
         unpaidFoodTotalsByStudent.set(fb.student_id, (unpaidFoodTotalsByStudent.get(fb.student_id) ?? 0) + Number(fb.total));
@@ -4634,9 +4682,8 @@ Deno.serve(async (req) => {
 
       // Food Pass holders never see a "pending, pay cash" food bill — it's auto-settled from
       // the pass at checkout — so the frontend needs to know who has one.
-      const { data: foodPasses } = memberStudentIds.length
-        ? await db.from("food_passes").select("student_id").in("student_id", memberStudentIds)
-        : { data: [] };
+      const { data: foodPasses } = await allRowsIn(memberStudentIds, (ids) =>
+        db.from("food_passes").select("student_id").in("student_id", ids));
       const foodPassStudentIds = new Set((foodPasses ?? []).map((p: { student_id: string }) => p.student_id));
 
       // Walk-ins holding a locker with no membership behind it: nothing releases that locker
@@ -4644,13 +4691,13 @@ Deno.serve(async (req) => {
       // reminds staff about it. A walk-in who is also a member is skipped — their locker is
       // handled when the membership closes.
       const walkinStudentIds = [...new Set((data ?? []).filter((b: any) => b.booking_type === "walkin" && b.student_id).map((b: any) => b.student_id))];
-      const [{ data: walkinLockers }, { data: walkinMems }] = walkinStudentIds.length
-        ? await Promise.all([
-            db.from("lockers").select("id, student_id, locker_no, locker_due_date, fee_due, deposit_amount, deposit_returned")
-              .in("student_id", walkinStudentIds).eq("is_active", true),
-            db.from("memberships").select("student_id").in("student_id", walkinStudentIds).eq("is_active", true),
-          ])
-        : [{ data: [] }, { data: [] }];
+      const [{ data: walkinLockers }, { data: walkinMems }] = await Promise.all([
+        allRowsIn(walkinStudentIds, (ids) =>
+          db.from("lockers").select("id, student_id, locker_no, locker_due_date, fee_due, deposit_amount, deposit_returned")
+            .in("student_id", ids).eq("is_active", true)),
+        allRowsIn(walkinStudentIds, (ids) =>
+          db.from("memberships").select("student_id").in("student_id", ids).eq("is_active", true)),
+      ]);
       const walkinMemberIds = new Set((walkinMems ?? []).map((m: { student_id: string }) => m.student_id));
       const walkinLockerByStudent = new Map(
         (walkinLockers ?? []).filter((l: { student_id: string }) => !walkinMemberIds.has(l.student_id))
@@ -4712,16 +4759,17 @@ Deno.serve(async (req) => {
         if (!requireBranch(staff, branchId)) return err("Branch access denied", 403);
         branchIds = [branchId];
       }
-      const { data } = await db.from("memberships")
+      // All active memberships across branches pass 1000; the per-student lookups below
+      // then carry that many ids, so they are chunked and paged too.
+      const { data } = await allRows(() => db.from("memberships")
         .select("id, branch_id, category, hours_per_day, hours_per_day_weekend, monthly_fee, start_date, end_date, cabin_no, is_paused, hold_days, fee_due, total_paid, students(id, name, phone), branches(name)")
         .in("branch_id", branchIds)
         .eq("is_active", true)
-        .order("end_date");
+        .order("end_date"));
       type MemRow = { id: string; branch_id: string; category: string; hours_per_day: number; hours_per_day_weekend: number | null; monthly_fee: number; start_date: string; end_date: string; cabin_no: string | null; is_paused: boolean; hold_days: number; fee_due: number; total_paid: number; students: { id: string; name: string; phone: string } | null; branches: { name: string } | null };
       const studentIds = (data as MemRow[] ?? []).map(m => m.students?.id).filter((id): id is string => !!id);
-      const { data: pendingCashbacks } = studentIds.length
-        ? await db.from("cashbacks").select("student_id, cashback_type, cashback_value").in("student_id", studentIds).eq("status", "pending")
-        : { data: [] };
+      const { data: pendingCashbacks } = await allRowsIn(studentIds, (ids) =>
+        db.from("cashbacks").select("student_id, cashback_type, cashback_value").in("student_id", ids).eq("status", "pending"));
       const cashbackByStudent = new Map((pendingCashbacks ?? []).map((c: { student_id: string; cashback_type: string; cashback_value: number }) => [c.student_id, c]));
       // The renewal dialog has to show the same total renew_membership will charge, which
       // applies EVERY pending cashback (not just one) and adds any unbilled Pay Later overtime.
@@ -4729,10 +4777,12 @@ Deno.serve(async (req) => {
       for (const c of (pendingCashbacks ?? []) as { student_id: string; cashback_type: string; cashback_value: number }[]) {
         allCashbacksByStudent.set(c.student_id, [...(allCashbacksByStudent.get(c.student_id) ?? []), { cashback_type: c.cashback_type, cashback_value: c.cashback_value }]);
       }
-      const unbilledOvertimeRows = studentIds.length
-        ? await fetchAllRows<{ student_id: string; billed_amount: number | null }>(() => db.from("overtime_sessions").select("student_id, billed_amount")
-          .in("student_id", studentIds).is("billed_at", null).eq("excluded", false).order("id"))
-        : [];
+      // Was paged already, but carried every student id in one URL (414 past ~200 students).
+      const { data: unbilledOvertimeData, error: otErr } = await allRowsIn<{ student_id: string; billed_amount: number | null }>(studentIds, (ids) =>
+        db.from("overtime_sessions").select("student_id, billed_amount")
+          .in("student_id", ids).is("billed_at", null).eq("excluded", false));
+      if (otErr) throw new Error(otErr.message);
+      const unbilledOvertimeRows = unbilledOvertimeData ?? [];
       const overtimeDueByStudent = new Map<string, number>();
       for (const o of unbilledOvertimeRows) {
         overtimeDueByStudent.set(o.student_id, (overtimeDueByStudent.get(o.student_id) ?? 0) + Number(o.billed_amount ?? 0));
@@ -5718,14 +5768,14 @@ Deno.serve(async (req) => {
     // ─── ENQUIRIES (leads pipeline) ───
     if (action === "list_enquiries") {
       const { branchId, allBranches } = payload;
-      let q = db.from("enquiries").select("*, branches(name)").order("created_at", { ascending: false });
-      if (allBranches && isOwnerOrAdmin(staff)) {
-        // no branch filter — every branch's enquiries, for the Combined Hall read-only view
-      } else {
-        if (!requireBranch(staff, branchId)) return err("Branch access denied", 403);
-        q = q.eq("branch_id", branchId);
-      }
-      const { data } = await q;
+      const everyBranch = allBranches && isOwnerOrAdmin(staff);
+      // no branch filter for everyBranch — every branch's enquiries, for the Combined Hall read-only view
+      if (!everyBranch && !requireBranch(staff, branchId)) return err("Branch access denied", 403);
+      // Every enquiry ever received, so the list grows without end.
+      const { data } = await allRows(() => {
+        const q = db.from("enquiries").select("*, branches(name)").order("created_at", { ascending: false });
+        return everyBranch ? q : q.eq("branch_id", branchId);
+      });
       return json({ enquiries: data ?? [] });
     }
 
