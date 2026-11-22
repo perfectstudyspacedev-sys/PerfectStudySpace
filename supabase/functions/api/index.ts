@@ -1,11 +1,12 @@
-import { createClient } from "https://esm.sh/@supabase/supabase-js@2.49.1";
-// Exact version: "jose@5" is a moving range resolved by esm.sh at each cold start. 5.10.0
-// is what that range resolved to (the last 5.x release), so the code that runs is unchanged.
-import { SignJWT, jwtVerify } from "https://esm.sh/jose@5.10.0";
+// Libraries stored in the repo (supabase/functions/_vendor, see its README): the function
+// starts without downloading anything. Same versions as before: supabase-js 2.49.1 and
+// jose 5.10.0 (what "jose@5" resolved to, the last 5.x release).
+import { createClient } from "../_vendor/supabase-js@2.49.1.mjs";
+import { SignJWT, jwtVerify } from "../_vendor/jose@5.10.0.mjs";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
-  "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type",
+  "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type, idempotency-key",
 };
 
 // Temporary dev-mode switch, code-level only (no UI toggle) — flip and redeploy to turn its
@@ -33,13 +34,293 @@ function err(message: string, status = 400) {
 // authenticated request rather than caching "already marked" in memory — an in-memory cache
 // here would permanently mask a single failed attempt (e.g. a transient DB hiccup) for the
 // rest of that day, which is worse than the negligible cost of a few extra no-op upserts.
+// Only a SUCCESSFUL upsert is remembered, and only for CACHE_MS, so a failed one is
+// still retried on the very next request; within the minute the upsert would be a no-op
+// anyway (the row exists, ignoreDuplicates), which is what this saves on busy pages.
+const attendanceMarkedAt = new Map<string, number>();
 async function markAttendanceIfNeeded(db: ReturnType<typeof adminClient>, staffId: string, role: string, branchId: string | null) {
   if (role === "owner") return;
+  const key = `${staffId}:${todayISO()}`;
+  const at = attendanceMarkedAt.get(key);
+  if (at && Date.now() - at < CACHE_MS) return;
   const { error } = await db.from("staff_attendance").upsert(
     { staff_id: staffId, branch_id: branchId, attendance_date: todayISO() },
     { onConflict: "staff_id,attendance_date", ignoreDuplicates: true },
   );
-  if (error) console.error("Failed to mark staff attendance:", error.message);
+  if (error) { console.error("Failed to mark staff attendance:", error.message); return; }
+  if (attendanceMarkedAt.size > 2000) attendanceMarkedAt.clear();
+  attendanceMarkedAt.set(key, Date.now());
+}
+
+// ─── Worker cache (60 s) for small, rarely changed tables ───
+// branches, fee_config and app_settings are read on almost every page. A worker serves
+// many requests (per_worker policy), so each keeps them for CACHE_MS; a write in this
+// worker forgets its copy at once, other workers pick the change up within CACHE_MS.
+// Errors are never cached.
+const CACHE_MS = 60_000;
+const memo = new Map<string, { at: number; value: Promise<unknown> }>();
+function cached<T>(key: string, load: () => Promise<T>): Promise<T> {
+  const hit = memo.get(key);
+  if (hit && Date.now() - hit.at < CACHE_MS) return hit.value as Promise<T>;
+  const value = load().catch((e) => { memo.delete(key); throw e; });
+  memo.set(key, { at: Date.now(), value });
+  return value;
+}
+function forget(key: string) { memo.delete(key); }
+
+type BranchRow = { id: string; name: string; desk_count: number | null; shift_config: unknown; locker_capacity: number | null; is_active: boolean };
+// Every branch (inactive ones too), by name. Callers filter is_active where they did before.
+function getAllBranches(db: ReturnType<typeof adminClient>): Promise<BranchRow[]> {
+  return cached("branches", async () => {
+    const { data, error } = await db.from("branches")
+      .select("id, name, desk_count, shift_config, locker_capacity, is_active").order("name").order("id");
+    if (error) throw new Error(error.message);
+    return (data ?? []) as BranchRow[];
+  });
+}
+async function activeBranches(db: ReturnType<typeof adminClient>) { return (await getAllBranches(db)).filter((b) => b.is_active); }
+
+// deno-lint-ignore no-explicit-any
+function feeConfigRows(db: ReturnType<typeof adminClient>): Promise<any[]> {
+  return cached("fee_config", async () => {
+    const { data, error } = await db.from("fee_config").select("*").order("config_type").order("sort_order").order("id");
+    if (error) throw new Error(error.message);
+    return data ?? [];
+  });
+}
+
+// The client's address, for the login lockout. nginx (self-hosted) and Supabase's own
+// gateway append the real client last to X-Forwarded-For; anything before it can be typed
+// by the client, so the last public entry is used. null when none is known (no IP lock).
+function clientIp(req: Request): string | null {
+  const isPrivate = (ip: string) => /^(127\.|10\.|192\.168\.|172\.(1[6-9]|2\d|3[01])\.|::1$|fc|fd|fe80:)/i.test(ip);
+  const parts = (req.headers.get("x-forwarded-for") ?? "").split(",").map((s) => s.trim()).filter(Boolean);
+  for (let i = parts.length - 1; i >= 0; i--) if (!isPrivate(parts[i])) return parts[i];
+  const real = req.headers.get("x-real-ip")?.trim();
+  return real && !isPrivate(real) ? real : null;
+}
+
+// A booking insert refused by migration 053's "one open session per student / per desk"
+// rules (two check-ins at the same moment). Any other error passes through unchanged.
+function openSessionMessage(e: { code?: string; message: string }): string {
+  if (e.code === "23505" && e.message.includes("uq_bookings_one_open_per_student")) return "This student already has an open session — check them out first";
+  if (e.code === "23505" && e.message.includes("uq_bookings_one_open_per_desk")) return "That desk is already in use by another open session";
+  return e.message;
+}
+
+// ─── Students list rows (list_students, list_students_page, export_students) ───
+// Built from the students, their active membership and active locker. Kept 15 s per
+// branch scope in this worker, so turning pages or typing in a filter does not rebuild
+// 20,000 rows each time; every write in this worker forgets them (forgetStudentRows).
+// deno-lint-ignore no-explicit-any
+const studentRowsCache = new Map<string, { at: number; rows: Promise<any[]> }>();
+const STUDENT_ROWS_MS = 15_000;
+function forgetStudentRows() { studentRowsCache.clear(); }
+// deno-lint-ignore no-explicit-any
+function studentRows(db: ReturnType<typeof adminClient>, branchIds: string[]): Promise<any[]> {
+  const key = [...branchIds].sort().join(",");
+  const hit = studentRowsCache.get(key);
+  if (hit && Date.now() - hit.at < STUDENT_ROWS_MS) return hit.rows;
+  const rows = buildStudentRows(db, branchIds).catch((e) => { studentRowsCache.delete(key); throw e; });
+  studentRowsCache.set(key, { at: Date.now(), rows });
+  return rows;
+}
+// deno-lint-ignore no-explicit-any
+async function buildStudentRows(db: ReturnType<typeof adminClient>, branchIds: string[]): Promise<any[]> {
+  // All branches together hold well over 1000 students and active memberships.
+  const [{ data: students }, { data: memberships }, { data: lockers }] = await Promise.all([
+    allRows(() => db.from("students").select("*, branches(name)").in("branch_id", branchIds).order("s_no")),
+    allRows(() => db.from("memberships").select("*").in("branch_id", branchIds).eq("is_active", true)),
+    allRows(() => db.from("lockers").select("*").in("branch_id", branchIds).eq("is_active", true)),
+  ]);
+
+  const memByStudent = new Map(memberships?.map(m => [m.student_id, m]) ?? []);
+  const lockerByStudent = new Map(lockers?.map(l => [l.student_id, l]) ?? []);
+
+  const listToday = todayISO();
+  const rows = (students ?? []).map((s, i) => {
+    const mem = memByStudent.get(s.id);
+    const locker = lockerByStudent.get(s.id);
+    // Derived live rather than read from s.status — see computeStudentStatus().
+    const liveStatus = computeStudentStatus(mem, locker, listToday);
+    return {
+      sNo: s.s_no ?? i + 1,
+      id: s.id,
+      name: s.name,
+      branches: s.branches,
+      cabin: mem?.cabin_no ?? "-",
+      // Start of the current (latest-renewed) membership and the real last paid day —
+      // unlike dueDate, endDate reflects every month paid (same date the status uses).
+      startDate: mem?.start_date ?? "-",
+      endDate: mem?.end_date ?? "-",
+      dueDate: mem?.due_date ?? "-",
+      month: mem?.month ?? "-",
+      hours: mem?.hours_per_day ?? "-",
+      timings: mem?.timings ?? "-",
+      locker: locker?.locker_no ?? "-",
+      lockerDue: locker?.locker_due_date ?? "-",
+      course: s.course ?? "-",
+      contact: s.phone,
+      status: liveStatus,
+      isOverdue: mem ? mem.due_date < listToday && mem.fee_due > 0 : false,
+      lockerOverdue: locker ? locker.locker_due_date && locker.locker_due_date < listToday : false,
+      totalVisits: s.total_visits,
+      totalHours: s.total_hours_studied,
+    };
+  });
+
+  return rows;
+}
+
+// The Students page's own rules, moved here unchanged so a page of 50 comes back filtered
+// and sorted exactly as the whole list used to be in the browser.
+const STUDENT_COLUMNS: { key: string; isDate?: boolean }[] = [
+  { key: "sNo" }, { key: "name" }, { key: "cabin" }, { key: "startDate", isDate: true }, { key: "endDate", isDate: true },
+  { key: "month" }, { key: "hours" }, { key: "locker" }, { key: "lockerDue", isDate: true }, { key: "course" }, { key: "contact" },
+];
+// Same as the website's formatDate: "DD-MM-YY".
+function formatDateDMY(value: string) {
+  if (!value) return "—";
+  const d = value.length <= 10 ? new Date(value + "T12:00:00") : new Date(value);
+  if (Number.isNaN(d.getTime())) return "—";
+  const pad = (n: number) => String(n).padStart(2, "0");
+  return pad(d.getDate()) + "-" + pad(d.getMonth() + 1) + "-" + String(d.getFullYear()).slice(-2);
+}
+// The text a cell renders; column filters match it, and the ISO value, as on the page.
+// deno-lint-ignore no-explicit-any
+function studentCellText(row: any, col: { key: string; isDate?: boolean } | undefined) {
+  const raw = row[col?.key ?? ""];
+  if (raw == null || raw === "-") return "";
+  if (col?.isDate) return formatDateDMY(raw) + " " + raw;
+  return String(raw);
+}
+// deno-lint-ignore no-explicit-any
+function filterSortStudents(students: any[], p: any) {
+  const search = String(p.search ?? ""), statusFilter = p.statusFilter ?? "active", courseFilter = p.courseFilter ?? "";
+  const filters: Record<string, string> = p.filters ?? {};
+  const sortKey = p.sortKey ?? "sNo", sortDir = p.sortDir ?? "asc";
+  const courses = [...new Set(students.map((x) => x.course).filter((c) => c && c !== "-"))].sort();
+  let rows = [...students];
+  if (search.trim()) {
+    const q = search.trim().toLowerCase();
+    rows = rows.filter((r) => r.name.toLowerCase().includes(q) || r.contact.includes(q) || r.cabin.toLowerCase().includes(q));
+  }
+  rows = rows.filter((r) => r.status === statusFilter);
+  if (courseFilter) rows = rows.filter((r) => r.course === courseFilter);
+  Object.entries(filters).forEach(([key, rawVal]) => {
+    const val = String(rawVal ?? "").trim().toLowerCase();
+    if (!val) return;
+    const col = STUDENT_COLUMNS.find((c) => c.key === key);
+    rows = rows.filter((r) => studentCellText(r, col).toLowerCase().includes(val));
+  });
+  rows.sort((a, b) => {
+    const av = a[sortKey];
+    const bv = b[sortKey];
+    // Placeholder "-" cells always sink to the bottom regardless of direction.
+    const aBlank = av == null || av === "-" || av === "";
+    const bBlank = bv == null || bv === "-" || bv === "";
+    if (aBlank || bBlank) return aBlank && bBlank ? 0 : aBlank ? 1 : -1;
+    let cmp;
+    if (typeof av === "number" && typeof bv === "number") {
+      cmp = av - bv;
+    } else {
+      // Numeric strings (S.No, locker no, hours) compare as numbers; dates on their ISO value.
+      const an = Number(av);
+      const bn = Number(bv);
+      cmp = !Number.isNaN(an) && !Number.isNaN(bn) && String(av).trim() !== "" && String(bv).trim() !== ""
+        ? an - bn
+        : String(av).localeCompare(String(bv), undefined, { numeric: true, sensitivity: "base" });
+    }
+    return sortDir === "asc" ? cmp : -cmp;
+  });
+  return { rows, courses, branchCounts: undefined as [string, number][] | undefined };
+}
+// Combined Hall: search, status ("" = everyone but inactive), grouped by branch name,
+// optionally one branch. branchCounts lists every branch with its count before that choice.
+// deno-lint-ignore no-explicit-any
+function filterCombinedStudents(students: any[], p: any) {
+  const search = String(p.search ?? ""), statusFilter = p.statusFilter ?? "", branchName = p.branchName ?? null;
+  const q = search.trim().toLowerCase();
+  const searched = q
+    ? students.filter((x) => x.name.toLowerCase().includes(q) || x.contact.includes(q) || String(x.cabin).toLowerCase().includes(q))
+    : students;
+  const filtered = statusFilter ? searched.filter((x) => x.status === statusFilter) : searched.filter((x) => x.status !== "inactive");
+  // deno-lint-ignore no-explicit-any
+  const groups = new Map<string, any[]>();
+  for (const row of filtered) {
+    const key = row.branches?.name ?? "Unknown Branch";
+    if (!groups.has(key)) groups.set(key, []);
+    groups.get(key)!.push(row);
+  }
+  const sorted = [...groups.entries()].sort(([a], [b]) => a.localeCompare(b));
+  const visible = branchName ? sorted.filter(([name]) => name === branchName) : sorted;
+  return { rows: visible.flatMap(([, rows]) => rows), courses: [] as string[], branchCounts: sorted.map(([name, rows]) => [name, rows.length] as [string, number]) };
+}
+
+// ─── Idempotency (migration 053) ───
+// A write that carries an Idempotency-Key header runs once per staff member and key:
+// a second arrival with the same key (a double click, a request retried by the router or
+// the browser) gets the first one's stored answer instead of running again. While the
+// first is still running, the second waits for it (up to IDEMPOTENCY_WAIT_MS). The same
+// key with a different request is refused. If the action crashed (500, or an error that
+// escaped it), the key is released so a retry can run it again. Reads never use keys.
+// Without the table (053 not applied yet) every write simply runs, as before.
+const IDEMPOTENCY_WAIT_MS = 25_000;
+function isWriteAction(action: string) {
+  return !/^(get_|list_|lookup_|search_|poll_|export_)/.test(action) && action !== "whoami" && action !== "batch";
+}
+async function sha256Hex(text: string) {
+  const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(text));
+  return [...new Uint8Array(digest)].map((b) => b.toString(16).padStart(2, "0")).join("");
+}
+async function withIdempotency(
+  req: Request, db: ReturnType<typeof adminClient>, staff: StaffRow, action: string,
+  // deno-lint-ignore no-explicit-any
+  payload: any, run: () => Promise<Response>,
+): Promise<Response> {
+  const key = req.headers.get("idempotency-key")?.trim();
+  if (!key || !isWriteAction(action)) return run();
+  if (key.length < 8 || key.length > 100) return err("Invalid idempotency key");
+  const requestHash = await sha256Hex(`${action}\n${JSON.stringify(payload)}`);
+  const row = () => db.from("idempotency_keys").select("request_hash, status, response_status, response_body")
+    .eq("staff_id", staff.id).eq("key", key).maybeSingle();
+  const release = () => db.from("idempotency_keys").delete().eq("staff_id", staff.id).eq("key", key);
+  const deadline = Date.now() + IDEMPOTENCY_WAIT_MS;
+  for (;;) {
+    const claim = await db.from("idempotency_keys").insert({ staff_id: staff.id, key, action, request_hash: requestHash }).select("key");
+    if (!claim.error) break; // this request owns the key: run it below
+    if (claim.error.code !== "23505") {
+      console.error("idempotency unavailable, running without:", claim.error.message);
+      return run();
+    }
+    const { data: seen } = await row();
+    if (!seen) continue; // released by a crashed attempt a moment ago: claim it again
+    if (seen.request_hash !== requestHash) return err("This request key was already used for a different request", 422);
+    if (seen.status === "done") {
+      return new Response(seen.response_body ?? "null", {
+        status: seen.response_status ?? 200,
+        headers: { ...corsHeaders, "Content-Type": "application/json", "Idempotency-Replayed": "true" },
+      });
+    }
+    if (Date.now() > deadline) return err("This request is still being processed — please wait a moment and refresh", 409);
+    await new Promise((r) => setTimeout(r, 250));
+  }
+  let res: Response;
+  try {
+    res = await run();
+  } catch (e) {
+    await release();
+    throw e;
+  }
+  if (res.status >= 500) {
+    await release();
+    return res;
+  }
+  const { error: saveErr } = await db.from("idempotency_keys")
+    .update({ status: "done", response_status: res.status, response_body: await res.clone().text(), finished_at: new Date().toISOString() })
+    .eq("staff_id", staff.id).eq("key", key);
+  if (saveErr) console.error("Failed to store an idempotent answer:", saveErr.message);
+  return res;
 }
 
 // No hardcoded fallback: a guessable default secret would let anyone forge staff JWTs
@@ -79,10 +360,16 @@ async function authStaff(req: Request): Promise<StaffRow | null> {
     const db = adminClient();
     // Tolerate override_branch_id/override_date not existing yet (migration 029 not applied
     // to this environment) — fall back to a plain lookup instead of failing every request.
+    // The staff row and today's attendance row are read at the same time (this runs on
+    // every request); the attendance row only matters for non-owners, as before.
     let data: { id: string; username: string; role: string; display_name: string | null; branch_id: string | null; is_active: boolean; override_branch_id?: string | null; override_date?: string | null } | null = null;
-    const withOverride = await db.from("staff")
-      .select("id, username, role, display_name, branch_id, is_active, override_branch_id, override_date")
-      .eq("id", payload.sub).single();
+    const [withOverride, { data: att }] = await Promise.all([
+      db.from("staff")
+        .select("id, username, role, display_name, branch_id, is_active, override_branch_id, override_date")
+        .eq("id", payload.sub).single(),
+      db.from("staff_attendance").select("last_logout_at")
+        .eq("staff_id", payload.sub).eq("attendance_date", todayISO()).maybeSingle(),
+    ]);
     if (withOverride.error) {
       const plain = await db.from("staff").select("id, username, role, display_name, branch_id, is_active").eq("id", payload.sub).single();
       data = plain.data;
@@ -93,11 +380,7 @@ async function authStaff(req: Request): Promise<StaffRow | null> {
     // Cuts off an already-open tab/device too, not just fresh logins — once "End Session"
     // has been recorded for today, every subsequent request from this staff member (any
     // token) is treated as unauthorized until tomorrow's attendance row resets it.
-    if (data.role !== "owner") {
-      const { data: att } = await db.from("staff_attendance").select("last_logout_at")
-        .eq("staff_id", data.id).eq("attendance_date", todayISO()).maybeSingle();
-      if (att?.last_logout_at) return null;
-    }
+    if (data.role !== "owner" && att?.last_logout_at) return null;
     // A same-day branch override (covering an absent colleague) swaps in as the effective
     // branch_id for every requireBranch() check downstream — the staff member's actual
     // `branch_id` column (their permanent home branch) is untouched in the DB.
@@ -431,7 +714,7 @@ function buildDateBuckets(from: string, to: string, granularity: "day" | "week")
 }
 
 async function getWalkinFee(db: ReturnType<typeof adminClient>, hours: number): Promise<number> {
-  const { data } = await db.from("fee_config").select("*").eq("config_type", "walkin").order("max_hours");
+  const data = (await feeConfigRows(db)).filter((r) => r.config_type === "walkin").sort((a, b) => a.max_hours - b.max_hours);
   if (!data?.length) {
     if (hours <= 3) return 35;
     if (hours <= 6) return 60;
@@ -445,8 +728,9 @@ async function getWalkinFee(db: ReturnType<typeof adminClient>, hours: number): 
 }
 
 async function getMembershipPackage(db: ReturnType<typeof adminClient>, hoursPerDay: number, category: string) {
-  const { data } = await db.from("fee_config").select("*")
-    .eq("config_type", "membership").eq("cabin_type", category).eq("hours_per_day", hoursPerDay).maybeSingle();
+  // maybeSingle() semantics kept: exactly one matching row, otherwise the defaults.
+  const matches = (await feeConfigRows(db)).filter((r) => r.config_type === "membership" && r.cabin_type === String(category) && Number(r.hours_per_day) === Number(hoursPerDay));
+  const data = matches.length === 1 ? matches[0] : null;
   if (data) return Number(data.fee);
   const defaults: Record<string, Record<number, number>> = {
     temporary: { 2: 500, 3: 650, 4: 800, 5: 1000, 6: 1250, 8: 1500 },
@@ -865,34 +1149,69 @@ Deno.serve(async (req) => {
       const username = String(payload.username ?? "").trim();
       const password = String(payload.password ?? "").trim();
       if (!username || !password) return err("Username and password required");
-      const { data, error } = await db.rpc("verify_staff_login", { p_username: username, p_password: password });
-      if (error || !data?.length) return err("Invalid login credentials", 401);
+      // Lockout (migration 053): 5 failures within 15 minutes, for this username or from
+      // this IP, lock both for 15 minutes. Checked at the same time as the password, so it
+      // adds no wait; a locked login is refused whatever the password was. If the lockout
+      // function is missing (053 not applied yet) logins work as before.
+      const ip = clientIp(req);
+      const userKey = username.toLowerCase();
+      const [lock, { data, error }] = await Promise.all([
+        db.rpc("login_locked_until", { p_username: userKey, p_ip: ip }),
+        db.rpc("verify_staff_login", { p_username: username, p_password: password }),
+      ]);
+      if (lock.error) console.error("login lockout check unavailable:", lock.error.message);
+      if (lock.data) {
+        const mins = Math.max(1, Math.ceil((Date.parse(lock.data) - Date.now()) / 60_000));
+        return err(`Too many failed sign-in attempts. Please wait ${mins} minute${mins === 1 ? "" : "s"} and try again.`, 429);
+      }
+      if (error || !data?.length) {
+        const { error: failErr } = await db.from("login_failures").insert({ username: userKey, ip: ip ?? "unknown" });
+        if (failErr && !lock.error) console.error("Failed to record a failed login:", failErr.message);
+        return err("Invalid login credentials", 401);
+      }
       const row = data[0];
+
+      // Independent of each other, so run together: the end-of-day check, attendance
+      // marking (an upsert that never changes an existing row, so marking before the
+      // check passes leaves the same state as before), the branch override, and clearing
+      // this username's failed attempts.
+      const [{ data: att }, , { data: overrideRow }] = await Promise.all([
+        row.role !== "owner"
+          ? db.from("staff_attendance").select("last_logout_at")
+            .eq("staff_id", row.id).eq("attendance_date", todayISO()).maybeSingle()
+          : Promise.resolve({ data: null }),
+        // Auto-mark attendance on first login of the day (no-op if already marked) — owner is exempt
+        markAttendanceIfNeeded(db, row.id, row.role, row.branch_id),
+        db.from("staff").select("override_branch_id, override_date").eq("id", row.id).single(),
+        lock.error ? Promise.resolve(null) : db.from("login_failures").delete().eq("username", userKey),
+      ]);
 
       // Once a staff member has ended their session for the day, they're locked out of
       // logging back in until tomorrow — mirrors clocking out at a physical front desk.
       // Owner is exempt (End Session isn't offered to them in the first place).
-      if (row.role !== "owner") {
-        const { data: att } = await db.from("staff_attendance").select("last_logout_at")
-          .eq("staff_id", row.id).eq("attendance_date", todayISO()).maybeSingle();
-        if (att?.last_logout_at) {
-          return err("You've already ended your session for today — you can log in again tomorrow.", 403);
-        }
+      if (att?.last_logout_at) {
+        return err("You've already ended your session for today — you can log in again tomorrow.", 403);
       }
 
       const token = await signToken({ sub: row.id, role: row.role, username: row.username });
 
-      // Auto-mark attendance on first login of the day (no-op if already marked) — owner is exempt
-      await markAttendanceIfNeeded(db, row.id, row.role, row.branch_id);
+      // Keep the owner's last successful login in the database without changing the
+      // response shape consumed by the frontend. Do not make login fail if this optional
+      // activity timestamp cannot be written.
+      if (row.role === "owner") {
+        const { error: loginStampError } = await db.from("staff")
+          .update({ last_login_at: new Date().toISOString() })
+          .eq("id", row.id);
+        if (loginStampError) console.error("Failed to record owner login:", loginStampError.message);
+      }
 
       // If the owner reassigned this staff member to a different branch for today (covering
       // an absence), log them into that branch instead of their permanent home branch.
       let effectiveBranchId = row.branch_id;
       let effectiveBranchName = row.branch_name;
       let isOverrideToday = false;
-      const { data: overrideRow } = await db.from("staff").select("override_branch_id, override_date").eq("id", row.id).single();
       if (overrideRow?.override_branch_id && overrideRow.override_date === todayISO()) {
-        const { data: overrideBranch } = await db.from("branches").select("id, name").eq("id", overrideRow.override_branch_id).single();
+        const overrideBranch = (await getAllBranches(db)).find((b) => b.id === overrideRow.override_branch_id) ?? null;
         if (overrideBranch) {
           effectiveBranchId = overrideBranch.id;
           effectiveBranchName = overrideBranch.name;
@@ -1041,6 +1360,20 @@ Deno.serve(async (req) => {
     if (!staff) return err("Unauthorized", 401);
     await markAttendanceIfNeeded(db, staff.id, staff.role, staff.homeBranchId);
 
+    // Every staff action goes through withIdempotency: a write that carries an
+    // Idempotency-Key header runs once, however often it arrives (migration 053).
+    return await withIdempotency(req, db, staff, action, payload, () => handleStaffAction(db, staff, action, payload)
+      // A write may change what the Students list shows: drop this worker's cached rows.
+      .finally(() => { if (isWriteAction(action)) forgetStudentRows(); }));
+  } catch (e) {
+    return err(e instanceof Error ? e.message : "Server error", 500);
+  }
+});
+
+// Every action that needs a signed-in staff member. Moved here unchanged from inside
+// Deno.serve so withIdempotency can wrap it; errors it throws still become the 500 above.
+// deno-lint-ignore no-explicit-any
+async function handleStaffAction(db: ReturnType<typeof adminClient>, staff: StaffRow, action: string, payload: any): Promise<Response> {
     // Lets the frontend re-sync a staff member's own profile (display name, branch
     // reassignment, etc.) without needing to log out and back in — polled periodically
     // so an owner's edit shows up in that staff member's already-open session promptly.
@@ -1060,12 +1393,55 @@ Deno.serve(async (req) => {
       });
     }
 
+    // ─── Fewer calls per page (2b-D) ───
+    // batch: up to 10 READ actions in one request, run side by side through this same
+    // handler, so each answer is exactly what its own call would return. Writes are refused
+    // (they must keep their own request and idempotency key); batches do not nest.
+    if (action === "batch") {
+      const calls = Array.isArray(payload.calls) ? payload.calls : [];
+      if (!calls.length || calls.length > 10) return err("A batch takes 1 to 10 calls");
+      for (const c of calls) {
+        if (typeof c?.action !== "string" || c.action === "batch" || isWriteAction(c.action)) return err(`Not allowed in a batch: ${c?.action}`);
+      }
+      const results = await Promise.all(calls.map(async ({ action: a, ...p }: { action: string }) => {
+        try {
+          const r = await handleStaffAction(db, staff, a, p);
+          return { status: r.status, body: await r.json() };
+        } catch (e) {
+          return { status: 500, body: { error: e instanceof Error ? e.message : "Server error" } };
+        }
+      }));
+      return json({ results });
+    }
+
+    // The session-end alerts (every open tab, every minute) only need when each open session
+    // ends; list_today_bookings also loads food bills, memberships, passes and lockers.
+    if (action === "poll_session_alerts") {
+      const { branchId } = payload;
+      if (!requireBranch(staff, branchId)) return err("Branch access denied", 403);
+      const { data, error: pErr } = await allRows(() => db.from("bookings")
+        .select("id, start_time, end_time, hours, is_paused, students(name)")
+        .eq("branch_id", branchId).eq("status", "active"));
+      if (pErr) return err(pErr.message);
+      return json({ bookings: data ?? [] });
+    }
+
+    // The new-task bell (every open tab, every minute) only needs the tasks assigned to this
+    // staff member, as list_tasks would show them; list_tasks returns every task with joins.
+    if (action === "poll_my_tasks") {
+      if (!isOwnerOrAdmin(staff) && !staff.branch_id) return err("Branch access denied", 403);
+      const { data, error: tErr } = await allRows(() => {
+        const q = db.from("tasks").select("id, title, assigned_by_staff_id, assigned_to_staff_id").eq("assigned_to_staff_id", staff.id);
+        return isOwnerOrAdmin(staff) ? q : q.eq("branch_id", staff.branch_id!);
+      });
+      if (tErr) return err(tErr.message);
+      return json({ tasks: data ?? [] });
+    }
+
     // ─── BRANCHES ───
     if (action === "list_branches") {
-      let q = db.from("branches").select("id, name, desk_count, shift_config, locker_capacity").eq("is_active", true).order("name");
-      if (!isOwnerOrAdmin(staff)) q = q.eq("id", staff.branch_id!);
-      const { data } = await q;
-      return json({ branches: data ?? [] });
+      const rows = (await activeBranches(db)).filter((b) => isOwnerOrAdmin(staff) || b.id === staff.branch_id);
+      return json({ branches: rows.map(({ id, name, desk_count, shift_config, locker_capacity }) => ({ id, name, desk_count, shift_config, locker_capacity })) });
     }
 
     // Destination options for Transfer Branch. list_branches deliberately narrows staff to
@@ -1073,9 +1449,7 @@ Deno.serve(async (req) => {
     // dedicated read: every branch is returned, but only id/name — no desk counts, capacity
     // or config that staff have no business seeing for a branch they don't work at.
     if (action === "list_transfer_branches") {
-      const { data } = await db.from("branches").select("id, name")
-        .eq("is_active", true).order("name");
-      return json({ branches: data ?? [] });
+      return json({ branches: (await activeBranches(db)).map(({ id, name }) => ({ id, name })) });
     }
 
     // Free cabins at a transfer destination. get_seat_map is branch-gated (correctly — it
@@ -1101,6 +1475,7 @@ Deno.serve(async (req) => {
         updates.locker_capacity = cap;
       }
       await db.from("branches").update(updates).eq("id", branchId);
+      forget("branches");
       return json({ ok: true });
     }
 
@@ -1110,6 +1485,7 @@ Deno.serve(async (req) => {
       const { data: maxSort } = await db.from("desks").select("sort_order").eq("branch_id", branchId).order("sort_order", { ascending: false }).limit(1).maybeSingle();
       await db.from("desks").insert({ branch_id: branchId, label, sort_order: (maxSort?.sort_order ?? 0) + 1 });
       await db.from("branches").update({ desk_count: (await db.from("desks").select("*", { count: "exact", head: true }).eq("branch_id", branchId)).count }).eq("id", branchId);
+      forget("branches");
       return json({ ok: true });
     }
 
@@ -1127,59 +1503,63 @@ Deno.serve(async (req) => {
       const { branchId } = payload;
       if (!requireBranch(staff, branchId)) return err("Branch access denied", 403);
 
-      const { data: desks } = await db.from("desks").select("status").eq("branch_id", branchId);
-      const free = desks?.filter(d => d.status === "free").length ?? 0;
-      const occupied = desks?.filter(d => d.status === "occupied").length ?? 0;
-      const reserved = desks?.filter(d => d.status === "reserved").length ?? 0;
-
       const today = todayISO();
-      // Count from memberships — avoids walk-in students inflating the "active" count
-      const { count: active } = await db.from("memberships")
-        .select("*", { count: "exact", head: true })
-        .eq("branch_id", branchId).eq("is_active", true).gte("end_date", today);
-      const { count: pending } = await db.from("memberships")
-        .select("*", { count: "exact", head: true })
-        .eq("branch_id", branchId).eq("is_active", true).gt("fee_due", 0);
-      const { count: temporaryCount } = await db.from("memberships")
-        .select("*", { count: "exact", head: true })
-        .eq("branch_id", branchId).eq("is_active", true).eq("category", "temporary").gte("end_date", today);
-      const { count: permanentCount } = await db.from("memberships")
-        .select("*", { count: "exact", head: true })
-        .eq("branch_id", branchId).eq("is_active", true).eq("category", "permanent").gte("end_date", today);
+      // Every count in one database call (migration 053), at the same time as the three
+      // lists: four calls side by side instead of ten one after another.
+      const [counts, { data: alerts }, { data: dueToday }, { data: expiredToday }] = await Promise.all([
+        db.rpc("dashboard_counts", { p_branch: branchId, p_today: today, p_from: istDayStart(today), p_to: istDayEnd(today) }),
+        db.from("alerts").select("*, students(name, phone)")
+          .eq("branch_id", branchId).eq("status", "pending").order("due_date").limit(10),
+        // Not just "due/expired exactly today" — any membership that's overdue and hasn't
+        // been settled/renewed yet should keep showing up until it's dealt with.
+        allRows(() => db.from("memberships").select("*, students(name, phone)")
+          .eq("branch_id", branchId).eq("is_active", true).lte("due_date", today).gt("fee_due", 0)),
+        allRows(() => db.from("memberships").select("*, students(name, phone)")
+          .eq("branch_id", branchId).eq("is_active", true).lt("end_date", today)),
+      ]);
 
-      // Students currently in an active session right now (scoped to today, same as list_today_bookings)
-      const { count: currentlyStudying } = await db.from("bookings")
-        .select("*", { count: "exact", head: true })
-        .eq("branch_id", branchId).eq("status", "active").eq("is_paused", false)
-        .gte("created_at", istDayStart(today)).lte("created_at", istDayEnd(today));
-
-      const { data: alerts } = await db.from("alerts").select("*, students(name, phone)")
-        .eq("branch_id", branchId).eq("status", "pending").order("due_date").limit(10);
-
-      // Not just "due/expired exactly today" — any membership that's overdue and hasn't
-      // been settled/renewed yet should keep showing up until it's dealt with.
-      const { data: dueToday } = await allRows(() => db.from("memberships").select("*, students(name, phone)")
-        .eq("branch_id", branchId).eq("is_active", true).lte("due_date", today).gt("fee_due", 0));
-
-      const { data: expiredToday } = await allRows(() => db.from("memberships").select("*, students(name, phone)")
-        .eq("branch_id", branchId).eq("is_active", true).lt("end_date", today));
-
-      // By when the session started, not when the row was written — past attendance added
-      // from a student's profile today would otherwise count as someone who came in today.
-      const { count: checkedInToday } = await db.from("bookings")
-        .select("*", { count: "exact", head: true })
-        .eq("branch_id", branchId)
-        .gte("start_time", istDayStart(today)).lte("start_time", istDayEnd(today));
+      let c = counts.data as Record<string, number> | null;
+      if (counts.error || !c) {
+        // The previous method, kept only for a database without 053.
+        console.error("dashboard_counts unavailable, counting separately:", counts.error?.message);
+        const n = (q: PromiseLike<{ count: number | null }>) => Promise.resolve(q).then((r) => r.count ?? 0);
+        const [deskRows, active, pending, temporary, permanent, currentlyStudying, checkedInToday] = await Promise.all([
+          db.from("desks").select("status").eq("branch_id", branchId).then((r) => r.data ?? []),
+          // Count from memberships — avoids walk-in students inflating the "active" count
+          n(db.from("memberships").select("*", { count: "exact", head: true })
+            .eq("branch_id", branchId).eq("is_active", true).gte("end_date", today)),
+          n(db.from("memberships").select("*", { count: "exact", head: true })
+            .eq("branch_id", branchId).eq("is_active", true).gt("fee_due", 0)),
+          n(db.from("memberships").select("*", { count: "exact", head: true })
+            .eq("branch_id", branchId).eq("is_active", true).eq("category", "temporary").gte("end_date", today)),
+          n(db.from("memberships").select("*", { count: "exact", head: true })
+            .eq("branch_id", branchId).eq("is_active", true).eq("category", "permanent").gte("end_date", today)),
+          // Students currently in an active session right now (scoped to today, same as list_today_bookings)
+          n(db.from("bookings").select("*", { count: "exact", head: true })
+            .eq("branch_id", branchId).eq("status", "active").eq("is_paused", false)
+            .gte("created_at", istDayStart(today)).lte("created_at", istDayEnd(today))),
+          // By when the session started, not when the row was written — past attendance added
+          // from a student's profile today would otherwise count as someone who came in today.
+          n(db.from("bookings").select("*", { count: "exact", head: true })
+            .eq("branch_id", branchId).gte("start_time", istDayStart(today)).lte("start_time", istDayEnd(today))),
+        ]);
+        c = {
+          free: deskRows.filter((d) => d.status === "free").length,
+          occupied: deskRows.filter((d) => d.status === "occupied").length,
+          reserved: deskRows.filter((d) => d.status === "reserved").length,
+          desks: deskRows.length, active, pending, temporary, permanent, currentlyStudying, checkedInToday,
+        };
+      }
 
       return json({
-        seats: { free, occupied, reserved, total: desks?.length ?? 0 },
+        seats: { free: Number(c.free), occupied: Number(c.occupied), reserved: Number(c.reserved), total: Number(c.desks) },
         students: {
-          active: active ?? 0,
-          pending: pending ?? 0,
-          temporary: temporaryCount ?? 0,
-          permanent: permanentCount ?? 0,
-          currentlyStudying: currentlyStudying ?? 0,
-          checkedInToday: checkedInToday ?? 0,
+          active: Number(c.active),
+          pending: Number(c.pending),
+          temporary: Number(c.temporary),
+          permanent: Number(c.permanent),
+          currentlyStudying: Number(c.currentlyStudying),
+          checkedInToday: Number(c.checkedInToday),
         },
         alerts: alerts ?? [],
         actionable: {
@@ -1299,7 +1679,7 @@ Deno.serve(async (req) => {
     // ─── COMBINED HALL (owner, all branches) ───
     if (action === "get_combined_hall") {
       if (!isOwnerOrAdmin(staff)) return err("Owner only", 403);
-      const { data: branchesList } = await db.from("branches").select("id, name").eq("is_active", true).order("name");
+      const branchesList = (await activeBranches(db)).map(({ id, name }) => ({ id, name }));
       const today = todayISO();
 
       const rows = [];
@@ -1344,7 +1724,7 @@ Deno.serve(async (req) => {
 
     if (action === "get_combined_seatmap") {
       if (!isOwnerOrAdmin(staff)) return err("Owner only", 403);
-      const { data: branchesList } = await db.from("branches").select("id, name").eq("is_active", true).order("name");
+      const branchesList = (await activeBranches(db)).map(({ id, name }) => ({ id, name }));
 
       const branchesOut = [];
       for (const b of branchesList ?? []) {
@@ -1463,7 +1843,7 @@ Deno.serve(async (req) => {
         hours: Number(hours), scheduled_hours: Number(hours), amount, status: "active",
         payment_mode: storedPaymentMode(paymentMode), created_by_staff_id: staff.id,
       }).select("id").single();
-      if (bErr) return err(bErr.message);
+      if (bErr) return err(openSessionMessage(bErr));
 
       if (desk) {
         await db.from("desks").update({ status: "occupied", current_booking_id: booking!.id }).eq("id", desk.id);
@@ -1516,6 +1896,7 @@ Deno.serve(async (req) => {
     // ─── SSP: staff side of self sign-up ───
     if (action === "list_signup_requests") {
       const { branchId, allBranches } = payload;
+      // paging-ok: at most SIGNUP_PENDING_LIMIT (50) waiting per branch, purged after a day
       let q = db.from("signup_requests")
         .select("id, branch_id, ref_code, name, phone, emergency_contact, course, referral_source, claimed_by_staff_id, claimed_at, created_at, branches(name), staff:claimed_by_staff_id(display_name, username)")
         .order("created_at").order("id");
@@ -1537,10 +1918,10 @@ Deno.serve(async (req) => {
       const phones = [...new Set(list.map((r) => r.phone))];
       const members = new Map<string, { studentId: string; name: string; endDate: string; branch: string | null }>();
       if (phones.length) {
-        const { data: studs } = await db.from("students").select("id, name, phone").in("phone", phones);
+        const { data: studs } = await allRowsIn(phones, (p) => db.from("students").select("id, name, phone").in("phone", p));
         const ids = (studs ?? []).map((s: { id: string }) => s.id);
         if (ids.length) {
-          const { data: live } = await db.from("memberships").select("student_id, end_date, branches(name)").in("student_id", ids).eq("is_active", true);
+          const { data: live } = await allRowsIn(ids, (p) => db.from("memberships").select("student_id, end_date, branches(name)").in("student_id", p).eq("is_active", true));
           for (const m of (live ?? []) as unknown as { student_id: string; end_date: string; branches: { name: string } | null }[]) {
             const s = (studs ?? []).find((x: { id: string }) => x.id === m.student_id) as { id: string; name: string; phone: string } | undefined;
             if (s) members.set(s.phone, { studentId: s.id, name: s.name, endDate: m.end_date, branch: m.branches?.name ?? null });
@@ -2164,7 +2545,7 @@ Deno.serve(async (req) => {
         hours: sessionHours, scheduled_hours: sessionHours, amount: 0, status: "active",
         created_by_staff_id: staff.id,
       }).select("id").single();
-      if (bErr) return err(bErr.message);
+      if (bErr) return err(openSessionMessage(bErr));
 
       // Update desk status if a desk was assigned
       if (desk) {
@@ -2751,56 +3132,42 @@ Deno.serve(async (req) => {
       let branchIds: string[];
       if (allBranches) {
         if (!isOwnerOrAdmin(staff)) return err("Owner only", 403);
-        const { data: branchesList } = await db.from("branches").select("id").eq("is_active", true);
+        const branchesList = (await activeBranches(db)).map(({ id }) => ({ id }));
         branchIds = (branchesList ?? []).map(b => b.id);
       } else {
         if (!requireBranch(staff, branchId)) return err("Branch access denied", 403);
         branchIds = [branchId];
       }
 
-      // All branches together hold well over 1000 students and active memberships.
-      const [{ data: students }, { data: memberships }, { data: lockers }] = await Promise.all([
-        allRows(() => db.from("students").select("*, branches(name)").in("branch_id", branchIds).order("s_no")),
-        allRows(() => db.from("memberships").select("*").in("branch_id", branchIds).eq("is_active", true)),
-        allRows(() => db.from("lockers").select("*").in("branch_id", branchIds).eq("is_active", true)),
-      ]);
+      return json({ students: await studentRows(db, branchIds) });
+    }
 
-      const memByStudent = new Map(memberships?.map(m => [m.student_id, m]) ?? []);
-      const lockerByStudent = new Map(lockers?.map(l => [l.student_id, l]) ?? []);
-
-      const listToday = todayISO();
-      const rows = (students ?? []).map((s, i) => {
-        const mem = memByStudent.get(s.id);
-        const locker = lockerByStudent.get(s.id);
-        // Derived live rather than read from s.status — see computeStudentStatus().
-        const liveStatus = computeStudentStatus(mem, locker, listToday);
-        return {
-          sNo: s.s_no ?? i + 1,
-          id: s.id,
-          name: s.name,
-          branches: s.branches,
-          cabin: mem?.cabin_no ?? "-",
-          // Start of the current (latest-renewed) membership and the real last paid day —
-          // unlike dueDate, endDate reflects every month paid (same date the status uses).
-          startDate: mem?.start_date ?? "-",
-          endDate: mem?.end_date ?? "-",
-          dueDate: mem?.due_date ?? "-",
-          month: mem?.month ?? "-",
-          hours: mem?.hours_per_day ?? "-",
-          timings: mem?.timings ?? "-",
-          locker: locker?.locker_no ?? "-",
-          lockerDue: locker?.locker_due_date ?? "-",
-          course: s.course ?? "-",
-          contact: s.phone,
-          status: liveStatus,
-          isOverdue: mem ? mem.due_date < listToday && mem.fee_due > 0 : false,
-          lockerOverdue: locker ? locker.locker_due_date && locker.locker_due_date < listToday : false,
-          totalVisits: s.total_visits,
-          totalHours: s.total_hours_studied,
-        };
+    // ─── Students list, one page at a time (2b-C) ───
+    // The Students page used to download every student and filter, sort and count them in
+    // the browser. It now asks for one page (50 by default): the same filter and sort rules
+    // run here, on the same rows list_students builds. export_students returns every row
+    // that passes the filters, for the spreadsheet download only.
+    if (action === "list_students_page" || action === "export_students") {
+      const { branchId, allBranches } = payload;
+      let branchIds: string[];
+      if (allBranches) {
+        if (!isOwnerOrAdmin(staff)) return err("Owner only", 403);
+        branchIds = (await activeBranches(db)).map(({ id }) => id);
+      } else {
+        if (!requireBranch(staff, branchId)) return err("Branch access denied", 403);
+        branchIds = [branchId];
+      }
+      const all = await studentRows(db, branchIds);
+      const view = allBranches ? filterCombinedStudents(all, payload) : filterSortStudents(all, payload);
+      if (action === "export_students") return json({ students: view.rows, totalAll: all.length });
+      const pageSize = Math.min(200, Math.max(1, Number(payload.pageSize) || 50));
+      const pages = Math.max(1, Math.ceil(view.rows.length / pageSize));
+      const page = Math.min(pages, Math.max(1, Number(payload.page) || 1));
+      return json({
+        rows: view.rows.slice((page - 1) * pageSize, page * pageSize),
+        total: view.rows.length, totalAll: all.length, page, pages, pageSize,
+        courses: view.courses, branchCounts: view.branchCounts,
       });
-
-      return json({ students: rows });
     }
 
     if (action === "get_student_profile") {
@@ -3050,23 +3417,33 @@ Deno.serve(async (req) => {
         const monthStart = `${todayISO().slice(0, 7)}-01`;
         // Sessions that happened this month (start_time) — not rows typed in this month, which
         // would credit a backfilled last-month session to this month's leaderboard.
-        // A month of one branch's sessions passes 1000 rows easily.
-        const { data: bookings } = await allRows(() => db.from("bookings")
-          .select("student_id, hours, students(id, name, phone, course)")
-          .eq("branch_id", branchId).gte("start_time", istDayStart(monthStart)));
-        const byStudent = new Map<string, { id: string; name: string; phone: string; course: string | null; visits: number; hours: number }>();
-        for (const b of bookings ?? []) {
-          const s = b.students as unknown as { id: string; name: string; phone: string; course: string | null } | null;
-          if (!s) continue;
-          const row = byStudent.get(s.id) ?? { id: s.id, name: s.name, phone: s.phone, course: s.course, visits: 0, hours: 0 };
-          row.visits += 1;
-          row.hours += Number(b.hours ?? 0);
-          byStudent.set(s.id, row);
-        }
+        // Counted and ranked by the database (migration 053): a month of one branch's
+        // sessions passes 1000 rows easily. Paged rows are the fallback without 053.
         const col = sortBy === "hours" ? "hours" : "visits";
-        const rows = [...byStudent.values()].sort((a, b) => b[col] - a[col]).slice(0, 20)
-          .map(r => ({ id: r.id, name: r.name, phone: r.phone, course: r.course, total_visits: r.visits, total_hours_studied: r.hours }));
+        let rows: { id: string; name: string; phone: string; course: string | null; total_visits: number; total_hours_studied: number }[];
+        const top = await db.rpc("report_top_students", { p_branch: branchId, p_from: istDayStart(monthStart), p_sort: col, p_limit: 20 });
+        if (!top.error && Array.isArray(top.data)) {
+          rows = top.data.map((r: { id: string; name: string; phone: string; course: string | null; total_visits: number; total_hours_studied: number }) =>
+            ({ ...r, total_visits: Number(r.total_visits), total_hours_studied: Number(r.total_hours_studied) }));
+        } else {
+          console.error("report_top_students unavailable, counting rows instead:", top.error?.message);
+          const { data: bookings } = await allRows(() => db.from("bookings")
+            .select("student_id, hours, students(id, name, phone, course)")
+            .eq("branch_id", branchId).gte("start_time", istDayStart(monthStart)));
+          const byStudent = new Map<string, { id: string; name: string; phone: string; course: string | null; visits: number; hours: number }>();
+          for (const b of bookings ?? []) {
+            const s = b.students as unknown as { id: string; name: string; phone: string; course: string | null } | null;
+            if (!s) continue;
+            const row = byStudent.get(s.id) ?? { id: s.id, name: s.name, phone: s.phone, course: s.course, visits: 0, hours: 0 };
+            row.visits += 1;
+            row.hours += Number(b.hours ?? 0);
+            byStudent.set(s.id, row);
+          }
+          rows = [...byStudent.values()].sort((a, b) => b[col] - a[col]).slice(0, 20)
+            .map(r => ({ id: r.id, name: r.name, phone: r.phone, course: r.course, total_visits: r.visits, total_hours_studied: r.hours }));
+        }
         const { data: activeMemStudents } = rows.length
+          // paging-ok: at most 20 students (the top-20 list)
           ? await db.from("memberships").select("student_id").in("student_id", rows.map(r => r.id)).eq("is_active", true)
           : { data: [] as { student_id: string }[] };
         const memberIds = new Set((activeMemStudents ?? []).map((m: { student_id: string }) => m.student_id));
@@ -3077,6 +3454,7 @@ Deno.serve(async (req) => {
       const { data } = await db.from("students").select("id, name, phone, total_visits, total_hours_studied, loyalty_tag, course")
         .eq("branch_id", branchId).order(col, { ascending: false }).limit(20);
       const { data: activeMemStudents } = data?.length
+        // paging-ok: at most 20 students (the top-20 list)
         ? await db.from("memberships").select("student_id").in("student_id", data.map((r: { id: string }) => r.id)).eq("is_active", true)
         : { data: [] as { student_id: string }[] };
       const memberIds = new Set((activeMemStudents ?? []).map((m: { student_id: string }) => m.student_id));
@@ -3720,7 +4098,7 @@ Deno.serve(async (req) => {
 
       let branchFilter: string[] = [];
       if (allBranches && isOwnerOrAdmin(staff)) {
-        const { data: bs } = await db.from("branches").select("id");
+        const bs = (await getAllBranches(db)).map(({ id }) => ({ id }));
         branchFilter = bs?.map(b => b.id) ?? [];
       } else {
         const bid = branchId ?? staff.branch_id;
@@ -3730,43 +4108,50 @@ Deno.serve(async (req) => {
 
       const fromTs = istDayStart(range.from);
       const toTs = istDayEnd(range.to);
-      type RevenueTxn = { category: string; amount: number; payment_mode: string; branch_id: string; created_at: string };
-      const [txns, payouts] = await Promise.all([
-        fetchAllRows<RevenueTxn>(() => db.from("transactions").select("category, amount, payment_mode, branch_id, created_at")
-          .in("branch_id", branchFilter).gte("created_at", fromTs).lte("created_at", toTs)
-          .order("created_at").order("id")),
-        // Cashback payouts, locker deposit refunds, unused Food Pass balances and membership
-        // refunds handed back to students aren't revenue transactions — net them out below to
-        // show the real final figure.
-        fetchAllRows<{ payout_type: string; amount: number }>(() => db.from("payouts").select("payout_type, amount")
-          .in("branch_id", branchFilter).gte("created_at", fromTs).lte("created_at", toTs)
-          .order("created_at").order("id")),
-      ]);
-
       const cats: Record<string, number> = { desk: 0, membership: 0, food: 0, locker: 0, overtime: 0, fine: 0 };
       const modes: Record<string, number> = { cash: 0, upi: 0, other: 0 };
-      for (const t of txns) {
-        cats[t.category] = (cats[t.category] ?? 0) + Number(t.amount);
-        modes[t.payment_mode] = (modes[t.payment_mode] ?? 0) + Number(t.amount);
+      const byDay: Record<string, number> = {};
+      const byBranchMap: Record<string, number> = {};
+      const payoutTotals: Record<string, number> = { cashback: 0, locker_deposit: 0, food_pass_refund: 0, membership_refund: 0 };
+      const addAll = (into: Record<string, number>, from: Record<string, unknown>) => {
+        for (const [k, v] of Object.entries(from ?? {})) into[k] = (into[k] ?? 0) + Number(v);
+      };
+      // Totals summed by the database (migration 053) — one call, no row cap. The
+      // row-by-row path below is the previous method, kept only for a database without
+      // 053; both fill the same five maps.
+      const rev = await db.rpc("report_revenue", { p_branch_ids: branchFilter, p_from: fromTs, p_to: toTs });
+      if (!rev.error && rev.data) {
+        addAll(cats, rev.data.byCategory); addAll(modes, rev.data.byPaymentMode); addAll(byDay, rev.data.byDay);
+        addAll(byBranchMap, rev.data.byBranch); addAll(payoutTotals, rev.data.payouts);
+      } else {
+        console.error("report_revenue unavailable, summing rows instead:", rev.error?.message);
+        type RevenueTxn = { category: string; amount: number; payment_mode: string; branch_id: string; created_at: string };
+        const [txns, payouts] = await Promise.all([
+          fetchAllRows<RevenueTxn>(() => db.from("transactions").select("category, amount, payment_mode, branch_id, created_at")
+            .in("branch_id", branchFilter).gte("created_at", fromTs).lte("created_at", toTs)
+            .order("created_at").order("id")),
+          // Cashback payouts, locker deposit refunds, unused Food Pass balances and membership
+          // refunds handed back to students aren't revenue transactions — net them out below to
+          // show the real final figure.
+          fetchAllRows<{ payout_type: string; amount: number }>(() => db.from("payouts").select("payout_type, amount")
+            .in("branch_id", branchFilter).gte("created_at", fromTs).lte("created_at", toTs)
+            .order("created_at").order("id")),
+        ]);
+        for (const t of txns) {
+          cats[t.category] = (cats[t.category] ?? 0) + Number(t.amount);
+          modes[t.payment_mode] = (modes[t.payment_mode] ?? 0) + Number(t.amount);
+          // Bucket by the IST calendar day, not the raw UTC date.
+          const day = toISTDateStr(t.created_at);
+          byDay[day] = (byDay[day] ?? 0) + Number(t.amount);
+          byBranchMap[t.branch_id] = (byBranchMap[t.branch_id] ?? 0) + Number(t.amount);
+        }
+        for (const p of payouts) payoutTotals[p.payout_type] = (payoutTotals[p.payout_type] ?? 0) + Number(p.amount);
       }
       const total = Object.values(cats).reduce((a, b) => a + b, 0);
 
-      // Daily trend — bucket by the IST calendar day each transaction falls on, not its raw
-      // UTC date (a payment just after IST midnight would otherwise land on the day before).
-      // Every day in the range gets a point, including ₹0 days — plotting only days that had
-      // sales made the chart draw a straight line across quiet days as if money came in.
-      const byDay: Record<string, number> = {};
-      for (const t of txns) {
-        const day = toISTDateStr(t.created_at);
-        byDay[day] = (byDay[day] ?? 0) + Number(t.amount);
-      }
+      // Daily trend — every day in the range gets a point, including ₹0 days — plotting only
+      // days that had sales made the chart draw a straight line across quiet days.
       const trend = buildDateBuckets(range.from, range.to, "day").map(b => ({ date: b.label, amount: byDay[b.label] ?? 0 }));
-
-      // Branch breakdown (useful when allBranches = true)
-      const byBranchMap: Record<string, number> = {};
-      for (const t of txns) {
-        byBranchMap[t.branch_id] = (byBranchMap[t.branch_id] ?? 0) + Number(t.amount);
-      }
       let branchRevenue: { name: string; amount: number }[] = [];
       if (Object.keys(byBranchMap).length > 1) {
         const { data: branchRows } = await db.from("branches").select("id, name").in("id", Object.keys(byBranchMap));
@@ -3776,10 +4161,6 @@ Deno.serve(async (req) => {
           .sort((a, b) => b.amount - a.amount);
       }
 
-      const payoutTotals: Record<string, number> = { cashback: 0, locker_deposit: 0, food_pass_refund: 0, membership_refund: 0 };
-      for (const p of payouts) {
-        payoutTotals[p.payout_type] = (payoutTotals[p.payout_type] ?? 0) + Number(p.amount);
-      }
       const totalPayouts = Object.values(payoutTotals).reduce((a, b) => a + b, 0);
       const netRevenue = total - totalPayouts;
 
@@ -3794,7 +4175,7 @@ Deno.serve(async (req) => {
       const { branchId, allBranches } = payload;
       let branchFilter: string[] = [];
       if (allBranches && isOwnerOrAdmin(staff)) {
-        const { data: bs } = await db.from("branches").select("id");
+        const bs = (await getAllBranches(db)).map(({ id }) => ({ id }));
         branchFilter = bs?.map(b => b.id) ?? [];
       } else {
         const bid = branchId ?? staff.branch_id;
@@ -3804,17 +4185,28 @@ Deno.serve(async (req) => {
 
       // All-time (not tied to the Revenue page's period picker) — paged, since a plain select
       // stopped counting at the 1000-row response cap once the student base grew past it.
-      const [students, { count: notRecorded, error: notRecordedErr }] = await Promise.all([
-        fetchAllRows<{ referral_source: string }>(() => db.from("students").select("referral_source")
-          .in("branch_id", branchFilter).not("referral_source", "is", null).order("id")),
-        db.from("students").select("id", { count: "exact", head: true })
-          .in("branch_id", branchFilter).is("referral_source", null),
-      ]);
-      if (notRecordedErr) return err(notRecordedErr.message, 500);
+      // Counted by the database (migration 053); the paged path is the previous method,
+      // kept only for a database without 053.
       const counts: Record<string, number> = {};
-      for (const s of students) {
-        const key = s.referral_source || "unknown";
-        counts[key] = (counts[key] ?? 0) + 1;
+      let notRecorded = 0;
+      const ref = await db.rpc("report_referrals", { p_branch_ids: branchFilter });
+      if (!ref.error && ref.data) {
+        for (const [k, v] of Object.entries(ref.data.counts ?? {})) counts[k] = Number(v);
+        notRecorded = Number(ref.data.notRecorded ?? 0);
+      } else {
+        console.error("report_referrals unavailable, counting rows instead:", ref.error?.message);
+        const [students, { count, error: notRecordedErr }] = await Promise.all([
+          fetchAllRows<{ referral_source: string }>(() => db.from("students").select("referral_source")
+            .in("branch_id", branchFilter).not("referral_source", "is", null).order("id")),
+          db.from("students").select("id", { count: "exact", head: true })
+            .in("branch_id", branchFilter).is("referral_source", null),
+        ]);
+        if (notRecordedErr) return err(notRecordedErr.message, 500);
+        notRecorded = count ?? 0;
+        for (const s of students) {
+          const key = s.referral_source || "unknown";
+          counts[key] = (counts[key] ?? 0) + 1;
+        }
       }
       const total = Object.values(counts).reduce((a, b) => a + b, 0);
       const rows = Object.entries(counts)
@@ -3836,7 +4228,7 @@ Deno.serve(async (req) => {
       if (range.from > range.to) return err("Start date must be on or before the end date");
       let branchFilter: string[] = [];
       if (allBranches && isOwnerOrAdmin(staff)) {
-        const { data: bs } = await db.from("branches").select("id");
+        const bs = (await getAllBranches(db)).map(({ id }) => ({ id }));
         branchFilter = bs?.map(b => b.id) ?? [];
       } else {
         const bid = branchId ?? staff.branch_id;
@@ -3905,7 +4297,7 @@ Deno.serve(async (req) => {
       // above it were consolidated, which read as the filter working only intermittently.
       let branchFilter: string[] = [];
       if (allBranches && isOwnerOrAdmin(staff)) {
-        const { data: bs } = await db.from("branches").select("id");
+        const bs = (await getAllBranches(db)).map(({ id }) => ({ id }));
         branchFilter = bs?.map(b => b.id) ?? [];
       } else {
         const bid = branchId ?? staff.branch_id;
@@ -4021,7 +4413,7 @@ Deno.serve(async (req) => {
 
       let branchFilter: string[] = [];
       if (allBranches && isOwnerOrAdmin(staff)) {
-        const { data: bs } = await db.from("branches").select("id");
+        const bs = (await getAllBranches(db)).map(({ id }) => ({ id }));
         branchFilter = bs?.map(b => b.id) ?? [];
       } else {
         if (!requireBranch(staff, branchId)) return err("Branch access denied", 403);
@@ -4033,6 +4425,44 @@ Deno.serve(async (req) => {
       const range = period && isOwnerOrAdmin(staff) ? dateRange(period, dateFrom, dateTo) : { from: date ?? todayISO(), to: date ?? todayISO() };
       const fromTs = istDayStart(range.from);
       const toTs = istDayEnd(range.to);
+
+      // New registrations — brand-new students created at this branch (or every branch, with
+      // allBranches) in the range (membership or walk-in, whichever brought them in first).
+      const newRegistrationsQuery = () => db.from("students")
+        .select("*", { count: "exact", head: true }).in("branch_id", branchFilter)
+        .gte("created_at", fromTs).lte("created_at", toTs);
+      const showTrends = isOwnerOrAdmin(staff) && period && period !== "day";
+
+      // Every figure counted by the database (migration 053), in one call. The Reports page
+      // only shows how many walk-ins and new memberships there were, so counts are sent
+      // instead of every row. The path after this block is the previous method, kept
+      // only for a database without 053.
+      const [daily, { count: newRegistrationsSql }] = await Promise.all([
+        db.rpc("report_daily", { p_branch_ids: branchFilter, p_from: fromTs, p_to: toTs, p_today: todayISO() }),
+        newRegistrationsQuery(),
+      ]);
+      if (!daily.error && daily.data) {
+        const d = daily.data;
+        const buckets = showTrends ? buildDateBuckets(range.from, range.to, "day") : [];
+        return json({
+          date: range.to, dateFrom: range.from, dateTo: range.to,
+          walkinCount: Number(d.walkinCount), newMemberCount: Number(d.newMemberCount),
+          attendanceTrend: showTrends ? buckets.map(b => ({ label: b.label, count: Number(d.attendanceByDay?.[b.label] ?? 0) })) : null,
+          registrationsTrend: showTrends ? buckets.map(b => ({ label: b.label, count: Number(d.newMembersByDay?.[b.label] ?? 0) })) : null,
+          attendanceBreakdown: {
+            temporary: Number(d.attendance.temporary), permanent: Number(d.attendance.permanent),
+            walkin: Number(d.attendance.walkin), total: Number(d.attendance.total),
+          },
+          newRegistrations: newRegistrationsSql ?? 0,
+          activeMemberships: Number(d.activeMemberships),
+          // Per-branch breakdown only once more than one branch is in view, as before.
+          byBranch: branchFilter.length > 1
+            ? (d.byBranch ?? []).map((b: { name: string; total: number; activeMemberships: number }) =>
+              ({ name: b.name, total: Number(b.total), activeMemberships: Number(b.activeMemberships) }))
+            : [],
+        });
+      }
+      console.error("report_daily unavailable, counting rows instead:", daily.error?.message);
 
       // Month and custom ranges across every branch pass 1000 rows, so these lists are paged.
       const { data: walkins } = await allRows(() => db.from("bookings").select("*, students(name)")
@@ -4090,18 +4520,14 @@ Deno.serve(async (req) => {
           .sort((a, b) => b.total - a.total);
       }
 
-      // New registrations — brand-new students created at this branch (or every branch, with
-      // allBranches) in the range (membership or walk-in, whichever brought them in first).
-      const { count: newRegistrations } = await db.from("students")
-        .select("*", { count: "exact", head: true }).in("branch_id", branchFilter)
-        .gte("created_at", fromTs).lte("created_at", toTs);
+      const newRegistrations = newRegistrationsSql;
 
       // Trend charts (owner, non-single-day views only) — attendance and new-membership
       // registrations bucketed day-by-day, every date shown separately (never combined into
       // week-range buckets), so the owner can see day-on-day movement at a glance.
       let attendanceTrend = null;
       let registrationsTrend = null;
-      if (isOwnerOrAdmin(staff) && period && period !== "day") {
+      if (showTrends) {
         const buckets = buildDateBuckets(range.from, range.to, "day");
         attendanceTrend = buckets.map(b => ({
           label: b.label,
@@ -4117,7 +4543,8 @@ Deno.serve(async (req) => {
 
       return json({
         date: range.to, dateFrom: range.from, dateTo: range.to,
-        walkins, newMembers, attendanceTrend, registrationsTrend,
+        walkins, newMembers, walkinCount: (walkins ?? []).length, newMemberCount: (newMembers ?? []).length,
+        attendanceTrend, registrationsTrend,
         attendanceBreakdown, newRegistrations: newRegistrations ?? 0,
         activeMemberships, byBranch,
       });
@@ -4125,21 +4552,25 @@ Deno.serve(async (req) => {
 
     // ─── FEE CONFIG ───
     if (action === "list_fee_config") {
-      const { data } = await db.from("fee_config").select("*").order("config_type").order("sort_order");
-      return json({ config: data ?? [] });
+      return json({ config: await feeConfigRows(db) });
     }
 
     if (action === "update_fee_config") {
       if (!isOwnerOrAdmin(staff)) return err("Owner only", 403);
       const { id, fee } = payload;
       await db.from("fee_config").update({ fee }).eq("id", id);
+      forget("fee_config");
       return json({ ok: true });
     }
 
     // Shared WhatsApp welcome-message template (app_settings row keyed 'welcome_template') —
     // every staff member's device reads the same value, and only owner/admin can change it.
     if (action === "get_welcome_template") {
-      const { data } = await db.from("app_settings").select("value").eq("key", "welcome_template").maybeSingle();
+      const data = await cached("welcome_template", async () => {
+        const r = await db.from("app_settings").select("value").eq("key", "welcome_template").maybeSingle();
+        if (r.error) throw new Error(r.error.message);
+        return r.data;
+      });
       return json({ value: data?.value ?? DEFAULT_WELCOME_TEMPLATE });
     }
 
@@ -4150,6 +4581,7 @@ Deno.serve(async (req) => {
       await db.from("app_settings").upsert({
         key: "welcome_template", value: String(value), updated_by_staff_id: staff.id, updated_at: new Date().toISOString(),
       });
+      forget("welcome_template");
       return json({ ok: true });
     }
 
@@ -4170,7 +4602,7 @@ Deno.serve(async (req) => {
     // substitute shows up under the branch they're covering, not their home branch.
     if (action === "get_staff_grid") {
       if (!isOwnerOrAdmin(staff)) return err("Owner only", 403);
-      const { data: branches } = await db.from("branches").select("id, name").eq("is_active", true).order("name");
+      const branches = (await activeBranches(db)).map(({ id, name }) => ({ id, name }));
       const { data: allStaff } = await db.from("staff")
         .select("id, username, display_name, role, branch_id, override_branch_id, override_date")
         .eq("is_active", true).neq("role", "owner").neq("role", "admin").order("display_name");
@@ -4436,6 +4868,7 @@ Deno.serve(async (req) => {
       // Disambiguated FK hint — see the comment in list_staff for why this is required now.
       const { data: allStaff } = await db.from("staff").select("id, username, display_name, branch_id, is_active, branches!branch_id(name)")
         .eq("is_active", true).neq("role", "owner").neq("role", "admin").order("display_name");
+      // paging-ok: one row per staff member for one date
       const { data: present } = await db.from("staff_attendance").select("staff_id, first_login_at, last_logout_at")
         .eq("attendance_date", targetDate);
       const presentMap = new Map((present ?? []).map((p: { staff_id: string; first_login_at: string; last_logout_at: string | null }) => [p.staff_id, p]));
@@ -4539,6 +4972,7 @@ Deno.serve(async (req) => {
     // ─── MESSAGES ───
     if (action === "list_messages") {
       const { branchId, channel, allBranches } = payload;
+      // paging-ok: every branch of the if below adds .limit(50) or .limit(150)
       let q = db.from("messages")
         .select("*, staff:sender_staff_id(display_name, username), students:recipient_student_id(name, phone)")
         .order("sent_at", { ascending: false });
@@ -4596,7 +5030,7 @@ Deno.serve(async (req) => {
       const { branchId, allBranches } = payload;
       let branchFilter: string[] = [];
       if (allBranches && isOwnerOrAdmin(staff)) {
-        const { data: bs } = await db.from("branches").select("id");
+        const bs = (await getAllBranches(db)).map(({ id }) => ({ id }));
         branchFilter = bs?.map(b => b.id) ?? [];
       } else {
         if (!requireBranch(staff, branchId)) return err("Branch access denied", 403);
@@ -4633,7 +5067,7 @@ Deno.serve(async (req) => {
       let branchIds: string[];
       if (allBranches) {
         if (!isOwnerOrAdmin(staff)) return err("Owner only", 403);
-        const { data: branchesList } = await db.from("branches").select("id").eq("is_active", true);
+        const branchesList = (await activeBranches(db)).map(({ id }) => ({ id }));
         branchIds = (branchesList ?? []).map(b => b.id);
       } else {
         if (!requireBranch(staff, branchId)) return err("Branch access denied", 403);
@@ -4753,7 +5187,7 @@ Deno.serve(async (req) => {
       let branchIds: string[];
       if (allBranches) {
         if (!isOwnerOrAdmin(staff)) return err("Owner only", 403);
-        const { data: branchesList } = await db.from("branches").select("id").eq("is_active", true);
+        const branchesList = (await activeBranches(db)).map(({ id }) => ({ id }));
         branchIds = (branchesList ?? []).map(b => b.id);
       } else {
         if (!requireBranch(staff, branchId)) return err("Branch access denied", 403);
@@ -4768,24 +5202,38 @@ Deno.serve(async (req) => {
         .order("end_date"));
       type MemRow = { id: string; branch_id: string; category: string; hours_per_day: number; hours_per_day_weekend: number | null; monthly_fee: number; start_date: string; end_date: string; cabin_no: string | null; is_paused: boolean; hold_days: number; fee_due: number; total_paid: number; students: { id: string; name: string; phone: string } | null; branches: { name: string } | null };
       const studentIds = (data as MemRow[] ?? []).map(m => m.students?.id).filter((id): id is string => !!id);
-      const { data: pendingCashbacks } = await allRowsIn(studentIds, (ids) =>
-        db.from("cashbacks").select("student_id, cashback_type, cashback_value").in("student_id", ids).eq("status", "pending"));
-      const cashbackByStudent = new Map((pendingCashbacks ?? []).map((c: { student_id: string; cashback_type: string; cashback_value: number }) => [c.student_id, c]));
-      // The renewal dialog has to show the same total renew_membership will charge, which
-      // applies EVERY pending cashback (not just one) and adds any unbilled Pay Later overtime.
-      const allCashbacksByStudent = new Map<string, { cashback_type: string; cashback_value: number }[]>();
-      for (const c of (pendingCashbacks ?? []) as { student_id: string; cashback_type: string; cashback_value: number }[]) {
-        allCashbacksByStudent.set(c.student_id, [...(allCashbacksByStudent.get(c.student_id) ?? []), { cashback_type: c.cashback_type, cashback_value: c.cashback_value }]);
-      }
-      // Was paged already, but carried every student id in one URL (414 past ~200 students).
-      const { data: unbilledOvertimeData, error: otErr } = await allRowsIn<{ student_id: string; billed_amount: number | null }>(studentIds, (ids) =>
-        db.from("overtime_sessions").select("student_id, billed_amount")
-          .in("student_id", ids).is("billed_at", null).eq("excluded", false));
-      if (otErr) throw new Error(otErr.message);
-      const unbilledOvertimeRows = unbilledOvertimeData ?? [];
+      // Per student: the last pending cashback (pending_cashback), every pending cashback (the
+      // renewal dialog has to show the same total renew_membership will charge, which applies
+      // EVERY pending cashback, not just one) and the unbilled Pay Later overtime. Worked out
+      // by the database in one call (migration 053); the chunked row lookups are the previous
+      // method, kept only for a database without 053. Both fill the same three maps.
+      type Cb = { cashback_type: string; cashback_value: number };
+      const cashbackByStudent = new Map<string, Cb & { student_id?: string }>();
+      const allCashbacksByStudent = new Map<string, Cb[]>();
       const overtimeDueByStudent = new Map<string, number>();
-      for (const o of unbilledOvertimeRows) {
-        overtimeDueByStudent.set(o.student_id, (overtimeDueByStudent.get(o.student_id) ?? 0) + Number(o.billed_amount ?? 0));
+      const dues = await db.rpc("active_member_dues", { p_branch_ids: branchIds });
+      if (!dues.error && dues.data) {
+        for (const [sid, list] of Object.entries(dues.data.cashbacks ?? {}) as [string, Cb[]][]) {
+          allCashbacksByStudent.set(sid, list);
+          // Same object shape as the row the previous lookup returned.
+          if (list.length) cashbackByStudent.set(sid, { student_id: sid, ...list[list.length - 1] });
+        }
+        for (const [sid, due] of Object.entries(dues.data.overtime ?? {})) overtimeDueByStudent.set(sid, Number(due));
+      } else {
+        console.error("active_member_dues unavailable, reading rows instead:", dues.error?.message);
+        const { data: pendingCashbacks } = await allRowsIn(studentIds, (ids) =>
+          db.from("cashbacks").select("student_id, cashback_type, cashback_value").in("student_id", ids).eq("status", "pending"));
+        for (const c of (pendingCashbacks ?? []) as (Cb & { student_id: string })[]) {
+          cashbackByStudent.set(c.student_id, c);
+          allCashbacksByStudent.set(c.student_id, [...(allCashbacksByStudent.get(c.student_id) ?? []), { cashback_type: c.cashback_type, cashback_value: c.cashback_value }]);
+        }
+        const { data: unbilledOvertimeData, error: otErr } = await allRowsIn<{ student_id: string; billed_amount: number | null }>(studentIds, (ids) =>
+          db.from("overtime_sessions").select("student_id, billed_amount")
+            .in("student_id", ids).is("billed_at", null).eq("excluded", false));
+        if (otErr) throw new Error(otErr.message);
+        for (const o of unbilledOvertimeData ?? []) {
+          overtimeDueByStudent.set(o.student_id, (overtimeDueByStudent.get(o.student_id) ?? 0) + Number(o.billed_amount ?? 0));
+        }
       }
 
       const members = (data as MemRow[] ?? []).map(m => ({
@@ -5851,11 +6299,14 @@ Deno.serve(async (req) => {
     if (action === "delete_enquiries") {
       const ids: string[] = payload.ids ?? (payload.id ? [payload.id] : []);
       if (!ids.length) return err("No enquiry ids provided");
-      const { data: rows } = await db.from("enquiries").select("id, branch_id").in("id", ids);
+      // Chunked: a large selection put every id into one URL (414).
+      const { data: rows } = await allRowsIn<{ id: string; branch_id: string }>(ids, (p) => db.from("enquiries").select("id, branch_id").in("id", p));
       if (!rows?.length) return err("Enquiry not found");
       if (!rows.every(r => requireBranch(staff, r.branch_id))) return err("Branch access denied", 403);
-      const { error } = await db.from("enquiries").delete().in("id", ids);
-      if (error) return err(error.message);
+      for (let i = 0; i < ids.length; i += IN_CHUNK) {
+        const { error } = await db.from("enquiries").delete().in("id", ids.slice(i, i + IN_CHUNK));
+        if (error) return err(error.message);
+      }
       return json({ ok: true });
     }
 
@@ -5913,12 +6364,9 @@ Deno.serve(async (req) => {
     if (action === "list_open_enquiry_followups") {
       const { branchId } = payload;
       if (!requireBranch(staff, branchId)) return err("Branch access denied", 403);
-      const { data } = await db.from("enquiry_followups").select("*").eq("branch_id", branchId).eq("done", false).order("due_at", { ascending: true });
+      const { data } = await allRows(() => db.from("enquiry_followups").select("*").eq("branch_id", branchId).eq("done", false).order("due_at", { ascending: true }));
       return json({ followups: data ?? [] });
     }
 
     return err(`Unknown action: ${action}`);
-  } catch (e) {
-    return err(e instanceof Error ? e.message : "Server error", 500);
-  }
-});
+}

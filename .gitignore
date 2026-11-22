@@ -26,3 +26,6 @@ build/
 # Pre-install backups
 .claude-backup-before-os/
 .claude-flow-backup-before-os/
+
+# npm run test:scale work folder (local Docker stack, dummy data)
+.scale-test/

@@ -41,7 +41,8 @@ export function useTaskAlerts(currentStaffId) {
         seen.current = persisted ?? new Set()
       }
 
-      const { tasks } = await api('list_tasks', { allBranches: true })
+      // Only the tasks assigned to this staff member; list_tasks returns every task with joins.
+      const { tasks } = await api('poll_my_tasks')
       const myTasks = (tasks ?? []).filter(t => t.assigned_to_staff_id === currentStaffId)
 
       if (isFirstEverCheck.current) {

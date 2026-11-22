@@ -1,7 +1,7 @@
 import { useState, useEffect, useCallback } from 'react'
 import { useNavigate, Link } from 'react-router-dom'
 import { useAuth } from '../context/AuthContext'
-import { api } from '../lib/api'
+import { api, apiBatch } from '../lib/api'
 import { nowTimeStr, localTimeStrToISO, formatCurrency, formatDate, todayISO } from '../lib/utils'
 import WalkInModal from '../components/WalkInModal'
 
@@ -33,10 +33,11 @@ function CombinedDashboard() {
     setLoading(true)
     setError('')
     try {
-      const [hallData, seatData, pendingData] = await Promise.all([
-        api('get_combined_hall'),
-        api('get_combined_seatmap'),
-        api('get_combined_pending', { date: pendingDate }),
+      // One request for the three (api action "batch").
+      const [hallData, seatData, pendingData] = await apiBatch([
+        ['get_combined_hall'],
+        ['get_combined_seatmap'],
+        ['get_combined_pending', { date: pendingDate }],
       ])
       setHall(hallData)
       setSeatMap(seatData)
@@ -517,9 +518,10 @@ export default function DashboardPage() {
     if (!branchId || isCombinedHall) return
     setLoading(true)
     try {
-      const [dash, seats] = await Promise.all([
-        api('get_dashboard', { branchId }),
-        api('get_seat_map', { branchId, shift: autoShift() }),
+      // One request for both (api action "batch").
+      const [dash, seats] = await apiBatch([
+        ['get_dashboard', { branchId }],
+        ['get_seat_map', { branchId, shift: autoShift() }],
       ])
       setData(dash)
       setSeatMap(seats)

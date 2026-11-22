@@ -1,0 +1,67 @@
+# Scale test: the self-hosted stack with dummy data, every check in tests/scale.
+# Every pull request: 1,500 students over 3 branches. By hand (Actions -> Scale test ->
+# Run workflow): choose "large" for 20,000 students over 10 branches and two years.
+# No secrets are used: the stack makes throw-away keys and loads dummy data only.
+name: Scale test
+
+on:
+  pull_request:
+  workflow_dispatch:
+    inputs:
+      seed:
+        description: "small (1,500 students) or large (20,000 students, about 15 minutes)"
+        required: true
+        default: small
+        type: choice
+        options: [small, large]
+
+concurrency:
+  group: scale-test-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  scale-test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0   # the original api (base branch) is deployed next to the new one for comparisons
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - run: npm ci
+
+      - name: Website builds
+        run: npx vite build
+
+      - name: Paging lint
+        run: npm run test:lint-paging
+
+      - uses: denoland/setup-deno@v2
+        with:
+          deno-version: v2.1.4
+
+      # Report only for now: main already has 2 type errors of its own (an activity-feed sort
+      # type and an embedded "name" typed as an array). Make this step blocking once fixed.
+      - name: Type check (report only)
+        continue-on-error: true
+        run: deno check --import-map=tests/scale/typecheck-import-map.json supabase/functions/api/index.ts
+
+      - name: Scale test (Docker stack, dummy data)
+        run: |
+          base="origin/${{ github.base_ref || 'main' }}"
+          npm run test:scale -- --seed "${{ inputs.seed || 'small' }}" --orig "$base"
+
+      - name: Stack logs on failure
+        if: failure()
+        run: |
+          cd .scale-test/backend 2>/dev/null && docker compose logs --tail 200 || true
+
+      - name: Remove the stack
+        if: always()
+        run: |
+          cd .scale-test/backend 2>/dev/null && docker compose down -v || true

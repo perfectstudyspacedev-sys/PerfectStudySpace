@@ -223,11 +223,12 @@ export default function ReportsPage() {
                   <div className="label">Total Attendance</div>
                 </div>
                 <div className="card stat-card">
-                  <div className="value">{report.walkins?.length ?? 0}</div>
+                  {/* Counts from the api (it no longer sends every row); list length for an older api. */}
+                  <div className="value">{report.walkinCount ?? report.walkins?.length ?? 0}</div>
                   <div className="label">Walk-ins</div>
                 </div>
                 <div className="card stat-card">
-                  <div className="value">{report.newMembers?.length ?? 0}</div>
+                  <div className="value">{report.newMemberCount ?? report.newMembers?.length ?? 0}</div>
                   <div className="label">New Memberships</div>
                 </div>
                 <div className="card stat-card">

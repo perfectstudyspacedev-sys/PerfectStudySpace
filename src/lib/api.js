@@ -18,12 +18,46 @@ function getToken() {
   return sessionStorage.getItem('pss_token')
 }
 
-export async function api(action, payload = {}) {
+// Writes (payments, renewals, check-in/out, food bills, lockers, ...) carry an
+// Idempotency-Key, so the api runs each one once even if it arrives twice. An identical
+// write while the same one is still in flight (a double click) does not send a second
+// request at all: it gets the first one's result. Reads, login and the public sign-up
+// page are not affected.
+const inFlightWrites = new Map()
+function isWriteAction(action) {
+  return !/^(get_|list_|lookup_|search_|public_|poll_|export_)/.test(action) && !['whoami', 'login', 'batch'].includes(action)
+}
+
+// Several READ actions in one request (api action "batch"), answers in the same order.
+// Like Promise.all over separate api() calls: if any part failed, its message is thrown.
+export async function apiBatch(calls) {
+  const { results } = await api('batch', { calls: calls.map(([action, payload]) => ({ action, ...(payload ?? {}) })) })
+  return results.map((r) => {
+    if (r.status !== 200 || r.body?.error) throw new Error(r.body?.error ?? 'Something went wrong')
+    return r.body
+  })
+}
+
+export function api(action, payload = {}) {
+  if (!isWriteAction(action)) return callApi(action, payload)
+  const signature = `${action}\n${JSON.stringify(payload)}`
+  const running = inFlightWrites.get(signature)
+  if (running) return running
+  const promise = callApi(action, payload, crypto.randomUUID())
+    .finally(() => inFlightWrites.delete(signature))
+  inFlightWrites.set(signature, promise)
+  return promise
+}
+
+async function callApi(action, payload, idempotencyKey) {
   const token = getToken()
 
   const { data, error } = await supabase.functions.invoke('api', {
     body: { action, ...payload },
-    headers: token ? { Authorization: `Bearer ${token}` } : {},
+    headers: {
+      ...(token ? { Authorization: `Bearer ${token}` } : {}),
+      ...(idempotencyKey ? { 'Idempotency-Key': idempotencyKey } : {}),
+    },
   })
 
   if (error) {

@@ -32,7 +32,8 @@ export function useSessionAlerts(branchId) {
   const check = useCallback(async () => {
     if (!branchId) return
     try {
-      const data = await api('list_today_bookings', { branchId })
+      // Only when each open session ends (and who it is); list_today_bookings loads far more.
+      const data = await api('poll_session_alerts', { branchId })
       const bookings = data.bookings ?? []
       const now = Date.now()
       const newToasts = []

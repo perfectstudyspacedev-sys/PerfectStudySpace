@@ -1,0 +1,193 @@
+# Slim Supabase stack for one project on the shared server: database, REST,
+# gateway and edge functions only. No Studio, Auth, Storage, Realtime, pooler
+# or analytics, because the projects moving here only call edge functions.
+#
+# add-project.sh copies this folder to ~/projects/<name>/backend and replaces
+# __PROJECT__ with the project name, so every container, network and volume
+# carries that name and cannot collide with another project's stack.
+#
+# Images and versions match the AlpenGlow stack exactly.
+
+name: __PROJECT__
+
+services:
+  db:
+    container_name: __PROJECT__-db
+    image: supabase/postgres:17.6.1.136
+    restart: unless-stopped
+    mem_limit: ${DB_MEM_LIMIT:-1280m}
+    volumes:
+      # Must be superuser to alter reserved roles
+      - ./volumes/db/roles.sql:/docker-entrypoint-initdb.d/init-scripts/99-roles.sql:Z
+      # Database settings for JWT_SECRET and JWT_EXP
+      - ./volumes/db/jwt.sql:/docker-entrypoint-initdb.d/init-scripts/99-jwt.sql:Z
+      - ./volumes/db/data:/var/lib/postgresql/data:Z
+      - db-config:/etc/postgresql-custom
+    healthcheck:
+      test: ["CMD", "pg_isready", "-U", "postgres", "-h", "localhost"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+      # A fresh database (first start, or a restore into an empty data folder) took more
+      # than 50 s to answer; failed checks inside this window do not count.
+      start_period: 120s
+    environment:
+      POSTGRES_HOST: /var/run/postgresql
+      PGPORT: 5432
+      POSTGRES_PORT: 5432
+      PGPASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      PGDATABASE: postgres
+      POSTGRES_DB: postgres
+      JWT_SECRET: ${JWT_SECRET}
+      JWT_EXP: ${JWT_EXPIRY:-3600}
+    # The image's postgresql.conf sets shared_buffers and effective_cache_size to 128MB;
+    # a -c setting on the command line outranks every config file, so these two win.
+    command:
+      - postgres
+      - -c
+      - config_file=/etc/postgresql/postgresql.conf
+      - -c
+      - log_min_messages=fatal
+      - -c
+      - shared_buffers=${DB_SHARED_BUFFERS:-384MB}
+      - -c
+      - effective_cache_size=${DB_EFFECTIVE_CACHE_SIZE:-1GB}
+    # No ports: the database is reachable only on this stack's own network.
+
+  rest:
+    container_name: __PROJECT__-rest
+    image: postgrest/postgrest:v14.12
+    restart: unless-stopped
+    mem_limit: ${REST_MEM_LIMIT:-512m}
+    depends_on:
+      db:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "postgrest", "--ready"]
+      interval: 5s
+      timeout: 5s
+      retries: 3
+    environment:
+      PGRST_DB_URI: postgres://authenticator:${POSTGRES_PASSWORD}@db:5432/postgres
+      PGRST_DB_SCHEMAS: public
+      PGRST_DB_MAX_ROWS: ${PGRST_DB_MAX_ROWS:-1000}
+      # Database connections REST keeps open (its own default is 10).
+      PGRST_DB_POOL: ${PGRST_DB_POOL:-20}
+      PGRST_DB_EXTRA_SEARCH_PATH: public,extensions
+      PGRST_DB_ANON_ROLE: anon
+      PGRST_ADMIN_SERVER_PORT: 3001
+      PGRST_ADMIN_SERVER_HOST: localhost
+      PGRST_JWT_SECRET: ${JWT_SECRET}
+      PGRST_DB_USE_LEGACY_GUCS: "false"
+      PGRST_APP_SETTINGS_JWT_SECRET: ${JWT_SECRET}
+      PGRST_APP_SETTINGS_JWT_EXP: ${JWT_EXPIRY:-3600}
+    command: ["postgrest"]
+
+  kong:
+    container_name: __PROJECT__-kong
+    image: kong/kong:3.9.1
+    restart: unless-stopped
+    mem_limit: ${KONG_MEM_LIMIT:-768m}
+    depends_on:
+      rest:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "kong", "health"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    # Loopback only: host nginx is the single way in from the internet.
+    ports:
+      - 127.0.0.1:${KONG_HTTP_PORT}:8000/tcp
+    volumes:
+      - ./volumes/api/kong.yml:/home/kong/temp.yml:ro,z
+      - ./volumes/api/kong-entrypoint.sh:/home/kong/kong-entrypoint.sh:ro,z
+    environment:
+      KONG_DATABASE: "off"
+      KONG_DECLARATIVE_CONFIG: /usr/local/kong/kong.yml
+      KONG_ROUTER_FLAVOR: expressions
+      KONG_DNS_ORDER: LAST,A,CNAME
+      KONG_DNS_NOT_FOUND_TTL: 1
+      KONG_PLUGINS: request-transformer,cors,key-auth,acl
+      KONG_NGINX_PROXY_PROXY_BUFFER_SIZE: 160k
+      KONG_NGINX_PROXY_PROXY_BUFFERS: 64 160k
+      # Functions call REST through Kong with every id of an all-branches page in the URL;
+      # Kong's default 4 x 8k header buffers answered 414 "URI too long".
+      KONG_NGINX_PROXY_LARGE_CLIENT_HEADER_BUFFERS: "4 64k"
+      # Kong keeps a DNS answer for its TTL. After "docker compose restart rest functions"
+      # the two containers can swap addresses, and Kong then sent REST traffic to the
+      # functions container (502 on every REST call, so every function failed) until the
+      # answer expired. Answers are now trusted for at most 10 s.
+      KONG_DNS_VALID_TTL: "10"
+      # Untuned Kong starts one worker per CPU and outgrows its memory cap.
+      KONG_NGINX_WORKER_PROCESSES: "2"
+      KONG_PROXY_ACCESS_LOG: /dev/stdout combined
+      SUPABASE_ANON_KEY: ${ANON_KEY}
+      SUPABASE_SERVICE_KEY: ${SERVICE_ROLE_KEY}
+    entrypoint: ["/bin/sh", "/home/kong/kong-entrypoint.sh"]
+
+  functions:
+    container_name: __PROJECT__-functions
+    image: supabase/edge-runtime:v1.74.0
+    restart: unless-stopped
+    # 512m crashed under normal page loads (one page sends 12 to 17 calls at once, each
+    # call a worker of its own); the browser showed that as CORS errors.
+    # Up to 8 workers of 512 MB each could in theory need 4 GB; real workers use a fraction
+    # of their limit, and the load test decides whether this ceiling holds. Sized so both
+    # stacks' ceilings together fit in the server's RAM (decided 22 Nov).
+    mem_limit: ${FUNCTIONS_MEM_LIMIT:-2048m}
+    # CPU ceiling (3 of the 4 cores), so a burst on this project cannot take every core
+    # from the other stacks on the server (AlpenGlow's are not capped).
+    cpus: ${FUNCTIONS_CPUS:-3}
+    depends_on:
+      kong:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "timeout 1 bash -c '</dev/tcp/127.0.0.1/9000'"]
+      interval: 5s
+      timeout: 5s
+      retries: 3
+    volumes:
+      - ./volumes/functions:/home/deno/functions:z
+      # Downloaded function libraries (esm.sh), kept across restarts and re-creates so a
+      # restart does not depend on esm.sh being reachable. DENO_DIR below points here.
+      - deno-cache:/root/.cache/deno
+    # The project's own function secrets (STAFF_JWT_SECRET and so on).
+    env_file:
+      - ./functions.env
+    environment:
+      DENO_DIR: /root/.cache/deno
+      JWT_SECRET: ${JWT_SECRET}
+      SUPABASE_URL: http://kong:8000
+      SUPABASE_PUBLIC_URL: ${SUPABASE_PUBLIC_URL}
+      SUPABASE_ANON_KEY: ${ANON_KEY}
+      SUPABASE_SERVICE_ROLE_KEY: ${SERVICE_ROLE_KEY}
+      SUPABASE_DB_URL: postgresql://postgres:${POSTGRES_PASSWORD}@db:5432/postgres
+      # Functions do their own auth; the gateway check stays off.
+      VERIFY_JWT: "false"
+      # Per-worker limits, read by volumes/functions/main. Supabase cloud allows
+      # 256 MB and 150 s; the self-hosted default is 150 MB / 60 s.
+      EDGE_WORKER_MEMORY_MB: ${EDGE_WORKER_MEMORY_MB:-512}
+      EDGE_WORKER_TIMEOUT_MS: ${EDGE_WORKER_TIMEOUT_MS:-150000}
+      # CPU time per worker, summed over the requests it serves (see main/index.ts).
+      EDGE_WORKER_CPU_SOFT_MS: ${EDGE_WORKER_CPU_SOFT_MS:-15000}
+      EDGE_WORKER_CPU_HARD_MS: ${EDGE_WORKER_CPU_HARD_MS:-45000}
+    # Worker pool: reuse workers (per_worker) and cap how many exist at once. Uncapped, a
+    # new worker started for every parallel request: memory grew with busy users, every
+    # burst paid cold starts, and a few calls got "worker has already retired" (500).
+    # Requests beyond the cap wait up to EDGE_REQUEST_WAIT_TIMEOUT_MS for a free worker.
+    command:
+      - start
+      - --main-service
+      - /home/deno/functions/main
+      - --policy
+      - per_worker
+      - --max-parallelism
+      - "${EDGE_MAX_PARALLELISM:-8}"
+      - --request-wait-timeout
+      - "${EDGE_REQUEST_WAIT_TIMEOUT_MS:-30000}"
+
+volumes:
+  db-config:
+  deno-cache:

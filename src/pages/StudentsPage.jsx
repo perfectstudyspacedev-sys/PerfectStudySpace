@@ -29,6 +29,28 @@ function cellText(row, col) {
   return String(raw)
 }
 
+// Waits until typing stops for `ms` before passing a new value on (filters are sent to the
+// api, one request per pause instead of one per keystroke).
+function useDebounced(value, ms = 300) {
+  const [v, setV] = useState(value)
+  useEffect(() => {
+    const t = setTimeout(() => setV(value), ms)
+    return () => clearTimeout(t)
+  }, [value, ms])
+  return v
+}
+
+function Pager({ page, pages, onPage }) {
+  if (!pages || pages <= 1) return null
+  return (
+    <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center', marginTop: '0.75rem', fontSize: '0.85rem' }}>
+      <button type="button" className="btn btn-ghost" disabled={page <= 1} onClick={() => onPage(page - 1)}>‹ Prev</button>
+      <span>Page {page} of {pages}</span>
+      <button type="button" className="btn btn-ghost" disabled={page >= pages} onClick={() => onPage(page + 1)}>Next ›</button>
+    </div>
+  )
+}
+
 function groupByBranchName(rows) {
   const groups = new Map()
   for (const row of rows) {
@@ -50,43 +72,39 @@ const COMBINED_STATUS_OPTIONS = [
 ]
 
 function CombinedStudentsView() {
-  const [students, setStudents] = useState(null)
+  const [pageData, setPageData] = useState(null)
+  const [page, setPage] = useState(1)
   const [search, setSearch] = useState('')
   const [error, setError] = useState('')
   const [branchFilter, setBranchFilter] = useState(null) // null = every branch
   const [statusFilter, setStatusFilter] = useState('')
+  const searchSent = useDebounced(search)
 
+  // One page at a time: the api filters, groups and counts every branch's students.
+  useEffect(() => { setPage(1) }, [searchSent, statusFilter, branchFilter])
   const load = useCallback(async () => {
     setError('')
     try {
-      const data = await api('list_students', { allBranches: true })
-      setStudents(data.students ?? [])
+      setPageData(await api('list_students_page', { allBranches: true, search: searchSent, statusFilter, branchName: branchFilter, page }))
     } catch (err) {
       setError(err.message)
     }
-  }, [])
+  }, [searchSent, statusFilter, branchFilter, page])
 
   useEffect(() => { load() }, [load])
 
-  const searched = students && search.trim()
-    ? students.filter(s => {
-        const q = search.trim().toLowerCase()
-        return s.name.toLowerCase().includes(q) || s.contact.includes(q) || String(s.cabin).toLowerCase().includes(q)
-      })
-    : students
-
-  const filtered = searched
-    ? (statusFilter ? searched.filter(s => s.status === statusFilter) : searched.filter(s => s.status !== 'inactive'))
-    : null
-
-  const allGroups = filtered ? groupByBranchName(filtered) : []
-  const visibleGroups = branchFilter ? allGroups.filter(([name]) => name === branchFilter) : allGroups
+  // Branch buttons: every branch with its full count. Groups: this page's rows, under
+  // headings that still show each branch's full count.
+  const allGroups = pageData?.branchCounts ?? []
+  const countByName = new Map(allGroups)
+  const filteredCount = allGroups.reduce((n, [, c]) => n + c, 0)
+  const visibleGroups = pageData ? groupByBranchName(pageData.rows) : []
 
   return (
     <>
       <div className="page-header"><h1>Students — Combined Hall</h1></div>
       {error && <p className="error-msg" style={{ marginBottom: '1rem' }}>{error}</p>}
-      {!students ? <p>Loading…</p> : (
+      {!pageData ? <p>Loading…</p> : (
         <>
           <div className="filters" style={{ marginBottom: '1rem', alignItems: 'center' }}>
             <input placeholder="Search name, phone, cabin…" value={search} onChange={(e) => setSearch(e.target.value)} />
@@ -101,16 +119,16 @@ function CombinedStudentsView() {
           {allGroups.length > 0 && (
             <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap', marginBottom: '1rem' }}>
               <button type="button" className={`btn ${branchFilter === null ? 'btn-primary' : 'btn-ghost'}`} style={{ padding: '0.35rem 0.9rem', fontSize: '0.82rem' }} onClick={() => setBranchFilter(null)}>
-                All Branches ({filtered.length})
+                All Branches ({filteredCount})
               </button>
-              {allGroups.map(([name, rows]) => (
+              {allGroups.map(([name, count]) => (
                 <button
                   key={name} type="button"
                   className={`btn ${branchFilter === name ? 'btn-primary' : 'btn-ghost'}`}
                   style={{ padding: '0.35rem 0.9rem', fontSize: '0.82rem' }}
                   onClick={() => setBranchFilter(name)}
                 >
-                  {name} ({rows.length})
+                  {name} ({count})
                 </button>
               ))}
             </div>
@@ -118,7 +136,7 @@ function CombinedStudentsView() {
           <div style={{ display: 'flex', flexDirection: 'column', gap: '1.25rem' }}>
             {visibleGroups.map(([branchName, rows]) => (
               <div key={branchName} className="card" style={{ overflowX: 'auto' }}>
-                <h3 style={{ color: 'var(--accent)', marginBottom: '0.75rem' }}>{branchName} · {rows.length} student{rows.length === 1 ? '' : 's'}</h3>
+                <h3 style={{ color: 'var(--accent)', marginBottom: '0.75rem' }}>{branchName} · {countByName.get(branchName) ?? rows.length} student{(countByName.get(branchName) ?? rows.length) === 1 ? '' : 's'}</h3>
                 <table className="data-table">
                   <thead>
                     <tr>
@@ -144,6 +162,7 @@ function CombinedStudentsView() {
               </div>
             ))}
           </div>
+          <Pager page={pageData.page} pages={pageData.pages} onPage={setPage} />
         </>
       )}
     </>
@@ -154,7 +173,8 @@ export default function StudentsPage() {
   const { branchId, isOwner: isOwnerRole, isCombinedHall } = useAuth()
   // Dev-mode: staff get the same Students spreadsheet access as owner, code-level only.
   const isOwner = isOwnerRole || DEV_MODE
-  const [students, setStudents] = useState([])
+  const [pageData, setPageData] = useState(null)
+  const [page, setPage] = useState(1)
   const [loading, setLoading] = useState(true)
   const [sortKey, setSortKey] = useState('sNo')
   const [sortDir, setSortDir] = useState('asc')
@@ -170,82 +190,52 @@ export default function StudentsPage() {
   const [cashbackLoading, setCashbackLoading] = useState(false)
   const [cashbackError, setCashbackError] = useState('')
 
+  // One page at a time: the api filters, sorts and counts (same rules as before). Typed
+  // filters are sent once typing pauses; any change goes back to page 1.
+  const searchSent = useDebounced(search)
+  const filtersSent = useDebounced(JSON.stringify(filters))
+  const query = useMemo(() => ({
+    branchId, search: searchSent, statusFilter, courseFilter, filters: JSON.parse(filtersSent), sortKey, sortDir,
+  }), [branchId, searchSent, statusFilter, courseFilter, filtersSent, sortKey, sortDir])
+  useEffect(() => { setPage(1) }, [query])
+
   const load = useCallback(async () => {
     if (!branchId || isCombinedHall) return
     setLoading(true)
     try {
-      const data = await api('list_students', { branchId })
-      setStudents(data.students ?? [])
+      setPageData(await api('list_students_page', { ...query, page }))
     } catch (e) {
       console.error(e)
     } finally {
       setLoading(false)
     }
-  }, [branchId])
+  }, [branchId, isCombinedHall, query, page])
 
   useEffect(() => { load() }, [load])
 
-  const courses = useMemo(() => {
-    const set = new Set(students.map(s => s.course).filter(c => c && c !== '-'))
-    return [...set].sort()
-  }, [students])
+  const courses = pageData?.courses ?? []
 
   const handleSort = (key) => {
     if (sortKey === key) setSortDir(d => d === 'asc' ? 'desc' : 'asc')
     else { setSortKey(key); setSortDir('asc') }
   }
 
-  const filtered = useMemo(() => {
-    let rows = [...students]
-    if (search.trim()) {
-      const s = search.trim().toLowerCase()
-      rows = rows.filter(r => r.name.toLowerCase().includes(s) || r.contact.includes(s) || r.cabin.toLowerCase().includes(s))
-    }
-    rows = rows.filter(r => r.status === statusFilter)
-    if (courseFilter) rows = rows.filter(r => r.course === courseFilter)
-    Object.entries(filters).forEach(([key, rawVal]) => {
-      const val = rawVal.trim().toLowerCase()
-      if (!val) return
-      const col = COLUMNS.find(c => c.key === key)
-      rows = rows.filter(r => cellText(r, col).toLowerCase().includes(val))
-    })
-    rows.sort((a, b) => {
-      const av = a[sortKey]
-      const bv = b[sortKey]
-      // Placeholder "-" cells always sink to the bottom regardless of direction — a student
-      // with no locker isn't "before" or "after" locker 1, they just have nothing to compare,
-      // and letting "-" sort as text put them above every real value in ascending order.
-      const aBlank = av == null || av === '-' || av === ''
-      const bBlank = bv == null || bv === '-' || bv === ''
-      if (aBlank || bBlank) return aBlank && bBlank ? 0 : aBlank ? 1 : -1
-      let cmp
-      if (typeof av === 'number' && typeof bv === 'number') {
-        cmp = av - bv
-      } else {
-        // Numeric strings (S.No, locker no, hours) must compare as numbers or "10" lands
-        // between "1" and "2". Dates stay on their ISO value, which is already sortable.
-        const an = Number(av)
-        const bn = Number(bv)
-        cmp = !Number.isNaN(an) && !Number.isNaN(bn) && String(av).trim() !== '' && String(bv).trim() !== ''
-          ? an - bn
-          : String(av).localeCompare(String(bv), undefined, { numeric: true, sensitivity: 'base' })
-      }
-      return sortDir === 'asc' ? cmp : -cmp
-    })
-    return rows
-  }, [students, search, statusFilter, courseFilter, filters, sortKey, sortDir])
+  // This page's rows, already filtered and sorted by the api.
+  const filtered = pageData?.rows ?? []
 
   // Ten filter boxes sit in one scrolling row, so a stray character in an off-screen column
   // could empty the table with nothing on screen explaining why. Surface the count and a
   // one-click reset.
   const activeFilterCount = Object.values(filters).filter(v => v && v.trim()).length
 
-  const handleExport = () => {
+  // Every row that passes the filters (not just this page), asked for only on Export.
+  const handleExport = async () => {
+    const { students: rows } = await api('export_students', query)
     exportToCSV(
       `students-${branchId?.slice(0, 8)}.csv`,
       COLUMNS.map(c => c.label),
       // Export the dates in the same DD-MM-YY form the table shows, not the raw ISO value.
-      filtered.map(r => COLUMNS.map(c => (c.isDate && r[c.key] && r[c.key] !== '-' ? formatDate(r[c.key]) : r[c.key]))),
+      rows.map(r => COLUMNS.map(c => (c.isDate && r[c.key] && r[c.key] !== '-' ? formatDate(r[c.key]) : r[c.key]))),
     )
   }
 
@@ -380,7 +370,7 @@ export default function StudentsPage() {
               </table>
             )}
             <p style={{ marginTop: '0.75rem', fontSize: '0.8rem', color: 'var(--text-muted)' }}>
-              {filtered.length} of {students.length} students · Red rows = overdue payment or locker
+              {pageData?.total ?? 0} of {pageData?.totalAll ?? 0} students · Red rows = overdue payment or locker
               {activeFilterCount > 0 && (
                 <>
                   {' · '}
@@ -394,6 +384,7 @@ export default function StudentsPage() {
                 </>
               )}
             </p>
+            {pageData && <Pager page={pageData.page} pages={pageData.pages} onPage={setPage} />}
           </div>
         </>
       )}
