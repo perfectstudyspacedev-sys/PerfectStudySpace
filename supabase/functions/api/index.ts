@@ -4813,13 +4813,60 @@ Deno.serve(async (req) => {
 
       // Remind staff to collect renewal during the student's final week of validity —
       // kept alive (re-upserted) every time this list loads, resolved on renew/close.
+      // Batched: this used to call createAlert once per expiring member (two queries each,
+      // one after another: about 3 s at 1,500 members). The end state is the same as that
+      // loop's, member by member in list order:
+      //   - exactly one pending expiry alert already there: it gets the last due date and
+      //     message, and keeps its own branch (createAlert's update path);
+      //   - none: one is inserted, with the branch of the student's first expiring
+      //     membership and the due date and message of the last (insert, then updates);
+      //   - two or more: createAlert's maybeSingle() saw none, so every pass inserted a
+      //     new row; that is kept as it was.
       const today = todayISO();
       const weekOut = addDays(today, 7);
-      for (const m of members) {
-        if (!m.student_id) continue;
-        if (m.end_date >= today && m.end_date <= weekOut) {
-          await createAlert(db, m.student_id, m.branch_id, "expiry", m.end_date,
-            `${m.student_name}'s membership expires on ${m.end_date} — remind them to renew.`);
+      const expiring = members.filter((m) => m.student_id && m.end_date >= today && m.end_date <= weekOut)
+        .map((m) => ({
+          studentId: m.student_id as string, branchId: m.branch_id, dueDate: m.end_date,
+          message: `${m.student_name}'s membership expires on ${m.end_date} — remind them to renew.`,
+        }));
+      if (expiring.length) {
+        const { data: existing, error: exErr } = await allRowsIn<{ id: string; student_id: string; branch_id: string }>(
+          expiring.map((e) => e.studentId),
+          (ids) => db.from("alerts").select("id, student_id, branch_id")
+            .in("student_id", ids).eq("alert_type", "expiry").eq("status", "pending"),
+        );
+        // As before, a failed alert step never fails the member list itself.
+        if (exErr) console.error("Failed to read expiry alerts:", exErr.message);
+        const existingByStudent = new Map<string, { id: string; branch_id: string }[]>();
+        for (const a of existing ?? []) existingByStudent.set(a.student_id, [...(existingByStudent.get(a.student_id) ?? []), a]);
+        const passesByStudent = new Map<string, typeof expiring>();
+        for (const e of expiring) passesByStudent.set(e.studentId, [...(passesByStudent.get(e.studentId) ?? []), e]);
+
+        const updates: Record<string, unknown>[] = [];
+        const inserts: Record<string, unknown>[] = [];
+        const newAlert = (e: typeof expiring[number], branchId: string) => ({
+          student_id: e.studentId, branch_id: branchId, alert_type: "expiry", due_date: e.dueDate, message: e.message,
+        });
+        for (const [studentId, passes] of exErr ? [] : passesByStudent) {
+          const found = existingByStudent.get(studentId) ?? [];
+          const last = passes[passes.length - 1];
+          if (found.length === 1) {
+            updates.push({ id: found[0].id, student_id: studentId, branch_id: found[0].branch_id, alert_type: "expiry", status: "pending", due_date: last.dueDate, message: last.message });
+          } else if (found.length === 0) {
+            inserts.push(newAlert(last, passes[0].branchId));
+          } else {
+            for (const p of passes) inserts.push(newAlert(p, p.branchId));
+          }
+        }
+        // Upsert on the primary key: only the columns sent are written, the rest of each
+        // existing row (created_at …) stays as it was.
+        if (updates.length) {
+          const { error: upErr } = await db.from("alerts").upsert(updates, { onConflict: "id" });
+          if (upErr) console.error("Failed to refresh expiry alerts:", upErr.message);
+        }
+        if (inserts.length) {
+          const { error: insErr } = await db.from("alerts").insert(inserts);
+          if (insErr) console.error("Failed to create expiry alerts:", insErr.message);
         }
       }
 
