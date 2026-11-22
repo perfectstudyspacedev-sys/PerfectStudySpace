@@ -36,9 +36,12 @@ console.log(`     idempotency_keys: ${stored}`);
 console.log("\n-- simultaneous check-ins (no keys: two desks / two tabs)");
 const st = sql(`SELECT s.id || ' ' || s.branch_id FROM students s JOIN memberships m ON m.student_id = s.id AND m.is_active
                  AND m.end_date >= (now() AT TIME ZONE 'Asia/Kolkata')::date AND m.fee_due = 0
-                WHERE NOT EXISTS (SELECT 1 FROM bookings b WHERE b.student_id = s.id AND b.status = 'active')
-                  AND NOT EXISTS (SELECT 1 FROM bookings b WHERE b.student_id = s.id AND b.start_time >= now() - interval '1 day')
-                ORDER BY s.s_no LIMIT 1`).split(" ");
+                -- not checked in if possible, then the one whose last visit is longest ago (in the
+                -- 20,000-student seed every paid-up member with a current membership is checked in)
+                ORDER BY EXISTS (SELECT 1 FROM bookings b WHERE b.student_id = s.id AND b.status = 'active'),
+                         (SELECT max(b.start_time) FROM bookings b WHERE b.student_id = s.id) NULLS FIRST, s.s_no LIMIT 1`).split(" ");
+// Dummy data only: if that student is checked in, check them out first.
+sql(`UPDATE bookings SET status = 'completed', end_time = now() WHERE student_id = '${st[0]}' AND status = 'active'`);
 const ci = { action: "check_in_member", branchId: st[1], studentId: st[0] };
 const res = await Promise.all([1, 2, 3, 4, 5].map(() => call(ci, { token })));
 const open = Number(sql(`SELECT count(*) FROM bookings WHERE student_id = '${st[0]}' AND status = 'active'`));
@@ -47,12 +50,24 @@ ok(open === 1, `5 check-ins of one student at the same moment: ${open} open sess
 ok(okCount === 1, `exactly one check-in succeeded (${okCount}); the others said: ${[...new Set(res.filter((r) => r.status !== 200).map((r) => r.body.error))].join(" | ")}`);
 
 console.log("\n-- two students, one free desk, at the same moment");
-const desk = sql(`SELECT d.id || ' ' || d.branch_id FROM desks d WHERE d.status = 'free'
+// Two temporary-plan students with a current membership in a branch that has a free desk;
+// preferably not checked in and not seen today (the 20,000-student seed has few of those:
+// then the two least recently seen, checked out first, dummy data only).
+const today = "(((now() AT TIME ZONE 'Asia/Kolkata')::date)::timestamp AT TIME ZONE 'Asia/Kolkata')";
+const pickTwo = sql(`SELECT branch_id || ' ' || string_agg(id::text, ' ' ORDER BY rk) FROM (
+                  SELECT s.id, s.branch_id, row_number() OVER (PARTITION BY s.branch_id ORDER BY
+                         EXISTS (SELECT 1 FROM bookings b WHERE b.student_id = s.id AND b.status = 'active'),
+                         EXISTS (SELECT 1 FROM bookings b WHERE b.student_id = s.id AND b.start_time >= ${today}),
+                         (SELECT max(b.start_time) FROM bookings b WHERE b.student_id = s.id) NULLS FIRST, s.s_no) AS rk
+                    FROM students s JOIN memberships m ON m.student_id = s.id AND m.is_active
+                     AND m.end_date >= (now() AT TIME ZONE 'Asia/Kolkata')::date AND m.category = 'temporary'
+                   WHERE EXISTS (SELECT 1 FROM desks d WHERE d.branch_id = s.branch_id AND d.status = 'free'
+                                   AND NOT EXISTS (SELECT 1 FROM bookings b WHERE b.desk_id = d.id AND b.status = 'active'))) x
+                 WHERE rk <= 2 GROUP BY branch_id HAVING count(*) = 2 ORDER BY branch_id LIMIT 1`).split(" ");
+const two = pickTwo.slice(1);
+if (two.length === 2) sql(`UPDATE bookings SET status = 'completed', end_time = now() WHERE student_id IN ('${two[0]}', '${two[1]}') AND status = 'active'`);
+const desk = sql(`SELECT d.id || ' ' || d.branch_id FROM desks d WHERE d.branch_id = '${pickTwo[0] || "00000000-0000-0000-0000-000000000000"}' AND d.status = 'free'
                    AND NOT EXISTS (SELECT 1 FROM bookings b WHERE b.desk_id = d.id AND b.status = 'active') ORDER BY d.label LIMIT 1`).split(" ");
-const two = sql(`SELECT string_agg(id::text, ' ') FROM (SELECT s.id FROM students s JOIN memberships m ON m.student_id = s.id AND m.is_active
-                  AND m.end_date >= (now() AT TIME ZONE 'Asia/Kolkata')::date AND m.category = 'temporary'
-                 WHERE s.branch_id = '${desk[1]}' AND NOT EXISTS (SELECT 1 FROM bookings b WHERE b.student_id = s.id AND (b.status = 'active' OR b.start_time >= (((now() AT TIME ZONE 'Asia/Kolkata')::date)::timestamp AT TIME ZONE 'Asia/Kolkata')))
-                 ORDER BY s.s_no LIMIT 2) x`).split(" ");
 if (two.length !== 2 || !two[0]) { ok(false, `the test found ${two.filter(Boolean).length} eligible students instead of 2`); process.exit(1); }
 const dres = await Promise.all(two.map((sid) => call({ action: "check_in_member", branchId: desk[1], studentId: sid, deskId: desk[0] }, { token })));
 const onDesk = Number(sql(`SELECT count(*) FROM bookings WHERE desk_id = '${desk[0]}' AND status = 'active'`));

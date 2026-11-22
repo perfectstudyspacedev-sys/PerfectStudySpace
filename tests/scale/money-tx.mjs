@@ -14,7 +14,14 @@ const sql = (q) => execFileSync("docker", ["exec", "-i", `${process.env.SCALE_PR
   { input: q, encoding: "utf8" }).trim();
 const json1 = (q) => JSON.parse(sql(q) || "null");
 const tokens = {};
+// One retry when the connection drops before an answer (an idle keep-alive connection through
+// an SSH tunnel can be closed by the far end just as it is reused). Safe: every call carries an
+// Idempotency-Key, so a write that did arrive is replayed, not done twice.
 const call = async (fn, body, key) => {
+  key ??= crypto.randomUUID();
+  try { return await call1(fn, body, key); } catch (e) { if (!(e instanceof TypeError)) throw e; console.log(`     (connection dropped, retried once: ${e.cause?.message ?? e.message})`); return call1(fn, body, key); }
+};
+const call1 = async (fn, body, key) => {
   const r = await fetch(`http://127.0.0.1:8010/functions/v1/${fn}`, { method: "POST",
     headers: { "content-type": "application/json", authorization: `Bearer ${tokens[fn]}`, "idempotency-key": key ?? crypto.randomUUID() },
     body: JSON.stringify(body) });
