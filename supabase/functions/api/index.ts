@@ -490,6 +490,9 @@ function lockerNumberSequence(branchName: string | undefined | null, capacity: n
   return numbers;
 }
 
+// New registrations may be paid today for a plan that starts later, up to this many days.
+const MAX_FUTURE_START_DAYS = 60;
+
 function addDays(dateStr: string, days: number): string {
   const [y, m, d] = dateStr.split("-").map(Number);
   const date = new Date(Date.UTC(y, m - 1, d));
@@ -1215,14 +1218,14 @@ Deno.serve(async (req) => {
 
       const token = await signToken({ sub: row.id, role: row.role, username: row.username });
 
-      // Keep the owner's last successful login in the database without changing the
-      // response shape consumed by the frontend. Do not make login fail if this optional
-      // activity timestamp cannot be written.
-      if (row.role === "owner") {
+      // Keep every account's last successful login (shown on the Staff page: admins see
+      // everyone's, the owner sees the staff members'). The login response is unchanged, and
+      // login never fails because this optional timestamp could not be written.
+      {
         const { error: loginStampError } = await db.from("staff")
           .update({ last_login_at: new Date().toISOString() })
           .eq("id", row.id);
-        if (loginStampError) console.error("Failed to record owner login:", loginStampError.message);
+        if (loginStampError) console.error("Failed to record login time:", loginStampError.message);
       }
 
       // If the owner reassigned this staff member to a different branch for today (covering
@@ -1785,7 +1788,7 @@ async function handleStaffAction(db: ReturnType<typeof adminClient>, staff: Staf
     // ─── STUDENT LOOKUP ───
     if (action === "lookup_student") {
       const { phone } = payload;
-      const { data, error: lookupErr } = await db.from("students").select("id, name, phone, course, status")
+      const { data, error: lookupErr } = await db.from("students").select("id, name, phone, course, status, emergency_contact")
         .eq("phone", phone).maybeSingle();
       if (lookupErr) return err(lookupErr.message);
       if (!data) return json({ student: null });
@@ -2148,7 +2151,12 @@ async function handleStaffAction(db: ReturnType<typeof adminClient>, staff: Staf
       }
       const totalPaid = gross * (1 - discount / 100);
       const startDate = customStartDate ? customStartDate : todayISO();
-      if (startDate > todayISO()) return err("Start date cannot be in the future");
+      // Paying today for a plan that starts later is allowed, up to MAX_FUTURE_START_DAYS
+      // ahead: the payment is recorded today, the plan (end, due and locker dates) runs from
+      // the start date, and check-in opens on the start date (check_in_member).
+      if (startDate > addDays(todayISO(), MAX_FUTURE_START_DAYS)) {
+        return err(`The start date can be at most ${MAX_FUTURE_START_DAYS} days ahead`);
+      }
 
       // What's collected right now, split between the membership and the locker's ₹200
       // (₹100 deposit + ₹100 first month). The form totals membership + locker together, and
@@ -2490,6 +2498,9 @@ async function handleStaffAction(db: ReturnType<typeof adminClient>, staff: Staf
       if (membership.is_paused) return err("Membership is currently on hold");
 
       const today = todayISO();
+      if (membership.start_date > today && !membership.renewed_from_membership_id) {
+        return err(`Membership starts on ${formatDateDMY(membership.start_date)} — check-in is possible from that day.`);
+      }
       const isExpiredMembership = membership.end_date < today;
       if (isExpiredMembership) {
         const daysSinceExpiry = daysBetween(membership.end_date, today);
@@ -4670,9 +4681,16 @@ async function handleStaffAction(db: ReturnType<typeof adminClient>, staff: Staf
       // (branch_id and override_branch_id from the branch-reassignment feature), so the
       // plain `branches(name)` embed is ambiguous to PostgREST and errors out silently.
       const { data } = await db.from("staff")
-        .select("id, username, role, display_name, branch_id, is_active, branches!branch_id(name)")
+        .select("id, username, role, display_name, branch_id, is_active, last_login_at, branches!branch_id(name)")
         .neq("role", "admin").order("username");
-      return json({ staff: data ?? [] });
+      // Last login: an admin sees everyone's, the owner sees only the staff members'
+      // (not the owner row). Rows the viewer may not see carry no last_login_at at all.
+      const viewerIsAdmin = staff.role === "admin";
+      const rows = (data ?? []).map((r: Record<string, unknown>) => {
+        const { last_login_at, ...rest } = r;
+        return viewerIsAdmin || r.role === "staff" ? { ...rest, last_login_at } : rest;
+      });
+      return json({ staff: rows });
     }
 
     // Kanban board data: every active staff member grouped under their EFFECTIVE branch for
@@ -5274,7 +5292,7 @@ async function handleStaffAction(db: ReturnType<typeof adminClient>, staff: Staf
       // All active memberships across branches pass 1000; the per-student lookups below
       // then carry that many ids, so they are chunked and paged too.
       const { data } = await allRows(() => db.from("memberships")
-        .select("id, branch_id, category, hours_per_day, hours_per_day_weekend, monthly_fee, start_date, end_date, cabin_no, is_paused, hold_days, fee_due, total_paid, students(id, name, phone), branches(name)")
+        .select("id, branch_id, category, hours_per_day, hours_per_day_weekend, monthly_fee, start_date, end_date, cabin_no, is_paused, hold_days, fee_due, total_paid, renewed_from_membership_id, students(id, name, phone), branches(name)")
         .in("branch_id", branchIds)
         .eq("is_active", true)
         .order("end_date"));
@@ -6044,7 +6062,7 @@ async function handleStaffAction(db: ReturnType<typeof adminClient>, staff: Staf
       const { data: mem } = await db.from("memberships").select("*").eq("id", membershipId).single();
       if (!mem) return err("Membership not found");
       if (!requireBranch(staff, mem.branch_id)) return err("Branch access denied", 403);
-      { const gap = notStartedYetMessage(mem, "delete the membership that is running now"); if (gap) return err(gap); }
+      if (mem.renewed_from_membership_id) { const gap = notStartedYetMessage(mem, "delete the membership that is running now"); if (gap) return err(gap); }
       if (!mem.is_active) return err("Membership is not active");
 
       const settlement = await computeDeleteSettlement(mem);
@@ -6066,7 +6084,7 @@ async function handleStaffAction(db: ReturnType<typeof adminClient>, staff: Staf
       const { data: mem } = await db.from("memberships").select("*").eq("id", membershipId).single();
       if (!mem) return err("Membership not found");
       if (!requireBranch(staff, mem.branch_id)) return err("Branch access denied", 403);
-      { const gap = notStartedYetMessage(mem, "delete the membership that is running now"); if (gap) return err(gap); }
+      if (mem.renewed_from_membership_id) { const gap = notStartedYetMessage(mem, "delete the membership that is running now"); if (gap) return err(gap); }
       if (!mem.is_active) return err("Membership is not active");
       if (await hasOpenSession(db, mem.student_id)) {
         return err("This student is currently checked in — check them out before deleting the membership.");

@@ -2,7 +2,7 @@ import { useState, useEffect, useCallback } from 'react'
 import { Navigate, useNavigate } from 'react-router-dom'
 import { useAuth } from '../context/AuthContext'
 import { api } from '../lib/api'
-import { todayISO } from '../lib/utils'
+import { todayISO, formatDateTime } from '../lib/utils'
 
 function BranchPillFilter({ branches, value, onChange }) {
   return (
@@ -349,6 +349,11 @@ export default function StaffPage() {
                         <span style={{ fontSize: '0.72rem', color: 'var(--accent)' }}>· {s.branches.name}</span>
                       )}
                     </div>
+                    {'last_login_at' in s && (
+                      <div style={{ fontSize: '0.72rem', color: 'var(--text-muted)', marginTop: '0.2rem' }}>
+                        Last login: {s.last_login_at ? formatDateTime(s.last_login_at) : '—'}
+                      </div>
+                    )}
                   </div>
                   <span className="badge badge-active">Active</span>
                 </div>

@@ -2,7 +2,7 @@ import { useState, useEffect, useCallback, useRef } from 'react'
 import { useNavigate, Link, useOutletContext } from 'react-router-dom'
 import { useAuth } from '../context/AuthContext'
 import { api } from '../lib/api'
-import { formatCurrency, formatDate, getMultiMonthDiscount, pendingCashbackTotal, todayISO, openWhatsApp, DEFAULT_WELCOME_TEMPLATE, REFERRAL_OPTIONS, renewalInfo, isNotStartedYet, shiftDate } from '../lib/utils'
+import { formatCurrency, formatDate, getMultiMonthDiscount, pendingCashbackTotal, todayISO, openWhatsApp, DEFAULT_WELCOME_TEMPLATE, REFERRAL_OPTIONS, renewalInfo, isNotStartedYet, isFutureStartRegistration, shiftDate } from '../lib/utils'
 import PaymentModeSelector, { isSplitValid } from '../components/PaymentModeSelector'
 import RenewalKindBanner from '../components/RenewalKindBanner'
 import PendingSignupsPanel from '../components/PendingSignupsPanel'
@@ -394,7 +394,7 @@ function ActiveMembersTab({ branchId, tempPackages, permPackages }) {
                     )}
                     {isNotStartedYet(m) && (
                       <div data-testid="renewed-early" style={{ color: '#4ade80', fontSize: '0.7rem', fontWeight: 700 }}>
-                        Renewed early · starts {formatDate(m.start_date)}
+                        {isFutureStartRegistration(m) ? 'Starts' : 'Renewed early · starts'} {formatDate(m.start_date)}
                       </div>
                     )}
                   </td>
@@ -984,6 +984,11 @@ function NewMembershipForm({ branchId, onCreated, tempPackages, permPackages, si
         setSelectedStudent(student)
       }
       if (student?.course && !fromSignup) setCourse(student.course)
+      // A returning (inactive) student: fill the emergency contact on file, unless staff
+      // already typed one or it came from the student's own sign-up.
+      if (student && !student.is_member && student.emergency_contact && !fromSignup) {
+        setEmergencyContact((current) => current || student.emergency_contact)
+      }
     } catch { /* ignore */ }
   }, [])
 
@@ -1410,7 +1415,12 @@ function NewMembershipForm({ branchId, onCreated, tempPackages, permPackages, si
         )}
         <div className="form-group">
           <label>Start Date</label>
-          <input type="date" value={startDate} max={todayISO()} onChange={(e) => setStartDate(e.target.value)} />
+          <input type="date" value={startDate} max={shiftDate(todayISO(), 60)} onChange={(e) => setStartDate(e.target.value)} />
+          {startDate > todayISO() && (
+            <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)', marginTop: '0.3rem' }}>
+              Starts on {formatDate(startDate)}: the payment is recorded today, check-in opens on the start date.
+            </div>
+          )}
         </div>
         <div className="form-group">
           <label>Locker</label>

@@ -184,6 +184,11 @@ export function isNotStartedYet(membership) {
   return !!membership?.start_date && membership.start_date > todayISO()
 }
 
+// Not started yet AND not an early renewal: a new registration paid for a later start date.
+export function isFutureStartRegistration(membership) {
+  return isNotStartedYet(membership) && !membership.renewed_from_membership_id
+}
+
 export function getMultiMonthDiscount(months) {
   if (months >= 6) return 15
   if (months >= 3) return 10

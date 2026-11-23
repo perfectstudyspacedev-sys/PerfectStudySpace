@@ -1080,6 +1080,9 @@ export default function StudentProfilePage() {
   const isPaused = activeMem?.is_paused || activeMem?.status === 'paused'
   const isExpired = !!activeMem && activeMem.end_date < todayISO()
   const notStartedYet = isNotStartedYet(activeMem)
+  // A new registration paid for a later start (not an early renewal): nothing to cancel back
+  // to, so it shows its start date and can be deleted like any other membership.
+  const futureStart = notStartedYet && !activeMem.renewed_from_membership_id
   const daysLeft = activeMem
     ? Math.round((new Date(activeMem.end_date + 'T12:00:00').getTime() - new Date(todayISO() + 'T12:00:00').getTime()) / 86_400_000)
     : 0
@@ -1154,7 +1157,7 @@ export default function StudentProfilePage() {
                   </span>
                 )],
                 activeMem && ['Cabin', activeMem.cabin_no ?? (isPaused && activeMem.category === 'permanent' ? 'Released (on hold)' : 'Floating')],
-                activeMem && [notStartedYet ? 'Starts (renewed early)' : 'Started', formatDate(activeMem.start_date)],
+                activeMem && [futureStart ? 'Starts' : notStartedYet ? 'Starts (renewed early)' : 'Started', formatDate(activeMem.start_date)],
                 activeMem && ['Expires', formatDate(activeMem.end_date)],
                 activeMem && ['Days Left', (
                   <span key="daysleft" style={{ color: daysLeft < 0 ? '#ff6b6b' : daysLeft <= 5 ? '#ffaa44' : undefined, fontWeight: 700 }}>
@@ -1231,7 +1234,16 @@ export default function StudentProfilePage() {
           <div className="modal-overlay" onClick={() => setOpenPanel(null)}>
           <div className="modal" style={{ maxWidth: 420 }} onClick={(e) => e.stopPropagation()}>
             <h2 style={{ color: 'var(--accent)', marginBottom: '0.75rem' }}>Membership Control</h2>
-            {notStartedYet ? (
+            {futureStart ? (
+              <div data-testid="future-start-box" style={{ background: 'rgba(74,222,128,0.06)', border: '1px solid rgba(74,222,128,0.3)', borderRadius: 8, padding: '0.6rem 0.75rem', marginBottom: '0.75rem' }}>
+                <p style={{ color: '#4ade80', fontWeight: 700, fontSize: '0.85rem' }}>
+                  Starts on {formatDate(activeMem.start_date)} · period {formatDate(activeMem.start_date)} – {formatDate(activeMem.end_date)}
+                </p>
+                <p style={{ color: 'var(--text-muted)', fontSize: '0.78rem', margin: '0.3rem 0 0' }}>
+                  Paid at registration; check-in opens on the start date. Change Plan is available once the period starts. If it was entered by mistake, Delete Membership below refunds it.
+                </p>
+              </div>
+            ) : notStartedYet ? (
               // RSP R7 / R6 — an early renewal waiting for its start date.
               <div data-testid="early-renewal-box" style={{ background: 'rgba(74,222,128,0.06)', border: '1px solid rgba(74,222,128,0.3)', borderRadius: 8, padding: '0.6rem 0.75rem', marginBottom: '0.75rem' }}>
                 <p style={{ color: '#4ade80', fontWeight: 700, fontSize: '0.85rem' }}>
@@ -1333,7 +1345,7 @@ export default function StudentProfilePage() {
                 </p>
               </>
             )}
-            {!notStartedYet && (
+            {(!notStartedYet || futureStart) && (
               <button
                 type="button"
                 style={{
