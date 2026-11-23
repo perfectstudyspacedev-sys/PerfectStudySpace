@@ -83,7 +83,7 @@ function oldCombined(students, { search, statusFilter, branchFilter }) {
 }
 // ── end of the website's logic ──
 
-const token = (await call({ action: "login", username: "owner", password: "local-owner-pass" })).body.token;
+const token = (await call({ action: "login", username: process.env.SCALE_OWNER_USER || "owner", password: process.env.SCALE_OWNER_PASS || "local-owner-pass" })).body.token;
 const branch = sql("SELECT id FROM branches WHERE is_active ORDER BY name LIMIT 1");
 let fails = 0, n = 0;
 async function pagesOf(body) {
