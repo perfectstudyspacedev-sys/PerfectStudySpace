@@ -3177,6 +3177,20 @@ async function handleStaffAction(db: ReturnType<typeof adminClient>, staff: Staf
         if (!requireBranch(staff, branchId)) return err("Branch access denied", 403);
         branchIds = [branchId];
       }
+      // Migration 055: the database returns only the page (filters, search, sort, totals and
+      // per-branch counts in SQL), so no worker loads the whole student list. The JavaScript
+      // path below is the previous method, kept only for a database without 055.
+      const sp = await db.rpc("students_page", {
+        p_branch_ids: branchIds, p_combined: !!allBranches, p_today: todayISO(),
+        p_search: String(payload.search ?? ""), p_status: payload.statusFilter ?? (allBranches ? "" : "active"),
+        p_course: payload.courseFilter ?? "", p_filters: payload.filters ?? {},
+        p_sort_key: payload.sortKey ?? "sNo", p_sort_dir: payload.sortDir ?? "asc", p_branch_name: payload.branchName ?? null,
+        p_page: Math.floor(Number(payload.page) || 1), p_page_size: Math.floor(Number(payload.pageSize) || 50),
+        p_export: action === "export_students",
+      });
+      if (!sp.error && sp.data) return json(sp.data);
+      if (sp.error && sp.error.code !== "PGRST202") return err(sp.error.message, 500);
+      console.error("students_page unavailable (migration 055 missing), building the list in the worker");
       const all = await studentRows(db, branchIds);
       const view = allBranches ? filterCombinedStudents(all, payload) : filterSortStudents(all, payload);
       if (action === "export_students") return json({ students: view.rows, totalAll: all.length });

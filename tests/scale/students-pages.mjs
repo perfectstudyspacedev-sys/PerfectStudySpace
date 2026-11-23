@@ -87,22 +87,36 @@ const token = (await call({ action: "login", username: "owner", password: "local
 const branch = sql("SELECT id FROM branches WHERE is_active ORDER BY name LIMIT 1");
 let fails = 0, n = 0;
 async function pagesOf(body) {
-  const ids = []; let page = 1, first;
+  const ids = [], rows = []; let page = 1, first;
   for (;;) {
     const r = await call({ ...body, page, pageSize: 50 }, token);
     if (r.status !== 200) throw new Error(`HTTP ${r.status} ${JSON.stringify(r.body)}`);
     first ??= r.body;
-    ids.push(...r.body.rows.map((x) => x.id));
+    ids.push(...r.body.rows.map((x) => x.id)); rows.push(...r.body.rows);
     if (r.body.rows.length > 50) throw new Error("page larger than 50");
     if (page >= r.body.pages) break;
     page++;
   }
-  return { ids, first };
+  return { ids, rows, first };
 }
 const same = (a, b) => a.length === b.length && a.every((x, i) => x === b[i]);
+// Every field of every row on a page must equal the full list's row (key order ignored).
+const canon = (x) => JSON.stringify(x, (k, v) => v && typeof v === "object" && !Array.isArray(v) ? Object.fromEntries(Object.entries(v).sort(([p], [q]) => (p < q ? -1 : 1))) : v);
+let rowDiffs = 0, rowsCompared = 0;
+function sameRows(rows, byId) {
+  for (const r of rows) {
+    rowsCompared++;
+    if (canon(r) !== canon(byId.get(r.id))) {
+      if (rowDiffs++ < 3) console.log(`  row differs:\n    old ${canon(byId.get(r.id))}\n    new ${canon(r)}`);
+      return false;
+    }
+  }
+  return true;
+}
 
 console.log("-- one branch: every sort column and direction, statuses, searches, course and column filters");
 const full = (await call({ action: "list_students", branchId: branch }, token)).body.students;
+const fullById = new Map(full.map((r) => [r.id, r]));
 const combos = [];
 for (const col of COLUMNS) for (const dir of ["asc", "desc"]) combos.push({ search: "", statusFilter: "active", courseFilter: "", filters: {}, sortKey: col.key, sortDir: dir });
 for (const statusFilter of ["active", "pending", "inactive"]) for (const search of ["", "stud", "90000001", "c1"]) for (const courseFilter of ["", "Course 3"])
@@ -113,7 +127,7 @@ for (const c of combos) {
   const want = oldBranchView(full, c).map((r) => r.id);
   const got = await pagesOf({ action: "list_students_page", branchId: branch, ...c });
   pagesFetched += got.first.pages; n++;
-  const ok = same(want, got.ids) && got.first.total === want.length && got.first.totalAll === full.length && JSON.stringify(got.first.courses) === JSON.stringify(oldCourses(full));
+  const ok = sameRows(got.rows, fullById) && same(want, got.ids) && got.first.total === want.length && got.first.totalAll === full.length && JSON.stringify(got.first.courses) === JSON.stringify(oldCourses(full));
   if (!ok) { fails++; console.log(`  FAIL ${JSON.stringify(c)}: want ${want.length}, got ${got.ids.length}`); }
 }
 console.log(`  ${combos.length} combinations, ${pagesFetched} pages of at most 50: ${fails === 0 ? "all identical to the browser's result (same students, same order, same totals and course list)" : fails + " differ"}`);
@@ -125,18 +139,19 @@ console.log(`  ${expOk ? "PASS" : "FAIL"}  export_students returns exactly the f
 
 console.log("\n-- Combined Hall: statuses, searches, branch choice");
 const fullAll = (await call({ action: "list_students", allBranches: true }, token)).body.students;
+const fullAllById = new Map(fullAll.map((r) => [r.id, r]));
 const names = [...new Set(fullAll.map((s) => s.branches?.name))].sort();
 let cf = 0, cn = 0;
 for (const statusFilter of ["", "active", "pending", "inactive"]) for (const search of ["", "stud", "9000001"]) for (const branchFilter of [null, ...names]) {
   const want = oldCombined(fullAll, { search, statusFilter, branchFilter });
   const got = await pagesOf({ action: "list_students_page", allBranches: true, search, statusFilter, branchName: branchFilter });
   cn++; n++;
-  if (!(same(want.rows.map((r) => r.id), got.ids) && JSON.stringify(want.counts) === JSON.stringify(got.first.branchCounts))) { cf++; fails++; console.log(`  FAIL ${statusFilter}/${search}/${branchFilter}`); }
+  if (!(sameRows(got.rows, fullAllById) && same(want.rows.map((r) => r.id), got.ids) && JSON.stringify(want.counts) === JSON.stringify(got.first.branchCounts))) { cf++; fails++; console.log(`  FAIL ${statusFilter}/${search}/${branchFilter}`); }
 }
 console.log(`  ${cn} combinations: ${cf === 0 ? "all identical (same students, same order, same per-branch counts)" : cf + " differ"}`);
 
 console.log("\n-- payload size: one page vs the whole list");
 const p1 = await call({ action: "list_students_page", allBranches: true, page: 1 }, token);
 console.log(`  one page: ${JSON.stringify(p1.body).length} bytes; whole list: ${JSON.stringify(fullAll).length} bytes (${fullAll.length} students)`);
-console.log(`\n${n} checks, ${fails} FAIL`);
+console.log(`\n${n} checks, ${fails} FAIL; ${rowsCompared} page rows compared field by field, ${rowDiffs} differ`);
 process.exit(fails ? 1 : 0);

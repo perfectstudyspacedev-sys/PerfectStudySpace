@@ -16,6 +16,7 @@ services:
     image: supabase/postgres:17.6.1.136
     restart: unless-stopped
     mem_limit: ${DB_MEM_LIMIT:-1280m}
+    cpu_shares: ${CPU_SHARES:-512}   # half of the default 1024: under CPU contention other projects (AlpenGlow) get twice the share
     volumes:
       # Must be superuser to alter reserved roles
       - ./volumes/db/roles.sql:/docker-entrypoint-initdb.d/init-scripts/99-roles.sql:Z
@@ -60,6 +61,7 @@ services:
     image: postgrest/postgrest:v14.12
     restart: unless-stopped
     mem_limit: ${REST_MEM_LIMIT:-512m}
+    cpu_shares: ${CPU_SHARES:-512}   # half of the default 1024: under CPU contention other projects (AlpenGlow) get twice the share
     depends_on:
       db:
         condition: service_healthy
@@ -89,6 +91,7 @@ services:
     image: kong/kong:3.9.1
     restart: unless-stopped
     mem_limit: ${KONG_MEM_LIMIT:-768m}
+    cpu_shares: ${CPU_SHARES:-512}   # half of the default 1024: under CPU contention other projects (AlpenGlow) get twice the share
     depends_on:
       rest:
         condition: service_healthy
@@ -139,6 +142,7 @@ services:
     # of their limit, and the load test decides whether this ceiling holds. Sized so both
     # stacks' ceilings together fit in the server's RAM (decided 22 Nov).
     mem_limit: ${FUNCTIONS_MEM_LIMIT:-2048m}
+    cpu_shares: ${CPU_SHARES:-512}   # half of the default 1024: under CPU contention other projects (AlpenGlow) get twice the share
     # CPU ceiling (3 of the 4 cores), so a burst on this project cannot take every core
     # from the other stacks on the server (AlpenGlow's are not capped).
     cpus: ${FUNCTIONS_CPUS:-3}
