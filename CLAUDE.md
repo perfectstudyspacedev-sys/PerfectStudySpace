@@ -188,9 +188,9 @@ Full rules: `.claude/rules/wat.md`
 | Build | Vite 6 — ESM (`"type": "module"`) |
 | UI | React 19 + React Router 7 |
 | Charts | Recharts 2 |
-| Backend | Supabase — Postgres, Auth, Storage (`@supabase/supabase-js` 2) |
-| Edge function | Deno — `supabase/functions/api/index.ts` |
-| Deploy | Vercel (`vercel.json`) |
+| Backend | Self-hosted Supabase stack (Postgres 17, PostgREST, Kong, edge runtime) on the shared server 84.247.184.195, api `https://api.perfectstudyspace.in`; `@supabase/supabase-js` 2 in the browser |
+| Edge function | Deno — `supabase/functions/api/index.ts` (libraries stored in `supabase/functions/_vendor`) |
+| Deploy | Frontend: Cloudflare Pages from `main` (`public/_headers`); backend: `deploy/vps-deploy.sh` (see Deploy workflow) |
 
 Source layout: `src/pages/` (18 route-level screens), `src/components/`,
 `src/context/AuthContext.jsx`, `src/hooks/`, `src/lib/` (`api.js`, `devMode.js`,
@@ -205,23 +205,58 @@ These are the **only** scripts defined in `package.json`. Do not invent others.
 | `npm run dev` | Vite dev server |
 | `npm run build` | Production build → `dist/` |
 | `npm run preview` | Serve the built `dist/` locally |
+| `npm run test:scale` | Local Docker copy of the server stack with dummy data, then every scale and correctness check (`tests/scale/README.md`; needs Docker) |
+| `npm run test:lint-paging` | The paging lint of the api (no Docker) |
 
-**There is no `test`, `lint`, or `typecheck` script and no `tests/` directory.**
-`.claude/settings.json` allowlists `npm run test/lint/typecheck` — those are
-inherited defaults that will fail here until the scripts are added. Section 7
-("Never report success without verification evidence") therefore means: for now,
-verification is `npm run build` plus browser QA, **not** a green test suite.
-Never claim tests pass. If you need a test runner, propose it — do not
-silently add one.
+**There is no `test`, `lint`, or `typecheck` script.** `.claude/settings.json`
+allowlists `npm run test/lint/typecheck` — inherited defaults that fail here.
+Section 7 ("Never report success without verification evidence") means:
+`npm run build`, `npm run test:scale` (for api or migration changes) and browser
+QA. Never claim tests pass without running them.
+
+### Deploy workflow (since 23 Nov 2026)
+
+PSS runs on the self-hosted server 84.247.184.195 (shared with AlpenGlow), **not**
+on Supabase cloud. There are two independent deploy paths; neither triggers the other:
+
+- **Frontend** (`src/`, `public/`, `index.html`, `vite.config.js`, `package.json`):
+  a push to `main` is enough. Cloudflare Pages project `perfect-study-space` builds
+  and deploys it automatically (it serves the staff site and
+  `join.perfectstudyspace.in`). Its production variables `VITE_SUPABASE_URL`
+  (`https://api.perfectstudyspace.in`) and `VITE_SUPABASE_ANON_KEY` (the stack's
+  anon key) live in the Pages dashboard, not in the repo. Security headers come from
+  `public/_headers`; keep `vercel.json` in step but Vercel is not used.
+- **Backend** (`supabase/functions/*`, `supabase/migrations/*.sql`): run, from the
+  repo root,
+  ```bash
+  VPS_HOST=deploy@84.247.184.195 bash deploy/vps-deploy.sh
+  ```
+  It checks the server first (changes nothing if the stack, router, secrets or
+  recorded migrations are not in place), copies `supabase/functions/` to the
+  server, applies only migrations not yet recorded in `public._migrations_applied`
+  (each in one transaction) and restarts the functions container (a pause of about
+  10 seconds). **A git push has zero effect on the server.**
+
+**Rule for Claude:** whenever you edit `supabase/functions/*` or
+`supabase/migrations/*.sql` in a session, run `npm run test:scale` (api or migration
+changes) and then `deploy/vps-deploy.sh` yourself right after the change is
+committed, from that same checkout, so the server never runs code that is not in
+git. Never `git push` without explicit confirmation in that same conversation.
+Migrations are forward-only and must be safe to run twice (`IF NOT EXISTS`,
+`CREATE OR REPLACE`); a migration is never edited after it ran on the server.
+
+**Never deploy to the Supabase cloud project `ozatixapvxwrwbpdxuzt`.** It is frozen
+(its api answers 503) as the rollback base and is paused after 7 Dec 2026. Do not
+run `supabase functions deploy`, `supabase db push`, `supabase link` or any other
+write against it. Server secrets (`STAFF_JWT_SECRET`, `PUBLIC_SITE_KEY`) live only
+in `~/projects/pss/backend/functions.env` on the server, never in the repo. Backups,
+the health check and alerts are in the server's `~/ops` (kit and runbook: the
+AlpenGlow repo, `deploy/server-migration/`).
 
 ### Supabase CLI
 
-Pre-approved (read-only): `supabase --version`, `supabase projects`,
-`supabase db diff`, `supabase migration list`.
-
-Gated behind approval: `supabase db push`, `supabase db reset`.
-`supabase db reset` **destroys local data** — never run it to "fix" a migration
-error without asking.
+Not used for deploys any more (see Deploy workflow). `supabase --version` is fine;
+anything that talks to the cloud project needs the user's OK first.
 
 ### Domain
 
@@ -231,8 +266,10 @@ memberships (plans, discounts, refunds, plan changes), bookings and sessions
 recurring routines, enquiries, food menu and food passes, revenue, cashbacks,
 payouts, messages, and multi-branch settings with capacity.
 
-`supabase/migrations/` holds **41 sequential migrations** (`001_initial.sql` →
-`041_admin_role_assign.sql`) and encodes the real business rules — RLS
+`supabase/migrations/` holds **55 sequential migrations** (`001_initial.sql` →
+`055_students_page.sql`; 053-055: report totals in SQL, idempotency keys, login
+lockout, money actions as one transaction each, the Students page computed by the
+database) and encodes the real business rules — RLS
 policies, role model, billing logic. Read the relevant migration before
 changing behaviour that touches money, membership state, or access control.
 
