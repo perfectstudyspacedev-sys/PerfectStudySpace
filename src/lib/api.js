@@ -33,7 +33,7 @@ function isWriteAction(action) {
 export async function apiBatch(calls) {
   const { results } = await api('batch', { calls: calls.map(([action, payload]) => ({ action, ...(payload ?? {}) })) })
   return results.map((r) => {
-    if (r.status !== 200 || r.body?.error) throw new Error(r.body?.error ?? 'Something went wrong')
+    if (r.status !== 200 || r.body?.error) throw new Error(r.body?.error ?? 'Could not load this. Refresh the page and try again.')
     return r.body
   })
 }
@@ -86,11 +86,11 @@ async function callApi(action, payload, idempotencyKey) {
     // page silently broken. Not raised for the login action itself (wrong credentials).
     if (action !== 'login' && lower === 'unauthorized') {
       window.dispatchEvent(new Event('pss:unauthorized'))
-      throw new Error('Your session has ended — please log in again')
+      throw new Error('Your session has ended. Please log in again.')
     }
     if (lower.includes('non-2xx')) {
       if (action === 'login') throw new Error('Invalid credentials')
-      throw new Error('Something went wrong')
+      throw new Error('The server could not complete this. Try again in a minute; if it keeps failing, tell the owner.')
     }
     throw new Error(message)
   }

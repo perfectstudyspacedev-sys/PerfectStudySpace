@@ -110,7 +110,7 @@ function CombinedEnquiriesView() {
 
   return (
     <>
-      <div className="page-header"><h1>Enquiries — Combined Hall</h1></div>
+      <div className="page-header"><h1>Enquiries · Combined Hall</h1></div>
       {error && <p className="error-msg" style={{ marginBottom: '1rem' }}>{error}</p>}
       {!enquiries ? <p>Loading…</p> : (
         <>
@@ -205,13 +205,13 @@ function CombinedEnquiriesView() {
               {viewEnq.notes && (
                 <>
                   <div className="drw-hr" />
-                  <div className="drw-lbl" style={{ marginBottom: '0.5rem' }}>📝 Internal Notes</div>
+                  <div className="drw-lbl" style={{ marginBottom: '0.5rem' }}>Internal Notes</div>
                   <div className="drw-val" style={{ whiteSpace: 'pre-wrap' }}>{viewEnq.notes}</div>
                 </>
               )}
 
               <div className="drw-hr" />
-              <div className="drw-lbl" style={{ marginBottom: '0.5rem' }}>🕒 Activity Timeline</div>
+              <div className="drw-lbl" style={{ marginBottom: '0.5rem' }}>Activity Timeline</div>
               {viewLoading ? (
                 <p style={{ fontSize: '0.8rem', color: 'var(--text-muted)' }}>Loading…</p>
               ) : (
@@ -230,7 +230,7 @@ function CombinedEnquiriesView() {
               )}
 
               <div className="drw-hr" />
-              <div className="drw-lbl" style={{ marginBottom: '0.5rem' }}>⏰ Follow-up Tasks</div>
+              <div className="drw-lbl" style={{ marginBottom: '0.5rem' }}>Follow-up Tasks</div>
               {viewLoading ? (
                 <p style={{ fontSize: '0.8rem', color: 'var(--text-muted)' }}>Loading…</p>
               ) : viewFollowups.length === 0 ? (
@@ -254,7 +254,7 @@ function CombinedEnquiriesView() {
               </p>
             </div>
             <div className="drw-actions">
-              {viewEnq.phone && <button type="button" className="drw-btn drw-wa" onClick={() => openWhatsApp(viewEnq.phone, `Hi ${viewEnq.name}, this is Perfect Study Space — following up on your enquiry. How can we help you?`)}>💬 WhatsApp</button>}
+              {viewEnq.phone && <button type="button" className="drw-btn drw-wa" onClick={() => openWhatsApp(viewEnq.phone, `Hi ${viewEnq.name}, this is Perfect Study Space, following up on your enquiry. How can we help?`)}>WhatsApp</button>}
             </div>
           </div>
         </div>
@@ -628,7 +628,7 @@ export default function EnquiriesPage() {
       showToast(`Merged ${mergeGroup.length} records into 1`, 'ok')
     } catch (e) {
       console.error(e)
-      showToast('Merge failed — see console', 'err')
+      showToast('Merge failed. Please try again.', 'err')
       setMerging(false)
     }
   }
@@ -651,7 +651,7 @@ export default function EnquiriesPage() {
   }
 
   const waLink = (phone, name) => {
-    openWhatsApp(phone, `Hi ${name}, this is Perfect Study Space — following up on your enquiry. How can we help you?`)
+    openWhatsApp(phone, `Hi ${name}, this is Perfect Study Space, following up on your enquiry. How can we help?`)
   }
   const openEmailModal = (enq) => {
     setEmailModal({
@@ -981,7 +981,7 @@ export default function EnquiriesPage() {
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(300px, 1fr))', gap: '1.25rem', alignItems: 'stretch' }}>
             {/* LEFT — Student Details */}
             <div className="card">
-              <h3 style={{ color: 'var(--accent)', marginBottom: '0.75rem' }}>👤 Student Details</h3>
+              <h3 style={{ color: 'var(--accent)', marginBottom: '0.75rem' }}>Student Details</h3>
               <div className="drw-info-grid">
                 <div className="drw-field">
                   <div className="drw-lbl">Status</div>
@@ -1002,7 +1002,7 @@ export default function EnquiriesPage() {
               {activities.filter(a => a.type === 'merged_snapshot').length > 0 && (
                 <>
                   <div className="drw-hr" />
-                  <div className="drw-lbl" style={{ marginBottom: '0.5rem' }}>🔀 Merged Records (read-only)</div>
+                  <div className="drw-lbl" style={{ marginBottom: '0.5rem' }}>Merged Records (read-only)</div>
                   {activities.filter(a => a.type === 'merged_snapshot').map((a) => {
                     let snap = null
                     try { snap = JSON.parse(a.note) } catch { /* ignore */ }
@@ -1025,8 +1025,8 @@ export default function EnquiriesPage() {
 
               <div className="drw-hr" />
               <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.5rem' }}>
-                {drawerEnq.phone && <button type="button" className="drw-btn drw-wa" onClick={() => waLink(drawerEnq.phone, drawerEnq.name)}>💬 WhatsApp</button>}
-                {drawerEnq.email && <button type="button" className="drw-btn drw-book" style={{ color: 'var(--accent)', borderColor: 'rgba(255,215,0,0.25)' }} onClick={() => openEmailModal(drawerEnq)}>✉ Email</button>}
+                {drawerEnq.phone && <button type="button" className="drw-btn drw-wa" onClick={() => waLink(drawerEnq.phone, drawerEnq.name)}>WhatsApp</button>}
+                {drawerEnq.email && <button type="button" className="drw-btn drw-book" style={{ color: 'var(--accent)', borderColor: 'rgba(255,215,0,0.25)' }} onClick={() => openEmailModal(drawerEnq)}>Email</button>}
                 <button type="button" className="drw-btn drw-book" onClick={() => changeStatus(drawerEnq.id, 'converted')}>✓ Mark Converted</button>
                 <button type="button" className="drw-btn drw-arch" onClick={() => changeStatus(drawerEnq.id, 'dropped')}>Drop</button>
               </div>
@@ -1034,21 +1034,21 @@ export default function EnquiriesPage() {
 
             {/* MIDDLE — Add Interaction, Follow-up Tasks */}
             <div className="card">
-              <h3 style={{ color: 'var(--accent)', marginBottom: '0.75rem' }}>🗒️ Notes &amp; Follow-ups</h3>
-              <div className="drw-lbl" style={{ marginBottom: '0.5rem' }}>💬 Add Interaction</div>
+              <h3 style={{ color: 'var(--accent)', marginBottom: '0.75rem' }}>Notes &amp; Follow-ups</h3>
+              <div className="drw-lbl" style={{ marginBottom: '0.5rem' }}>Add Interaction</div>
               <div className="ai-row">
                 <select className="ai-select" value={intType} onChange={(e) => setIntType(e.target.value)}>
-                  <option value="note">📝 Note</option>
-                  <option value="call">📞 Call</option>
-                  <option value="email">✉️ Email</option>
-                  <option value="whatsapp">💬 WhatsApp</option>
+                  <option value="note">Note</option>
+                  <option value="call">Call</option>
+                  <option value="email">Email</option>
+                  <option value="whatsapp">WhatsApp</option>
                 </select>
                 <input className="ai-note-input" value={intNote} onChange={(e) => setIntNote(e.target.value)} placeholder="What happened?…" />
                 <button type="button" className="btn btn-primary" onClick={logInteraction}>Log</button>
               </div>
 
               <div className="drw-hr" />
-              <div className="drw-lbl" style={{ marginBottom: '0.5rem' }}>⏰ Follow-up Tasks</div>
+              <div className="drw-lbl" style={{ marginBottom: '0.5rem' }}>Follow-up Tasks</div>
               <div className="fu-form">
                 <input type="datetime-local" className="fu-input" value={fuDue} onChange={(e) => setFuDue(e.target.value)} />
                 <input type="text" className="fu-input" value={fuNote} onChange={(e) => setFuNote(e.target.value)} placeholder="What to do?" />
@@ -1067,7 +1067,7 @@ export default function EnquiriesPage() {
 
             {/* RIGHT — Activity Pipeline */}
             <div className="card">
-              <h3 style={{ color: 'var(--accent)', marginBottom: '0.75rem' }}>🕒 Activity Pipeline</h3>
+              <h3 style={{ color: 'var(--accent)', marginBottom: '0.75rem' }}>Activity Pipeline</h3>
               <div className="activity-feed">
                 <div className="activity-item">
                   <div>Enquiry received</div>

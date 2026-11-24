@@ -102,7 +102,7 @@ function CombinedStudentsView() {
 
   return (
     <>
-      <div className="page-header"><h1>Students — Combined Hall</h1></div>
+      <div className="page-header"><h1>Students · Combined Hall</h1></div>
       {error && <p className="error-msg" style={{ marginBottom: '1rem' }}>{error}</p>}
       {!pageData ? <p>Loading…</p> : (
         <>
@@ -421,11 +421,11 @@ export default function StudentsPage() {
                   <td>
                     {s.is_member ? (
                       <button type="button" className="btn btn-ghost" style={{ padding: '0.3rem 0.65rem', fontSize: '0.78rem' }} onClick={() => openCashback(s)}>
-                        🎁 Cashback
+                        Cashback
                       </button>
                     ) : (
                       <span style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }} title="Only membership students are eligible for cashback">
-                        — Not a member
+                        Not a member
                       </span>
                     )}
                   </td>
@@ -484,10 +484,10 @@ export default function StudentsPage() {
       {cashbackTarget && (
         <div className="modal-overlay" onClick={() => setCashbackTarget(null)}>
           <div className="modal" style={{ maxWidth: 400 }} onClick={(e) => e.stopPropagation()}>
-            <h2>🎁 Grant Cashback</h2>
+            <h2>Grant Cashback</h2>
             <p style={{ color: 'var(--text-muted)', marginBottom: '1rem' }}>{cashbackTarget.name}</p>
             <p style={{ fontSize: '0.8rem', color: 'var(--text-muted)', marginBottom: '1rem' }}>
-              Applied as a discount on their next renewal — or paid out in cash if they close their membership instead of renewing.
+              Used as a discount on the next renewal, or paid in cash if the membership is closed instead.
             </p>
             <div className="form-group">
               <div style={{ display: 'flex', gap: '0.5rem' }}>

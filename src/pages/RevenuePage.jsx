@@ -311,7 +311,7 @@ export default function RevenuePage() {
       <div className="page-header">
         <h1>Revenue & Reporting</h1>
         {isCombinedHall ? (
-          <span style={{ fontSize: '0.85rem', color: 'var(--text-muted)' }}>🏢 All branches (Combined Hall)</span>
+          <span style={{ fontSize: '0.85rem', color: 'var(--text-muted)' }}>All branches (Combined Hall)</span>
         ) : isOwner && (
           <label style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', fontSize: '0.85rem' }}>
             <input type="checkbox" checked={allBranches} onChange={(e) => setAllBranches(e.target.checked)} />
@@ -344,17 +344,17 @@ export default function RevenuePage() {
 
       {customRangeInvalid && (
         <p className="error-msg" style={{ marginBottom: '1rem' }}>
-          "From" date is after "To" date — swap them to see results.
+          The "From" date is after the "To" date. Swap them to see results.
         </p>
       )}
       {period === 'custom' && !appliedRange && !customRangeInvalid && (
         <p style={{ ...MUTED_NOTE, marginBottom: '1rem' }}>
-          Showing today's figures — pick a date range above and hit Apply.
+          Showing today's figures. Pick a date range above and tap Apply.
         </p>
       )}
       {period === 'custom' && appliedRange && customPending && !customRangeInvalid && (
         <p style={{ ...MUTED_NOTE, marginBottom: '1rem' }}>
-          Dates changed — hit Apply to update. Still showing {formatDate(appliedRange.from)} – {formatDate(appliedRange.to)}.
+          Dates changed. Tap Apply to update. Still showing {formatDate(appliedRange.from)} – {formatDate(appliedRange.to)}.
         </p>
       )}
       {rangeText && (
@@ -415,16 +415,16 @@ export default function RevenuePage() {
               <h3 style={{ color: 'var(--accent)', marginBottom: '0.75rem' }}>Surrendered to Students</h3>
               <div style={{ display: 'flex', gap: '2rem', flexWrap: 'wrap' }}>
                 {revenue.payouts.cashback > 0 && (
-                  <p className="mono" style={{ fontSize: '1.02rem' }}>🎁 Cashback: <strong style={{ color: '#ff8888' }}>{formatCurrency(revenue.payouts.cashback)}</strong></p>
+                  <p className="mono" style={{ fontSize: '1.02rem' }}>Cashback: <strong style={{ color: '#ff8888' }}>{formatCurrency(revenue.payouts.cashback)}</strong></p>
                 )}
                 {revenue.payouts.locker_deposit > 0 && (
-                  <p className="mono" style={{ fontSize: '1.02rem' }}>🔑 Locker Deposits: <strong style={{ color: '#ff8888' }}>{formatCurrency(revenue.payouts.locker_deposit)}</strong></p>
+                  <p className="mono" style={{ fontSize: '1.02rem' }}>Locker Deposits: <strong style={{ color: '#ff8888' }}>{formatCurrency(revenue.payouts.locker_deposit)}</strong></p>
                 )}
                 {revenue.payouts.food_pass_refund > 0 && (
-                  <p className="mono" style={{ fontSize: '1.02rem' }}>🎫 Food Pass Refunds: <strong style={{ color: '#ff8888' }}>{formatCurrency(revenue.payouts.food_pass_refund)}</strong></p>
+                  <p className="mono" style={{ fontSize: '1.02rem' }}>Food Pass Refunds: <strong style={{ color: '#ff8888' }}>{formatCurrency(revenue.payouts.food_pass_refund)}</strong></p>
                 )}
                 {revenue.payouts.membership_refund > 0 && (
-                  <p className="mono" style={{ fontSize: '1.02rem' }}>🗑️ Membership Refunds: <strong style={{ color: '#ff8888' }}>{formatCurrency(revenue.payouts.membership_refund)}</strong></p>
+                  <p className="mono" style={{ fontSize: '1.02rem' }}>Membership Refunds: <strong style={{ color: '#ff8888' }}>{formatCurrency(revenue.payouts.membership_refund)}</strong></p>
                 )}
               </div>
             </div>
@@ -476,7 +476,7 @@ export default function RevenuePage() {
           {/* Day-on-day revenue — every day in the range, ₹0 days included */}
           {showTrend && (
             <div className="card chart-card" style={{ marginTop: '1rem' }}>
-              <p style={SECTION_HEADING}>Daily Revenue — {periodLabel}</p>
+              <p style={SECTION_HEADING}>Daily Revenue · {periodLabel}</p>
               <ResponsiveContainer width="100%" height={280}>
                 <AreaChart data={revenue.trend} margin={{ top: 10, right: 20, left: 10, bottom: 0 }}>
                   <defs>
@@ -521,7 +521,7 @@ export default function RevenuePage() {
           {/* Branch performance chart — only when multiple branches have data */}
           {revenue.byBranch?.length > 1 && (
             <div className="card chart-card" style={{ marginTop: '1rem' }}>
-              <p style={SECTION_HEADING}>Branch Performance (Gross) — {periodLabel}</p>
+              <p style={SECTION_HEADING}>Branch Performance (Gross) · {periodLabel}</p>
               <ResponsiveContainer width="100%" height={Math.max(160, revenue.byBranch.length * 44)}>
                 <BarChart data={revenue.byBranch} layout="vertical" margin={{ left: 16, right: 24, top: 4, bottom: 4 }}>
                   <XAxis
@@ -573,7 +573,7 @@ export default function RevenuePage() {
             <div className="card chart-card" style={{ marginTop: '1rem' }}>
               <h3 style={{ color: 'var(--accent)', marginBottom: '0.25rem' }}>How Did You Hear About Us</h3>
               <p style={{ ...MUTED_NOTE, marginBottom: '1rem' }}>
-                All time{consolidated ? ', all branches' : ''} — not affected by the date range above.
+                All time{consolidated ? ', all branches' : ''} . Not affected by the date range above.
               </p>
               <ResponsiveContainer width="100%" height={260}>
                 <PieChart>
@@ -661,7 +661,7 @@ export default function RevenuePage() {
                   </td>
                   <td
                     className="mono"
-                    title={t.entry_type === 'info' ? 'For information — no money changed hands in this entry' : undefined}
+                    title={t.entry_type === 'info' ? 'For information only. No money was paid in this entry.' : undefined}
                     style={t.amount < 0 ? { color: '#ff8888' } : t.entry_type === 'info' ? { color: 'var(--text-muted)' } : undefined}
                   >
                     {t.amount != null ? formatSignedCurrency(t.amount) : '-'}
@@ -685,7 +685,7 @@ export default function RevenuePage() {
       {tab === 'waivers' && (
         <div data-testid="waivers-tab">
           <p style={{ ...MUTED_NOTE, marginBottom: '0.75rem' }}>
-            Money taken off what students owe — no cash changed hands, so none of this is in the revenue totals.
+            Amounts taken off what students owe. No money was paid, so these are not in the revenue totals.
           </p>
           {waiversError && (
             <p className="error-msg" style={{ marginBottom: '1rem' }}>
@@ -706,7 +706,7 @@ export default function RevenuePage() {
                 {WAIVER_TYPES.map(w => (
                   <button
                     key={w.key} type="button" data-waiver-type={w.key}
-                    className="card stat-card" title={`${w.hint} — click to show only these`}
+                    className="card stat-card" title={`${w.hint}. Click to show only these.`}
                     aria-pressed={waiverFilter === w.key}
                     onClick={() => setWaiverFilter(f => (f === w.key ? '' : w.key))}
                     style={{ textAlign: 'left', cursor: 'pointer', font: 'inherit', color: 'inherit', border: waiverFilter === w.key ? '1px solid var(--accent)' : undefined }}

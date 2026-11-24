@@ -202,11 +202,11 @@ function CombinedDashboard() {
           <div className="stats-row" style={{ marginBottom: '1rem' }}>
             <div className="card stat-card">
               <div className="value count-up" style={{ color: summaryDuePayments.length > 0 ? '#ff8888' : undefined }}>{summaryDuePayments.length}</div>
-              <div className="label">Payment Pending{pendingBranchFilter ? ` — ${pendingBranchFilter}` : ' (All Branches)'}</div>
+              <div className="label">Payment Pending{pendingBranchFilter ? ` · ${pendingBranchFilter}` : ' (All Branches)'}</div>
             </div>
             <div className="card stat-card">
               <div className="value count-up" style={{ color: summaryExpiring.length > 0 ? '#ffaa44' : undefined }}>{summaryExpiring.length}</div>
-              <div className="label">Expiring on {formatDate(pending.date)}{pendingBranchFilter ? ` — ${pendingBranchFilter}` : ' (All Branches)'}</div>
+              <div className="label">Expiring on {formatDate(pending.date)}{pendingBranchFilter ? ` · ${pendingBranchFilter}` : ' (All Branches)'}</div>
             </div>
           </div>
           {allPendingBranchNames.length > 0 && (
@@ -230,7 +230,7 @@ function CombinedDashboard() {
             </div>
           )}
           {pendingBranchNames.length === 0 ? (
-            <p style={{ color: 'var(--text-muted)', fontSize: '0.85rem' }}>Nothing pending or expiring — all clear.</p>
+            <p style={{ color: 'var(--text-muted)', fontSize: '0.85rem' }}>Nothing pending or expiring.</p>
           ) : (
             <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
               {pendingBranchNames.map(branchName => {
@@ -243,7 +243,7 @@ function CombinedDashboard() {
                     {showPayments && (
                       <>
                         <h4 style={{ fontSize: '0.85rem', color: '#a78bfa', marginBottom: '0.5rem' }}>
-                          Payments Pending — {duePayments.length}
+                          Payments Pending · {duePayments.length}
                         </h4>
                         {duePayments.length === 0 ? (
                           <p style={{ color: 'var(--text-muted)', fontSize: '0.82rem', marginBottom: showExpiring ? '1rem' : 0 }}>No pending payments.</p>
@@ -277,7 +277,7 @@ function CombinedDashboard() {
                     {showExpiring && (
                       <>
                         <h4 style={{ fontSize: '0.85rem', color: '#a78bfa', marginBottom: '0.5rem' }}>
-                          Memberships Expiring On {formatDate(pending.date)} — {expiring.length}
+                          Memberships Expiring On {formatDate(pending.date)} · {expiring.length}
                         </h4>
                         {expiring.length === 0 ? (
                           <p style={{ color: 'var(--text-muted)', fontSize: '0.82rem' }}>None.</p>
@@ -391,13 +391,13 @@ function CheckInModal({ branchId, onClose, onDone }) {
       })
       const notices = []
       if (result.expiredMembership) {
-        notices.push(`${student.name}'s membership has expired. They've been checked in for today — please prompt them to renew.`)
+        notices.push(`${student.name}'s membership has expired. They have been checked in for today. Ask them to renew.`)
       }
       if (result.crossBranchVisit) {
-        notices.push(`${student.name} is registered at a different branch — their home branch has been notified of today's visit.`)
+        notices.push(`${student.name} is registered at another branch. Their home branch has been told about today's visit.`)
       }
       if (result.isSplitSession) {
-        notices.push(`This is a split session — ${result.sessionHours}h remaining of today's daily quota has been allotted for this check-in.`)
+        notices.push(`Split session: the remaining ${result.sessionHours}h of today's quota is used for this check-in.`)
       }
       if (notices.length) {
         setSuccessNotices(notices)

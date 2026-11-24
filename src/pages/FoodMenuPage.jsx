@@ -85,7 +85,7 @@ function CombinedFoodMenu() {
 
   return (
     <>
-      <div className="page-header"><h1>Food Menu — Combined Hall</h1></div>
+      <div className="page-header"><h1>Food Menu · Combined Hall</h1></div>
       {error && <p className="error-msg" style={{ marginBottom: '1rem' }}>{error}</p>}
 
       {!loaded ? <p>Loading…</p> : (
@@ -119,7 +119,7 @@ function CombinedFoodMenu() {
                     const branchItems = items.filter(i => (i.branches?.name ?? 'Unknown Branch') === branchName)
                     return (
                       <div key={branchName}>
-                        <h3 style={{ fontSize: '0.9rem', color: '#a78bfa', marginBottom: '0.5rem' }}>{branchName} — {branchItems.length} item{branchItems.length === 1 ? '' : 's'}</h3>
+                        <h3 style={{ fontSize: '0.9rem', color: '#a78bfa', marginBottom: '0.5rem' }}>{branchName} · {branchItems.length} item{branchItems.length === 1 ? '' : 's'}</h3>
                         {branchItems.length === 0 ? (
                           <p style={{ color: 'var(--text-muted)', fontSize: '0.82rem' }}>No items yet.</p>
                         ) : (
@@ -157,7 +157,7 @@ function CombinedFoodMenu() {
                     const branchBills = bills.filter(b => (b.branches?.name ?? 'Unknown Branch') === branchName)
                     return (
                       <div key={branchName}>
-                        <h3 style={{ fontSize: '0.9rem', color: '#a78bfa', marginBottom: '0.5rem' }}>{branchName} — {branchBills.length} order{branchBills.length === 1 ? '' : 's'}</h3>
+                        <h3 style={{ fontSize: '0.9rem', color: '#a78bfa', marginBottom: '0.5rem' }}>{branchName} · {branchBills.length} order{branchBills.length === 1 ? '' : 's'}</h3>
                         {branchBills.length === 0 ? (
                           <p style={{ color: 'var(--text-muted)', fontSize: '0.82rem' }}>No orders in this period.</p>
                         ) : (
@@ -189,7 +189,7 @@ function CombinedFoodMenu() {
                     const branchInventory = inventory.filter(i => (i.branches?.name ?? 'Unknown Branch') === branchName)
                     return (
                       <div key={branchName}>
-                        <h3 style={{ fontSize: '0.9rem', color: '#a78bfa', marginBottom: '0.5rem' }}>{branchName} — {branchInventory.length} item{branchInventory.length === 1 ? '' : 's'}</h3>
+                        <h3 style={{ fontSize: '0.9rem', color: '#a78bfa', marginBottom: '0.5rem' }}>{branchName} · {branchInventory.length} item{branchInventory.length === 1 ? '' : 's'}</h3>
                         {branchInventory.length === 0 ? (
                           <p style={{ color: 'var(--text-muted)', fontSize: '0.82rem' }}>No inventory logged yet.</p>
                         ) : (
@@ -223,7 +223,7 @@ function CombinedFoodMenu() {
                     const branchLogs = logs.filter(l => (l.branches?.name ?? 'Unknown Branch') === branchName)
                     return (
                       <div key={branchName}>
-                        <h3 style={{ fontSize: '0.9rem', color: '#a78bfa', marginBottom: '0.5rem' }}>{branchName} — {branchLogs.length}</h3>
+                        <h3 style={{ fontSize: '0.9rem', color: '#a78bfa', marginBottom: '0.5rem' }}>{branchName} · {branchLogs.length}</h3>
                         {branchLogs.length === 0 ? (
                           <p style={{ color: 'var(--text-muted)', fontSize: '0.82rem' }}>No activity yet.</p>
                         ) : (
@@ -476,7 +476,7 @@ export default function FoodMenuPage() {
             <div className="card">
               <h3 style={{ color: 'var(--accent)', marginBottom: '0.75rem' }}>Current Inventory</h3>
               {inventoryItems.length === 0 ? (
-                <p style={{ color: 'var(--text-muted)' }}>No inventory logged yet — add some from the left.</p>
+                <p style={{ color: 'var(--text-muted)' }}>No inventory logged yet. Add some on the left.</p>
               ) : (
                 <table className="data-table">
                   <thead><tr><th>Item</th><th>Current Stock</th></tr></thead>
@@ -509,7 +509,7 @@ export default function FoodMenuPage() {
         <div className="card" style={{ marginTop: '1rem' }}>
           <h3 style={{ color: 'var(--accent)', marginBottom: '0.75rem' }}>Inventory</h3>
           <p style={{ color: 'var(--text-muted)', fontSize: '0.8rem', marginBottom: '0.75rem' }}>
-            Used some packets? Set how many and tap Avail — the owner tracks stock levels from this.
+            Used some packets? Enter how many and tap Avail. The owner tracks stock from this.
           </p>
           {availError && <p className="error-msg" style={{ marginBottom: '0.75rem' }}>{availError}</p>}
           {inventoryItems.length === 0 ? (
@@ -610,7 +610,7 @@ function InventoryLog({ branchId }) {
 
   if (error) return <p className="error-msg">{error}</p>
   if (!logs) return <p style={{ color: 'var(--text-muted)' }}>Loading…</p>
-  if (logs.length === 0) return <p style={{ color: 'var(--text-muted)' }}>No activity yet — adding or availing inventory will show up here.</p>
+  if (logs.length === 0) return <p style={{ color: 'var(--text-muted)' }}>No activity yet. Added and availed inventory shows here.</p>
 
   return (
     <table className="data-table">

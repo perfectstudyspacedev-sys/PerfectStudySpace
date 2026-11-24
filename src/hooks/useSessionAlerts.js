@@ -51,18 +51,18 @@ export function useSessionAlerts(branchId) {
         const warnKey = `${bk.id}:warn`
         if (!fired.current.has(warnKey) && now >= endMs - WARN_BEFORE_MS && now < endMs) {
           fired.current.add(warnKey)
-          const msg = `${studentName} — session ends in 5 minutes`
+          const msg = `${studentName}: session ends in 5 minutes`
           newToasts.push({ id: warnKey, level: 'warn', message: msg, studentName, createdAt: now })
-          fireNativeNotification('⏰ Time Almost Up', msg)
+          fireNativeNotification('Time Almost Up', msg)
         }
 
         // Session ended
         const endKey = `${bk.id}:end`
         if (!fired.current.has(endKey) && now >= endMs) {
           fired.current.add(endKey)
-          const msg = `${studentName} — session has ended`
+          const msg = `${studentName}: session has ended`
           newToasts.push({ id: endKey, level: 'end', message: msg, studentName, createdAt: now })
-          fireNativeNotification('🔔 Session Ended', msg)
+          fireNativeNotification('Session Ended', msg)
         }
       }
 

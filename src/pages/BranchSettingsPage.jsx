@@ -115,7 +115,7 @@ export default function BranchSettingsPage() {
     try {
       const { code } = await api('rotate_signup_link', { branchId: selectedBranch })
       setSignupCode(code)
-      setSignupLinkMsg('New link made — the old one no longer works')
+      setSignupLinkMsg('New link made. The old one no longer works.')
     } catch (e) {
       setSignupLinkMsg(e.message)
     } finally {
@@ -137,7 +137,7 @@ export default function BranchSettingsPage() {
       }
       await Promise.all(changed.map(f => api('update_fee_config', { id: f.id, fee: Number(feeEdits[f.id]) })))
       await load()
-      setMsg(`${changed.length} fee${changed.length > 1 ? 's' : ''} updated — new memberships will use the updated rates`)
+      setMsg(`${changed.length} fee${changed.length > 1 ? 's' : ''} updated. New memberships use the new rates.`)
     } catch (e) {
       setMsg(e.message)
     } finally {
@@ -159,7 +159,7 @@ export default function BranchSettingsPage() {
           title="Make a new sign-up link?" testId="rotate-link-dialog" danger confirmLabel="Make new link" busy={rotating}
           onConfirm={makeNewSignupLink} onCancel={() => setConfirmRotate(false)}
         >
-          The current {selectedBranchName ? `${selectedBranchName} ` : ''}link stops working immediately — anyone you already sent it to will need the new one.
+          The current {selectedBranchName ? `${selectedBranchName} ` : ''}link stops working now. Anyone who has it will need the new one.
         </ConfirmDialog>
       )}
 
@@ -195,10 +195,10 @@ export default function BranchSettingsPage() {
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(320px, 1fr))', gap: '1rem', marginBottom: '1.5rem', alignItems: 'stretch' }}>
       <div className="card" data-testid="signup-link-card">
         <h3 style={{ color: 'var(--accent)', marginBottom: '0.5rem' }}>
-          Self Sign-up Link{selectedBranchName && <span style={{ color: 'var(--text-muted)', fontWeight: 400 }}> — {selectedBranchName}</span>}
+          Self Sign-up Link{selectedBranchName && <span style={{ color: 'var(--text-muted)', fontWeight: 400 }}> · {selectedBranchName}</span>}
         </h3>
         <p style={{ color: 'var(--text-muted)', fontSize: '0.82rem', marginBottom: '0.75rem' }}>
-          Send this to new students — they fill in their own details, and staff approve them under Membership → New Registration.
+          Send this link to new students. They fill in their details, and staff approve them under Membership → New Registration.
           It isn't linked from anywhere else. Make a new link if this one gets shared where it shouldn't.
         </p>
         {signupUrl ? (

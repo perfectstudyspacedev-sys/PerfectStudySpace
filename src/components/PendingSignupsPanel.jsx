@@ -16,7 +16,7 @@ export default function PendingSignupsPanel({ requests, branchId, activeSignupId
     setLinkMsg('')
     try {
       const { code } = await api('get_signup_link', { branchId })
-      if (!code) return setLinkMsg("This branch's link hasn't been created yet — the owner can create it on the Branches page.")
+      if (!code) return setLinkMsg("This branch has no link yet. The owner can create it on the Branches page.")
       const url = signupLinkFor(code)
       try {
         await navigator.clipboard.writeText(url)
@@ -68,12 +68,12 @@ export default function PendingSignupsPanel({ requests, branchId, activeSignupId
                   </div>
                   {r.activeMember && (
                     <div style={{ fontSize: '0.75rem', color: '#ff8888', marginTop: '0.2rem' }}>
-                      Already a member{r.activeMember.branch ? ` at ${r.activeMember.branch}` : ''} until {formatDate(r.activeMember.endDate)} — use Renew on{' '}
+                      Already a member{r.activeMember.branch ? ` at ${r.activeMember.branch}` : ''} until {formatDate(r.activeMember.endDate)}. Use Renew on{' '}
                       <Link to={`/students/${r.activeMember.studentId}`} style={{ color: 'var(--accent)' }}>their profile</Link>, then Deny this.
                     </div>
                   )}
                   {lockedByOther && <div style={{ fontSize: '0.75rem', color: '#ffaa44', marginTop: '0.2rem' }}>Being handled by {r.handledBy}</div>}
-                  {otherBranch && !r.activeMember && <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)', marginTop: '0.2rem' }}>Sent to {r.branchName} — switch to that branch to register.</div>}
+                  {otherBranch && !r.activeMember && <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)', marginTop: '0.2rem' }}>Sent to {r.branchName}. Switch to that branch to register.</div>}
                 </div>
                 <div style={{ display: 'flex', gap: '0.4rem' }}>
                   <button

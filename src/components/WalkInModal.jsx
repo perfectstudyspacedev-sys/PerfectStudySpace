@@ -121,7 +121,7 @@ export default function WalkInModal({ branchId, onClose, onDone }) {
             {isNewStudent && (
               <div style={{ marginTop: '0.75rem', paddingTop: '0.75rem', borderTop: '1px solid var(--border)' }}>
                 <p style={{ color: waSent ? '#4ade80' : 'var(--text-muted)', fontSize: '0.82rem', marginBottom: '0.6rem' }}>
-                  {waSent ? `💬 WhatsApp welcome message sent to ${phone}` : `A welcome message will be sent to ${phone}.`}
+                  {waSent ? `WhatsApp welcome message sent to ${phone}` : `A welcome message will be sent to ${phone}.`}
                 </p>
                 <button
                   type="button"
@@ -131,7 +131,7 @@ export default function WalkInModal({ branchId, onClose, onDone }) {
                     background: 'rgba(74,222,128,0.1)', border: '1px solid rgba(74,222,128,0.4)', color: '#4ade80',
                   }}
                 >
-                  💬 Resend Welcome Message
+                  Resend Welcome Message
                 </button>
               </div>
             )}
@@ -186,7 +186,7 @@ export default function WalkInModal({ branchId, onClose, onDone }) {
                 <label>Number of Hours</label>
                 <select value={hours} onChange={(e) => setHours(Number(e.target.value))}>
                   {hourOptions.map(h => (
-                    <option key={h} value={h}>{h} hrs — {formatCurrency(walkinFee(h))}</option>
+                    <option key={h} value={h}>{h} hrs · {formatCurrency(walkinFee(h))}</option>
                   ))}
                 </select>
               </div>
@@ -201,7 +201,7 @@ export default function WalkInModal({ branchId, onClose, onDone }) {
               <div className="modal-actions">
                 <button type="button" className="btn btn-ghost" onClick={onClose}>Cancel</button>
                 <button type="submit" className="btn btn-primary" disabled={loading || !branchId}>
-                  {loading ? 'Registering…' : `Register — ${formatCurrency(walkinFee(hours))}`}
+                  {loading ? 'Registering…' : `Register · ${formatCurrency(walkinFee(hours))}`}
                 </button>
               </div>
             </form>

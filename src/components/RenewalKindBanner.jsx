@@ -11,9 +11,9 @@ const STYLES = {
 export default function RenewalKindBanner({ renewal, endDate }) {
   if (!renewal) return null
   const text = renewal.kind === 'early'
-    ? <>Early renewal — the new period starts <strong>{formatDate(renewal.startDate)}</strong>, the day after the current plan ends ({formatDate(endDate)}). Same plan; the student keeps every remaining day.</>
+    ? <>Early renewal: the new period starts <strong>{formatDate(renewal.startDate)}</strong>, the day after the current plan ends ({formatDate(endDate)}). Same plan; the student keeps every remaining day.</>
     : renewal.kind === 'grace'
-      ? <>Grace-period renewal — the plan ended {formatDate(endDate)}. The new period starts <strong>{formatDate(renewal.startDate)}</strong>; grace days count as used.</>
+      ? <>Grace-period renewal: the plan ended {formatDate(endDate)}. The new period starts <strong>{formatDate(renewal.startDate)}</strong>; grace days count as used.</>
       : <>The plan ended {formatDate(endDate)}, more than 10 days ago. The new period starts today (it can be backdated, but not before {formatDate(renewal.minStart)}).</>
   return (
     <div data-renewal-kind={renewal.kind} style={{ ...STYLES[renewal.kind], borderRadius: 6, padding: '0.55rem 0.7rem', fontSize: '0.8rem', marginBottom: '1rem', lineHeight: 1.4 }}>

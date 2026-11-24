@@ -107,7 +107,7 @@ export function useMessageAlerts(branchId, currentStaffId, canSeeAllBranches) {
           createdAt: Date.parse(m.sent_at),
         })
         fireNativeNotification(
-          isCrossBranch ? '🔄 Cross-Branch Visit' : isNewEnquiry ? '📝 New Enquiry' : isNewSignup ? '🆕 New Sign-up' : `💬 ${senderName}`,
+          isCrossBranch ? 'Cross-Branch Visit' : isNewEnquiry ? 'New Enquiry' : isNewSignup ? 'New Sign-up' : `💬 ${senderName}`,
           displayContent,
         )
         if (isNewSignup) window.dispatchEvent(new Event('pss:signups-changed'))

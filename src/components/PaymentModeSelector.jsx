@@ -18,9 +18,9 @@ export default function PaymentModeSelector({ value, onChange, total }) {
     <div>
       <div style={{ display: 'flex', gap: '0.5rem' }}>
         {[
-          { value: 'cash', label: '💵 Cash' },
-          { value: 'upi', label: '📱 UPI' },
-          { value: 'split', label: '🔀 Split' },
+          { value: 'cash', label: 'Cash' },
+          { value: 'upi', label: 'UPI' },
+          { value: 'split', label: 'Split' },
         ].map(({ value: v, label }) => (
           <button
             key={v} type="button" onClick={() => setMode(v)}

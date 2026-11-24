@@ -20,7 +20,7 @@ function describeActivity(a) {
   if (a.kind === 'booking' && a.manual) return `Past attendance added (${a.sessionLabel})`
   if (a.kind === 'booking') return ACTIVITY_BOOKING_LABELS[a.label] ?? a.label
   if (a.kind === 'membership' || a.kind === 'cashback' || a.kind === 'membership_refund') return a.label
-  return `Payment — ${ACTIVITY_CAT_LABELS[a.label] ?? a.label}`
+  return `Payment: ${ACTIVITY_CAT_LABELS[a.label] ?? a.label}`
 }
 
 export default function ReportsPage() {
@@ -186,8 +186,8 @@ export default function ReportsPage() {
       {isCombinedHall && (
         <div className="card" style={{ marginBottom: '1rem', background: 'rgba(255,215,0,0.05)' }}>
           <p style={{ fontSize: '0.85rem', color: 'var(--text-muted)' }}>
-            🏢 Showing the Daily Report, Actionable Items, and Tasks Completed combined across
-            every branch. Recent Activity is still a per-branch view — select a specific branch
+            Showing the Daily Report, Actionable Items, and Tasks Completed combined across
+            every branch. Recent Activity is per branch: select a branch
             from the branch dropdown to see it.
           </p>
         </div>
@@ -213,7 +213,7 @@ export default function ReportsPage() {
           {report.attendanceBreakdown && (
             <div className="card" style={{ marginBottom: '1rem' }}>
               <h3 style={{ color: 'var(--accent)', marginBottom: '0.75rem' }}>
-                Attendance Breakdown — {report.dateFrom && report.dateFrom !== report.dateTo
+                Attendance Breakdown · {report.dateFrom && report.dateFrom !== report.dateTo
                   ? `${formatDate(report.dateFrom)} – ${formatDate(report.dateTo)}`
                   : formatDate(report.date ?? date)}
               </h3>
@@ -325,9 +325,9 @@ export default function ReportsPage() {
 
       <div className="card" style={{ marginBottom: '1rem' }}>
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.75rem', flexWrap: 'wrap', gap: '0.5rem' }}>
-          <h3 style={{ color: 'var(--accent)' }}>Tasks Completed — {formatDate(date)}</h3>
+          <h3 style={{ color: 'var(--accent)' }}>Tasks Completed · {formatDate(date)}</h3>
           {isCombinedHall ? (
-            <span style={{ fontSize: '0.85rem', color: 'var(--text-muted)' }}>🏢 All branches (Combined Hall)</span>
+            <span style={{ fontSize: '0.85rem', color: 'var(--text-muted)' }}>All branches (Combined Hall)</span>
           ) : isOwner && (
             <label style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', fontSize: '0.85rem', color: 'var(--text-muted)' }}>
               <input type="checkbox" checked={taskAllBranches} onChange={(e) => setTaskAllBranches(e.target.checked)} />
@@ -379,7 +379,7 @@ export default function ReportsPage() {
       {actionable && (
         <div className="card">
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', flexWrap: 'wrap', gap: '0.5rem', marginBottom: '0.75rem' }}>
-            <h3 style={{ color: 'var(--accent)' }}>Actionable Items (Today){isCombinedHall ? ' — All Branches' : ''}</h3>
+            <h3 style={{ color: 'var(--accent)' }}>Actionable Items (Today){isCombinedHall ? ' · All Branches' : ''}</h3>
             {totalPendingDue > 0 && (
               <span className="mono" style={{ color: '#ff8888', fontWeight: 700, fontSize: '0.95rem' }}>
                 Total Pending Due: {formatCurrency(totalPendingDue)}
@@ -427,7 +427,7 @@ export default function ReportsPage() {
 
           {actionableRows.length === 0 ? (
             <p style={{ color: 'var(--text-muted)' }}>
-              {actionableStatusFilter || actionableBranchFilter ? 'No students match this filter.' : 'All clear — no urgent follow-ups.'}
+              {actionableStatusFilter || actionableBranchFilter ? 'No students match this filter.' : 'No urgent follow-ups.'}
             </p>
           ) : (
             <table className="data-table">
@@ -472,7 +472,7 @@ export default function ReportsPage() {
       {!isCombinedHall && (!isOwner || period === 'day') && (
         <div className="card" style={{ marginTop: '1rem' }}>
           <h3 style={{ color: 'var(--accent)', marginBottom: '0.75rem' }}>
-            Recent Activity — {formatDate(date)}
+            Recent Activity · {formatDate(date)}
           </h3>
           {recentActivity.length === 0 ? (
             <p style={{ color: 'var(--text-muted)', fontSize: '0.85rem' }}>No recent activity.</p>

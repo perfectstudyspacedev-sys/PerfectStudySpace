@@ -103,7 +103,7 @@ function clientIp(req: Request): string | null {
 // A booking insert refused by migration 053's "one open session per student / per desk"
 // rules (two check-ins at the same moment). Any other error passes through unchanged.
 function openSessionMessage(e: { code?: string; message: string }): string {
-  if (e.code === "23505" && e.message.includes("uq_bookings_one_open_per_student")) return "This student already has an open session — check them out first";
+  if (e.code === "23505" && e.message.includes("uq_bookings_one_open_per_student")) return "This student already has an open session. Check them out first.";
   if (e.code === "23505" && e.message.includes("uq_bookings_one_open_per_desk")) return "That desk is already in use by another open session";
   return e.message;
 }
@@ -302,7 +302,7 @@ async function withIdempotency(
         headers: { ...corsHeaders, "Content-Type": "application/json", "Idempotency-Replayed": "true" },
       });
     }
-    if (Date.now() > deadline) return err("This request is still being processed — please wait a moment and refresh", 409);
+    if (Date.now() > deadline) return err("This request is still being processed. Wait a moment and refresh.", 409);
     await new Promise((r) => setTimeout(r, 250));
   }
   let res: Response;
@@ -543,14 +543,12 @@ function renewalKind(endDate: string, today: string): "early" | "grace" | "late"
 
 // Fallback only — used if the app_settings row is ever missing (e.g. a fresh DB before the
 // seed insert ran). The row from migration 048 is the actual source of truth once it exists.
-const DEFAULT_WELCOME_TEMPLATE = `Hi {name}, welcome to Perfect Study Space! 🎉
+const DEFAULT_WELCOME_TEMPLATE = `Hi {name}, welcome to Perfect Study Space.
 
-Thanks for joining us — we're excited to have you with us. Please take a moment to fill out this form so we can complete your registration:
-
-📝 Fill out the form here:
+Please fill in this form to complete your registration:
 https://docs.google.com/forms/d/e/1FAIpQLSeolzoVIDAsOq35SZ0MbsJb1qBrBcInBG4VER6As5yc8A0oEA/viewform?usp=header
 
-If you have any questions, feel free to reach out anytime. We're happy to help! 😊`;
+For any questions, please contact the front desk.`;
 
 // A membership's end date is billing-cycle style: one day short of the same day N months
 // out, so the period ends the day before it would "restart" on and grace begins on that
@@ -976,7 +974,7 @@ function settlementIncomeRows(s: SettlementOwed, paymentMode: string | undefined
       rows.push({ category: line.category, amount: paid, payment_mode: paymentMode ?? "cash", notes: `Final settlement at ${label} (${what})` });
     }
     if (offset > 0) {
-      rows.push({ category: line.category, amount: offset, payment_mode: "other", notes: `Settled against refunds owed to the student at ${label} — no cash changed hands (${what})` });
+      rows.push({ category: line.category, amount: offset, payment_mode: "other", notes: `Settled against refunds owed to the student at ${label}, no cash paid (${what})` });
     }
   }
   return rows;
@@ -1213,7 +1211,7 @@ Deno.serve(async (req) => {
       // logging back in until tomorrow — mirrors clocking out at a physical front desk.
       // Owner is exempt (End Session isn't offered to them in the first place).
       if (att?.last_logout_at) {
-        return err("You've already ended your session for today — you can log in again tomorrow.", 403);
+        return err("You ended your session for today. You can log in again tomorrow.", 403);
       }
 
       const token = await signToken({ sub: row.id, role: row.role, username: row.username });
@@ -1302,7 +1300,7 @@ Deno.serve(async (req) => {
       // website form did, and the column allows null for that reason.
       await db.from("messages").insert({
         branch_id: branch.id, sender_staff_id: null, recipient_type: "staff",
-        content: `[new_enquiry] ${name} (${phone}) enquired via the website${packageInterest ? ` — ${packageInterest}` : ""}.`,
+        content: `[new_enquiry] ${name} (${phone}) enquired via the website${packageInterest ? ` (${packageInterest})` : ""}.`,
       });
 
       return json({ ok: true });
@@ -1330,7 +1328,7 @@ Deno.serve(async (req) => {
         name: v.name, phone: v.phone, emergency_contact: v.emergencyContact,
         course: v.course, referral_source: v.referralSource,
       };
-      const busy = "The desk is already processing your details — please speak to them.";
+      const busy = "The desk is already processing your details. Please speak to them.";
       const updateExisting = async (): Promise<Response | null> => {
         const { data: existing } = await db.from("signup_requests").select("id, ref_code, claimed_by_staff_id, claimed_at")
           .eq("branch_id", signupBranch.id).eq("phone", v.phone).maybeSingle();
@@ -1352,7 +1350,7 @@ Deno.serve(async (req) => {
       const { count: pendingCount } = await db.from("signup_requests")
         .select("*", { count: "exact", head: true }).eq("branch_id", signupBranch.id);
       if ((pendingCount ?? 0) >= SIGNUP_PENDING_LIMIT) {
-        return err("We can't take more sign-ups right now — please speak to the desk.", 429);
+        return err("We can't take more sign-ups right now. Please speak to the desk.", 429);
       }
 
       for (let attempt = 0; attempt < 5; attempt++) {
@@ -1369,14 +1367,14 @@ Deno.serve(async (req) => {
         }
         if (insErr.code !== "23505") {
           console.error("signup_requests insert failed:", insErr.message);
-          return err("Your details could not be saved — please try again or speak to the desk.", 500);
+          return err("Your details could not be saved. Please try again or speak to the desk.", 500);
         }
         // Unique clash: the same phone sent twice at the same moment (update that one), or the
         // random Ref collided with another waiting sign-up (try a new Ref).
         const raced = await updateExisting();
         if (raced) return raced;
       }
-      return err("Your details could not be saved — please try again or speak to the desk.", 500);
+      return err("Your details could not be saved. Please try again or speak to the desk.", 500);
     }
 
     const staff = await authStaff(req);
@@ -1671,7 +1669,7 @@ async function handleStaffAction(db: ReturnType<typeof adminClient>, staff: Staf
         })),
         ...cashbackFeed,
         ...(recentPayouts ?? []).map(p => ({
-          id: `payout-${p.id}`, kind: "membership_refund", label: "Membership deleted — refund",
+          id: `payout-${p.id}`, kind: "membership_refund", label: "Membership deleted: refund",
           studentName: p.students?.name, studentPhone: p.students?.phone,
           time: p.created_at, status: "refunded", amount: -Number(p.amount),
         })),
@@ -2025,7 +2023,7 @@ async function handleStaffAction(db: ReturnType<typeof adminClient>, staff: Staf
         const { data: now } = await db.from("branches").select("signup_code").eq("id", branchId).single();
         return json({ code: now?.signup_code ?? null });
       }
-      return err("Could not create a link — try again", 500);
+      return err("Could not create a link. Try again.", 500);
     }
 
     if (action === "create_membership") {
@@ -2048,7 +2046,7 @@ async function handleStaffAction(db: ReturnType<typeof adminClient>, staff: Staf
       if (signupId) {
         const { data: su } = await db.from("signup_requests").select("id, branch_id").eq("id", signupId).maybeSingle();
         if (!su) return err("This sign-up was already handled by someone else (or has expired). Clear the form and check before registering.", 409);
-        if (su.branch_id !== branchId) return err("This sign-up was sent to another branch — switch to that branch to register it.");
+        if (su.branch_id !== branchId) return err("This sign-up belongs to another branch. Switch to that branch to register it.");
         if (!(await claimSignup(db, signupId, staff.id))) return err(await signupBusyMessage(db, signupId), 409);
       }
 
@@ -2070,7 +2068,7 @@ async function handleStaffAction(db: ReturnType<typeof adminClient>, staff: Staf
           const liveBranch = (live.branches as unknown as { name: string } | null)?.name ?? "another branch";
           return err(
             `${dupStudent.name} (${phone}) already has an active ${live.category} membership at ${liveBranch}, valid until ${live.end_date}. ` +
-            `Use Renew on their profile to extend it, Transfer Branch to move them, or close/delete that membership first — registering again would create a duplicate.`,
+            `Use Renew on their profile to extend it, Transfer Branch to move them, or close that membership first. Registering again would create a duplicate.`,
           );
         }
       }
@@ -2084,11 +2082,11 @@ async function handleStaffAction(db: ReturnType<typeof adminClient>, staff: Staf
         const { count: lockersInUse } = await db.from("lockers")
           .select("*", { count: "exact", head: true }).eq("branch_id", branchId).eq("is_active", true);
         if ((lockersInUse ?? 0) >= (lockerBranch?.locker_capacity ?? 0)) {
-          return err("No lockers available at this branch — choose Avail Later for the locker");
+          return err("No lockers free at this branch. Choose Avail Later for the locker.");
         }
         const { data: lockerTaken } = await db.from("lockers").select("id")
           .eq("branch_id", branchId).eq("locker_no", lockerNo).eq("is_active", true).maybeSingle();
-        if (lockerTaken) return err(`Locker ${lockerNo} is already assigned to another student — pick another one`);
+        if (lockerTaken) return err(`Locker ${lockerNo} is already assigned to another student. Pick another one.`);
       }
 
       // Reaching here with an existing record means a returning student (the guard above
@@ -2173,7 +2171,7 @@ async function handleStaffAction(db: ReturnType<typeof adminClient>, staff: Staf
         paidNow = Number(advanceAmount);
         if (!(paidNow >= 0)) return err("Enter a valid advance amount");
         if (Math.round(paidNow * 100) > Math.round(grandTotal * 100)) {
-          return err(`The advance (₹${paidNow}) is more than the total of ₹${grandTotal} — choose Full payment instead.`);
+          return err(`The advance (₹${paidNow}) is more than the total of ₹${grandTotal}. Choose Full payment instead.`);
         }
       }
       const membershipPaidNow = Math.min(paidNow, totalPaid);
@@ -2212,9 +2210,9 @@ async function handleStaffAction(db: ReturnType<typeof adminClient>, staff: Staf
         const { data: chosenDesk } = await db.from("desks").select("id, label, status")
           .eq("id", selectedDeskId).eq("branch_id", branchId).maybeSingle();
         if (!chosenDesk) return err("Cabin not found at this branch");
-        if (chosenDesk.status !== "free") return err("Selected cabin is no longer available — pick another one");
+        if (chosenDesk.status !== "free") return err("This cabin is no longer free. Pick another one.");
         if (!(await claimDesk(db, chosenDesk.id, studentId))) {
-          return err("That cabin was just taken by another registration — pick another one.");
+          return err("Another registration just took this cabin. Pick another one.");
         }
         deskId = chosenDesk.id;
         cabinNo = chosenDesk.label;
@@ -2263,8 +2261,8 @@ async function handleStaffAction(db: ReturnType<typeof adminClient>, staff: Staf
         };
         if (lockerErr) {
           lockerWarning = lockerPaidNow > 0
-            ? `Locker ${lockerNo} was taken by another registration a moment ago — no locker was assigned. Hand back the ₹${lockerPaidNow} collected for it, then add a locker from the student's profile.`
-            : `Locker ${lockerNo} was taken by another registration a moment ago — no locker was assigned and nothing was charged for it. Add one from the student's profile.`;
+            ? `Locker ${lockerNo} was just taken by another registration, so no locker was assigned. Hand back the ₹${lockerPaidNow} collected for it, then add a locker from the student's profile.`
+            : `Locker ${lockerNo} was just taken by another registration, so no locker was assigned and nothing was charged for it. Add one from the student's profile.`;
         } else if (paymentMode === "split") {
           if (lockerCash > 0) await recordTransaction(db, { ...lockerTxnBase, amount: lockerCash, payment_mode: "cash" });
           if (lockerUpi > 0) await recordTransaction(db, { ...lockerTxnBase, amount: lockerUpi, payment_mode: "upi" });
@@ -2299,7 +2297,7 @@ async function handleStaffAction(db: ReturnType<typeof adminClient>, staff: Staf
       if (!name || !phone) return err("Name and phone are required");
       const { count: freeDesks } = await db.from("desks").select("*", { count: "exact", head: true })
         .eq("branch_id", branchId).eq("status", "free");
-      if ((freeDesks ?? 0) > 0 && !DEV_MODE) return err("Permanent seats are still available — register directly instead of waitlisting");
+      if ((freeDesks ?? 0) > 0 && !DEV_MODE) return err("Permanent seats are still free. Register the student directly instead of waitlisting.");
 
       const { error } = await db.from("permanent_waitlist").insert({
         branch_id: branchId, name, phone, hours_per_day: hoursPerDay || null, notes: notes || null,
@@ -2383,7 +2381,7 @@ async function handleStaffAction(db: ReturnType<typeof adminClient>, staff: Staf
       if (amountPaid > 0) {
         await insertPaymentTransactions(db, {
           student_id: studentId, branch_id: branchId, category: "locker",
-          notes: `Locker — prorated ${daysRemaining}d rent (₹${proratedFee}) + deposit (₹${deposit})`,
+          notes: `Locker: prorated ${daysRemaining}d rent (₹${proratedFee}) + deposit (₹${deposit})`,
           created_by_staff_id: staff.id,
         }, paymentMode, amountPaid, cashAmount, upiAmount);
       }
@@ -2420,7 +2418,7 @@ async function handleStaffAction(db: ReturnType<typeof adminClient>, staff: Staf
       const depositRefund = locker.deposit_returned || withholdDeposit ? 0 : Number(locker.deposit_amount ?? 0);
       const netAmount = rentDue - depositRefund;
       if (netAmount > 0 && !paymentMode) {
-        return err(`₹${netAmount} still needs to be collected before returning the locker — choose a payment mode.`);
+        return err(`Collect ₹${netAmount} before returning the locker. Choose a payment mode.`);
       }
 
       // Claim the locker first, conditional on it still being active: two Remove clicks
@@ -2430,20 +2428,20 @@ async function handleStaffAction(db: ReturnType<typeof adminClient>, staff: Staf
         .update({ is_active: false, fee_due: 0, deposit_returned: true })
         .eq("id", lockerId).eq("is_active", true).select("id");
       if (relErr) return err(relErr.message);
-      if (!releasedRows?.length) return err("This locker has already been returned — refresh to see its current state.");
+      if (!releasedRows?.length) return err("This locker was already returned. Refresh the page.");
 
       if (netAmount > 0) {
         // Owed rent exceeds the deposit that would offset it — collect just the difference.
         await insertPaymentTransactions(db, {
           student_id: locker.student_id, branch_id: locker.branch_id, category: "locker",
-          notes: `Locker removed — outstanding rent (₹${rentDue}) net of deposit (₹${depositRefund})`,
+          notes: `Locker removed: outstanding rent (₹${rentDue}) net of deposit (₹${depositRefund})`,
           created_by_staff_id: staff.id,
         }, paymentMode, netAmount, cashAmount, upiAmount);
       } else if (netAmount < 0) {
         // Deposit refund exceeds any owed rent — the branch owes the student the difference.
         await recordPayout(db, {
           student_id: locker.student_id, branch_id: locker.branch_id, payout_type: "locker_deposit",
-          amount: -netAmount, notes: "Locker caution deposit returned — locker removed",
+          amount: -netAmount, notes: "Locker caution deposit returned (locker removed)",
           created_by_staff_id: staff.id,
         });
       }
@@ -2499,7 +2497,7 @@ async function handleStaffAction(db: ReturnType<typeof adminClient>, staff: Staf
 
       const today = todayISO();
       if (membership.start_date > today && !membership.renewed_from_membership_id) {
-        return err(`Membership starts on ${formatDateDMY(membership.start_date)} — check-in is possible from that day.`);
+        return err(`Membership starts on ${formatDateDMY(membership.start_date)} . Check-in opens that day.`);
       }
       const isExpiredMembership = membership.end_date < today;
       if (isExpiredMembership) {
@@ -2507,9 +2505,9 @@ async function handleStaffAction(db: ReturnType<typeof adminClient>, staff: Staf
         if (daysSinceExpiry > MEMBERSHIP_GRACE_DAYS) {
           const dueAmount = Number(membership.fee_due);
           if (dueAmount > 0) {
-            return err(`Dues not cleared (₹${dueAmount} pending) even ${daysSinceExpiry} days after membership expiration — the ${MEMBERSHIP_GRACE_DAYS}-day grace period is over. Please clear dues and renew before checking in.`);
+            return err(`Membership expired ${daysSinceExpiry} days ago with ₹${dueAmount} unpaid, and the ${MEMBERSHIP_GRACE_DAYS}-day grace period is over. Clear the dues and renew before check-in.`);
           }
-          return err(`Membership expired ${daysSinceExpiry} days ago — the ${MEMBERSHIP_GRACE_DAYS}-day grace period is over. Please renew before checking in.`);
+          return err(`Membership expired ${daysSinceExpiry} days ago and the ${MEMBERSHIP_GRACE_DAYS}-day grace period is over. Renew before check-in.`);
         }
       }
 
@@ -2521,7 +2519,7 @@ async function handleStaffAction(db: ReturnType<typeof adminClient>, staff: Staf
         .in("booking_type", ["temporary", "permanent"])
         .eq("status", "active")
         .maybeSingle();
-      if (activeToday) return err("Student is already checked in — check them out first");
+      if (activeToday) return err("This student is already checked in. Check them out first.");
 
       // Sum actual time already used today (completed sessions' real duration, since end_time
       // is stamped with the true checkout time) to figure out how much of the daily quota
@@ -2662,7 +2660,7 @@ async function handleStaffAction(db: ReturnType<typeof adminClient>, staff: Staf
         if (clash) {
           return err(clash.status === "active"
             ? `These times overlap the session they're checked into right now (since ${formatISTSession(clash.start_time)}).`
-            : `These times overlap another attendance record (${formatISTSession(clash.start_time, clash.end_time)}) — adjust them so the two don't overlap.`);
+            : `These times overlap another attendance record (${formatISTSession(clash.start_time, clash.end_time)}). Adjust them so they don't overlap.`);
         }
       }
 
@@ -2803,8 +2801,8 @@ async function handleStaffAction(db: ReturnType<typeof adminClient>, staff: Staf
       const clash = await findOverlappingSession(db, studentId, newStartTime, newEndTime);
       if (clash) {
         return err(clash.status === "active"
-          ? `This overlaps the session they're checked into right now (since ${formatISTSession(clash.start_time)}) — check them out first, or pick a different time.`
-          : `Attendance for ${formatISTSession(clash.start_time, clash.end_time)} is already recorded and overlaps this one — edit that record instead of adding it again.`);
+          ? `This overlaps the session they're checked into right now (since ${formatISTSession(clash.start_time)}). Check them out first, or pick a different time.`
+          : `Attendance for ${formatISTSession(clash.start_time, clash.end_time)} is already recorded and overlaps this one. Edit that record instead of adding it again.`);
       }
 
       const { data: student } = await db.from("students").select("*").eq("id", studentId).single();
@@ -2871,7 +2869,7 @@ async function handleStaffAction(db: ReturnType<typeof adminClient>, staff: Staf
       if (!requireBranch(staff, mem.branch_id)) return err("Branch access denied", 403);
       if (mem.is_paused) return err("Membership is already on hold");
       if (await hasOpenSession(db, mem.student_id)) {
-        return err("This student is currently checked in — check them out before putting the membership on hold.");
+        return err("This student is checked in. Check them out before putting the membership on hold.");
       }
       const pausedAtNow = new Date().toISOString();
 
@@ -2913,7 +2911,7 @@ async function handleStaffAction(db: ReturnType<typeof adminClient>, staff: Staf
         if (!desk) return err("Cabin not found");
         if (desk.status !== "free") return err("Selected cabin is not available");
         if (!(await claimDesk(db, deskId, mem.student_id))) {
-          return err("That cabin was just taken — pick another one.");
+          return err("This cabin was just taken. Pick another one.");
         }
         newDeskId = deskId;
         newCabinNo = desk.label;
@@ -3020,7 +3018,7 @@ async function handleStaffAction(db: ReturnType<typeof adminClient>, staff: Staf
         const overdue = memberUnpaidBills.filter(b => new Date(b.created_at).getTime() < cutoff);
         if (overdue.length) {
           const overdueTotal = overdue.reduce((s, b) => s + Number(b.total), 0);
-          return err(`Food bill of ₹${overdueTotal} is more than ${FOOD_CARRY_DAYS} days old — settle it before checking out.`);
+          return err(`Food bill of ₹${overdueTotal} is more than ${FOOD_CARRY_DAYS} days old. Settle it before checkout.`);
         }
       }
 
@@ -3338,7 +3336,7 @@ async function handleStaffAction(db: ReturnType<typeof adminClient>, staff: Staf
       if (!newBranch) return err("Destination branch not found");
 
       if (await hasOpenSession(db, studentId)) {
-        return err("This student is currently checked in — check them out before transferring them to another branch.");
+        return err("This student is checked in. Check them out before transferring them to another branch.");
       }
 
       const { data: activeMem } = await db.from("memberships").select("id, desk_id, category").eq("student_id", studentId).eq("is_active", true).maybeSingle();
@@ -3348,14 +3346,14 @@ async function handleStaffAction(db: ReturnType<typeof adminClient>, staff: Staf
         if (!deskId) return err("Select a cabin at the destination branch");
         const { data: desk } = await db.from("desks").select("id, label, status").eq("id", deskId).eq("branch_id", newBranchId).maybeSingle();
         if (!desk) return err("Cabin not found at the destination branch");
-        if (desk.status !== "free") return err("Selected cabin is no longer available — pick another one");
+        if (desk.status !== "free") return err("This cabin is no longer free. Pick another one.");
         newDesk = desk;
       }
 
       // Claim the destination cabin BEFORE releasing the current one: if the claim loses a
       // race, the student keeps the seat they already had instead of ending up with none.
       if (newDesk && !(await claimDesk(db, newDesk.id, studentId))) {
-        return err("That cabin was just taken at the destination branch — pick another one.");
+        return err("This cabin at the new branch was just taken. Pick another one.");
       }
       if (activeMem?.desk_id) {
         const { error: releaseErr } = await db.from("desks").update({ status: "free", seat_type: "floating", assigned_student_id: null }).eq("id", activeMem.desk_id);
@@ -3389,7 +3387,7 @@ async function handleStaffAction(db: ReturnType<typeof adminClient>, staff: Staf
         if (lockerDepositRefunded > 0) {
           await recordPayout(db, {
             student_id: studentId, branch_id: transferLocker.branch_id, payout_type: "locker_deposit",
-            amount: lockerDepositRefunded, notes: "Locker caution deposit returned — student transferred branch",
+            amount: lockerDepositRefunded, notes: "Locker caution deposit returned (student transferred branch)",
             created_by_staff_id: staff.id,
           });
         }
@@ -3520,9 +3518,9 @@ async function handleStaffAction(db: ReturnType<typeof adminClient>, staff: Staf
       const payAmount = Number(amount);
       const currentDue = Number(mem.fee_due ?? 0);
       if (!(payAmount > 0)) return err("Payment amount must be greater than 0");
-      if (currentDue <= 0) return err("This membership has no pending dues — nothing to collect.");
+      if (currentDue <= 0) return err("This membership has no pending dues.");
       if (payAmount > currentDue) {
-        return err(`Payment exceeds the pending due of ₹${currentDue} — collect at most that amount.`);
+        return err(`The payment is more than the pending ₹${currentDue}. Collect at most that amount.`);
       }
 
       const tx = await moneyTx(db, "money_record_payment", {
@@ -3607,7 +3605,7 @@ async function handleStaffAction(db: ReturnType<typeof adminClient>, staff: Staf
           student_id: mem.student_id, branch_id: mem.branch_id,
           month_label: new Date().toLocaleString("en-US", { month: "long", year: "numeric" }),
           cashback_type: "fixed", cashback_value: bankedAsCashback,
-          notes: `Banked from a discount that exceeded the pending fee${remarks ? ` — ${remarks}` : ""}`,
+          notes: `Saved from a discount larger than the pending fee${remarks ? `: ${remarks}` : ""}`,
           granted_by_staff_id: staff.id,
         });
       }
@@ -3636,7 +3634,7 @@ async function handleStaffAction(db: ReturnType<typeof adminClient>, staff: Staf
       // an active membership — walk-in-only students have neither.
       const { data: activeMem } = await db.from("memberships").select("id")
         .eq("student_id", studentId).eq("is_active", true).maybeSingle();
-      if (!activeMem) return err("This student doesn't have an active membership — cashback can only be granted to membership students");
+      if (!activeMem) return err("Cashback is only for students with an active membership.");
 
       // Multiple cashbacks can sit pending at once — they're all redeemed together at the
       // student's next renewal or closure, whichever comes first.
@@ -3741,9 +3739,9 @@ async function handleStaffAction(db: ReturnType<typeof adminClient>, staff: Staf
       const payAmount = Number(amount);
       const currentDue = Number(locker.fee_due ?? 0);
       if (!(payAmount > 0)) return err("Payment amount must be greater than 0");
-      if (currentDue <= 0) return err("This locker has no pending dues — nothing to collect.");
+      if (currentDue <= 0) return err("This locker has no pending dues.");
       if (payAmount > currentDue) {
-        return err(`Payment exceeds the pending due of ₹${currentDue} — collect at most that amount.`);
+        return err(`The payment is more than the pending ₹${currentDue}. Collect at most that amount.`);
       }
 
       const tx = await moneyTx(db, "money_record_locker_payment", {
@@ -3824,7 +3822,7 @@ async function handleStaffAction(db: ReturnType<typeof adminClient>, staff: Staf
       if (!requireBranch(staff, locker.branch_id)) return err("Branch access denied", 403);
       if (!locker.is_active) return err("Locker is not active");
       if (Number(locker.fee_due) > 0) {
-        return err(`This locker still has ₹${Number(locker.fee_due)} pending — clear it before renewing.`);
+        return err(`This locker still has ₹${Number(locker.fee_due)} pending. Clear it before renewing.`);
       }
 
       const monthlyFee = Number(locker.monthly_fee) || 100;
@@ -4180,7 +4178,7 @@ async function handleStaffAction(db: ReturnType<typeof adminClient>, staff: Staf
     if (action === "get_revenue") {
       const { branchId, period, dateFrom, dateTo, allBranches } = payload;
       if ((dateFrom != null && !isISODate(dateFrom)) || (dateTo != null && !isISODate(dateTo))) {
-        return err("Invalid date — expected YYYY-MM-DD");
+        return err("Invalid date. Use YYYY-MM-DD.");
       }
       const range = requestedRange(period, dateFrom, dateTo);
       if (range.from > range.to) return err("Start date must be on or before the end date");
@@ -4311,7 +4309,7 @@ async function handleStaffAction(db: ReturnType<typeof adminClient>, staff: Staf
     if (action === "get_discounts_waivers") {
       const { branchId, period, dateFrom, dateTo, allBranches } = payload;
       if ((dateFrom != null && !isISODate(dateFrom)) || (dateTo != null && !isISODate(dateTo))) {
-        return err("Invalid date — expected YYYY-MM-DD");
+        return err("Invalid date. Use YYYY-MM-DD.");
       }
       const range = requestedRange(period, dateFrom, dateTo);
       if (range.from > range.to) return err("Start date must be on or before the end date");
@@ -4358,7 +4356,7 @@ async function handleStaffAction(db: ReturnType<typeof adminClient>, staff: Staf
       for (const f of foodBills) items.push({ id: `food-${f.id}`, type: "food", date: f.created_at, student: f.student_name, phone: f.student_phone, amount: r2(Number(f.discount_amount)), by: whoName(f.staff), detail: `Off a ₹${r2(Number(f.subtotal))} bill`, branch: branchName.get(f.branch_id) ?? null });
       for (const w of waivers) {
         const sign = w.waiver_type === "overtime_restore" ? -1 : 1;
-        items.push({ id: `waiver-${w.id}`, type: w.waiver_type === "overstay" ? "overstay" : "overtime", date: w.created_at, student: w.students?.name ?? null, phone: w.students?.phone ?? null, amount: r2(sign * Number(w.amount)), by: whoName(w.staff), detail: w.waiver_type === "overtime_restore" ? `Put back on the bill — ${w.reason}` : w.reason, branch: branchName.get(w.branch_id) ?? null });
+        items.push({ id: `waiver-${w.id}`, type: w.waiver_type === "overstay" ? "overstay" : "overtime", date: w.created_at, student: w.students?.name ?? null, phone: w.students?.phone ?? null, amount: r2(sign * Number(w.amount)), by: whoName(w.staff), detail: w.waiver_type === "overtime_restore" ? `Put back on the bill: ${w.reason}` : w.reason, branch: branchName.get(w.branch_id) ?? null });
       }
       for (const m of multiMonth) {
         const amount = r2(Number(m.monthly_fee) * Number(m.months_paid) * Number(m.discount_percent) / 100);
@@ -4377,7 +4375,7 @@ async function handleStaffAction(db: ReturnType<typeof adminClient>, staff: Staf
       // one period toggle, so a different fallback here made the Overview and Transactions
       // tabs silently disagree about which window they were showing.
       if ((dateFrom != null && !isISODate(dateFrom)) || (dateTo != null && !isISODate(dateTo))) {
-        return err("Invalid date — expected YYYY-MM-DD");
+        return err("Invalid date. Use YYYY-MM-DD.");
       }
       const range = requestedRange(period, dateFrom, dateTo);
       if (range.from > range.to) return err("Start date must be on or before the end date");
@@ -4407,7 +4405,7 @@ async function handleStaffAction(db: ReturnType<typeof adminClient>, staff: Staf
       // settled" rows below (one payouts row can cover several cashbacks), so listing the
       // payouts row as well would show the same money twice.
       const PAYOUT_FEED_LABELS: Record<string, string> = {
-        membership_refund: "Membership deleted — refund",
+        membership_refund: "Membership deleted: refund",
         locker_deposit: "Locker deposit returned",
         food_pass_refund: "Food Pass balance refunded",
       };
@@ -5371,7 +5369,7 @@ async function handleStaffAction(db: ReturnType<typeof adminClient>, staff: Staf
       const expiring = members.filter((m) => m.student_id && m.end_date >= today && m.end_date <= weekOut)
         .map((m) => ({
           studentId: m.student_id as string, branchId: m.branch_id, dueDate: m.end_date,
-          message: `${m.student_name}'s membership expires on ${m.end_date} — remind them to renew.`,
+          message: `${m.student_name}'s membership expires on ${m.end_date}. Remind them to renew.`,
         }));
       if (expiring.length) {
         const { data: existing, error: exErr } = await allRowsIn<{ id: string; student_id: string; branch_id: string }>(
@@ -5455,7 +5453,7 @@ async function handleStaffAction(db: ReturnType<typeof adminClient>, staff: Staf
       // would bill a nonsense amount.
       const alreadyExpired = mem.end_date < todayISO();
       if (alreadyExpired && !planUnchanged) {
-        return err("Membership has expired — renew it before changing the plan. You can still correct the expiry date on its own.");
+        return err("The membership has expired. Renew it before changing the plan. The expiry date can still be corrected on its own.");
       }
 
       const today = todayISO();
@@ -5480,7 +5478,7 @@ async function handleStaffAction(db: ReturnType<typeof adminClient>, staff: Staf
             .eq("branch_id", mem.branch_id).eq("status", "free").order("sort_order").limit(1).maybeSingle();
           if (!freeDesk) return err("No cabin available for permanent membership");
           if (!(await claimDesk(db, freeDesk.id, mem.student_id))) {
-            return err("That cabin was just taken — please try again.");
+            return err("This cabin was just taken. Try again.");
           }
           deskId = freeDesk.id;
           cabinNo = freeDesk.label;
@@ -5546,7 +5544,7 @@ async function handleStaffAction(db: ReturnType<typeof adminClient>, staff: Staf
       if (!mem) return err("Membership not found");
       if (!requireBranch(staff, mem.branch_id)) return err("Branch access denied", 403);
       if (!mem.is_active) return err("Membership is not active");
-      if (mem.end_date < todayISO()) return err("Membership has expired — renew it before changing the cabin");
+      if (mem.end_date < todayISO()) return err("The membership has expired. Renew it before changing the cabin.");
       if (mem.category !== "permanent") return err("Only permanent memberships have an assigned cabin");
 
       const { data: newDesk } = await db.from("desks").select("*").eq("id", newDeskId).eq("branch_id", mem.branch_id).single();
@@ -5556,7 +5554,7 @@ async function handleStaffAction(db: ReturnType<typeof adminClient>, staff: Staf
       // Claim the new cabin before releasing the old one — losing the race must leave them
       // on their existing seat rather than with none at all.
       if (!(await claimDesk(db, newDesk.id, mem.student_id))) {
-        return err("That cabin was just taken — pick another one.");
+        return err("This cabin was just taken. Pick another one.");
       }
       if (mem.desk_id) {
         await db.from("desks").update({ status: "free", seat_type: "floating", assigned_student_id: null }).eq("id", mem.desk_id);
@@ -5595,17 +5593,17 @@ async function handleStaffAction(db: ReturnType<typeof adminClient>, staff: Staf
       // leaves the old row at 0 due, so the second attempt sails straight past it. Same
       // re-entry guard delete_membership already uses.
       if (!mem.is_active) {
-        return err("This membership has already been renewed or ended — refresh to see the current one.");
+        return err("This membership was already renewed or ended. Refresh the page.");
       }
       if (Number(mem.fee_due ?? 0) > 0) {
-        return err(`This membership still has ₹${Number(mem.fee_due)} pending — clear it before renewing.`);
+        return err(`This membership still has ₹${Number(mem.fee_due)} pending. Clear it before renewing.`);
       }
       // RSP R4: an on-hold membership has a moving end date (resuming extends it) and an open
       // hold row — renewing it used to leave that hold open forever on the old membership.
-      if (mem.is_paused) return err("This membership is on hold — resume it before renewing.");
+      if (mem.is_paused) return err("This membership is on hold. Resume it before renewing.");
       // RSP R4: this membership is itself an early renewal that hasn't started yet.
       if (mem.start_date > todayISO()) {
-        return err(`This student has already renewed early — the new period starts on ${mem.start_date}. Cancel that early renewal first if it needs to change.`);
+        return err(`This student already renewed early. The new period starts on ${mem.start_date}. To change it, cancel the early renewal first.`);
       }
       const kind = renewalKind(mem.end_date, todayISO());
 
@@ -5639,7 +5637,7 @@ async function handleStaffAction(db: ReturnType<typeof adminClient>, staff: Staf
       if (kind === "early") {
         const oldWeekend = mem.hours_per_day_weekend != null ? Number(mem.hours_per_day_weekend) : null;
         if (newCategory !== mem.category || newHoursPerDay !== Number(mem.hours_per_day) || (newWeekendHours ?? null) !== oldWeekend) {
-          return err(`An early renewal keeps the same plan (${mem.category}, ${mem.hours_per_day}h/day). Renew on the same plan now, then use Change Plan from ${addDays(mem.end_date, 1)} when the new period starts.`);
+          return err(`An early renewal keeps the same plan (${mem.category}, ${mem.hours_per_day}h/day). Renew on this plan now, then use Change Plan from ${addDays(mem.end_date, 1)}.`);
         }
       }
 
@@ -5690,13 +5688,13 @@ async function handleStaffAction(db: ReturnType<typeof adminClient>, staff: Staf
           cashbackAmount > 0 && `− ₹${Math.round(cashbackAmount * 100) / 100} cashback`,
           overtimeDue > 0 && `+ ₹${overtimeDue} unbilled overtime`,
         ].filter(Boolean).join(" ");
-        return err(`The amount due is ₹${Math.round(totalFee * 100) / 100} (${parts}), but the form showed ₹${expectedTotal}. Close the form, refresh, and renew again.`);
+        return err(`The amount due is ₹${Math.round(totalFee * 100) / 100} (${parts}), not the ₹${expectedTotal} shown. Refresh the page and renew again.`);
       }
       if (advanceAmount != null) {
         const adv = Number(advanceAmount);
         if (!(adv >= 0)) return err("Enter a valid advance amount");
         if (Math.round(adv * 100) > Math.round(totalFee * 100)) {
-          return err(`The advance (₹${adv}) is more than the ₹${Math.round(totalFee * 100) / 100} due — choose Full payment instead.`);
+          return err(`The advance (₹${adv}) is more than the ₹${Math.round(totalFee * 100) / 100} due. Choose Full payment instead.`);
         }
       }
 
@@ -5721,11 +5719,11 @@ async function handleStaffAction(db: ReturnType<typeof adminClient>, staff: Staf
         if (!isISODate(startDate)) return err("Invalid start date");
         if (startDate > today) return err("Start date cannot be in the future");
         if (startDate < continuationStart) {
-          return err(`The start date can't be before ${continuationStart} — that would overlap the previous plan.`);
+          return err(`The start date can't be before ${continuationStart} , or it would overlap the previous plan.`);
         }
       } else {
         if (customStartDate && customStartDate !== continuationStart) {
-          return err(`This is ${kind === "early" ? "an early" : "a grace-period"} renewal — the new period starts on ${continuationStart}, the day after the current plan ends.`);
+          return err(`This is ${kind === "early" ? "an early" : "a grace-period"} renewal, so the new period starts on ${continuationStart}, the day after the current plan ends.`);
         }
         startDate = continuationStart;
       }
@@ -5749,7 +5747,7 @@ async function handleStaffAction(db: ReturnType<typeof adminClient>, staff: Staf
         .eq("id", membershipId).eq("is_active", true).select("id");
       if (claimErr) return err(claimErr.message);
       if (!claimedRows?.length) {
-        return err("This membership has already been renewed or ended — refresh to see the current one.");
+        return err("This membership was already renewed or ended. Refresh the page.");
       }
       const restoreOldMembership = () => db.from("memberships").update({ is_active: true }).eq("id", membershipId);
 
@@ -5774,7 +5772,7 @@ async function handleStaffAction(db: ReturnType<typeof adminClient>, staff: Staf
           }
           if (!(await claimDesk(db, freeDesk.id, mem.student_id))) {
             await restoreOldMembership();
-            return err("That cabin was just taken — please try again.");
+            return err("This cabin was just taken. Try again.");
           }
           deskId = freeDesk.id;
           cabinNo = freeDesk.label;
@@ -5834,7 +5832,7 @@ async function handleStaffAction(db: ReturnType<typeof adminClient>, staff: Staf
       await insertPaymentTransactions(db, {
         ...ledgerBase, category: "membership",
         notes: [
-          kind === "early" ? `Renewal (early — starts ${startDate})` : kind === "grace" ? `Renewal (grace — from ${startDate})` : "Renewal",
+          kind === "early" ? `Renewal (early, starts ${startDate})` : kind === "grace" ? `Renewal (grace, from ${startDate})` : "Renewal",
           cashbackAmount > 0 ? `₹${r2(cashbackAmount)} cashback applied` : null,
         ].filter(Boolean).join(", "),
       }, paymentMode, renewalPaidNow, renCash, renUpi);
@@ -5876,18 +5874,18 @@ async function handleStaffAction(db: ReturnType<typeof adminClient>, staff: Staf
       const { data: mem } = await db.from("memberships").select("*").eq("id", membershipId).single();
       if (!mem) return err("Membership not found");
       if (!requireBranch(staff, mem.branch_id)) return err("Branch access denied", 403);
-      if (!mem.is_active) return err("This membership is no longer active — refresh to see the current one.");
+      if (!mem.is_active) return err("This membership is no longer active. Refresh the page.");
       if (!(mem.start_date > todayISO())) {
-        return err("This renewal has already started — it can't be cancelled. Use Delete Membership instead.");
+        return err("This renewal has already started and can't be cancelled. Use Delete Membership instead.");
       }
       if (!mem.renewed_from_membership_id) return err("This membership isn't an early renewal.");
-      if (mem.is_paused) return err("This membership is on hold — resume it before cancelling the early renewal.");
+      if (mem.is_paused) return err("This membership is on hold. Resume it before cancelling the early renewal.");
 
       const { data: prev } = await db.from("memberships").select("*").eq("id", mem.renewed_from_membership_id).single();
       if (!prev) return err("The membership this renewed could not be found.");
-      if (prev.is_active) return err("The previous membership is already active — refresh to see the current state.");
+      if (prev.is_active) return err("The previous membership is already active. Refresh the page.");
       if (prev.branch_id !== mem.branch_id) {
-        return err("The student was moved to another branch after renewing early, so the previous membership can't be restored here. Use Delete Membership once the new period starts.");
+        return err("The student moved branch after renewing early, so the old membership can't be restored. Use Delete Membership once the new period starts.");
       }
 
       // Renewal money actually received for the new membership: its "membership" ledger rows
@@ -5902,7 +5900,7 @@ async function handleStaffAction(db: ReturnType<typeof adminClient>, staff: Staf
       const { data: endedRows, error: endErr } = await db.from("memberships").update({ is_active: false, fee_due: 0 })
         .eq("id", mem.id).eq("is_active", true).select("id");
       if (endErr) return err(endErr.message);
-      if (!endedRows?.length) return err("This membership is no longer active — refresh to see the current one.");
+      if (!endedRows?.length) return err("This membership is no longer active. Refresh the page.");
 
       // Hold days taken during the gap pushed the NEW end date out; they belong to the old period.
       const gapHoldDays = Number(mem.hold_days ?? 0);
@@ -5929,7 +5927,7 @@ async function handleStaffAction(db: ReturnType<typeof adminClient>, staff: Staf
       if (refund > 0) {
         await recordPayout(db, {
           student_id: mem.student_id, branch_id: mem.branch_id, payout_type: "membership_refund",
-          amount: refund, notes: `Early renewal cancelled — renewal money refunded. Reason: ${String(reason).trim()}`,
+          amount: refund, notes: `Early renewal cancelled, renewal money refunded. Reason: ${String(reason).trim()}`,
           created_by_staff_id: staff.id,
         });
       }
@@ -6087,13 +6085,13 @@ async function handleStaffAction(db: ReturnType<typeof adminClient>, staff: Staf
       if (mem.renewed_from_membership_id) { const gap = notStartedYetMessage(mem, "delete the membership that is running now"); if (gap) return err(gap); }
       if (!mem.is_active) return err("Membership is not active");
       if (await hasOpenSession(db, mem.student_id)) {
-        return err("This student is currently checked in — check them out before deleting the membership.");
+        return err("This student is checked in. Check them out before deleting the membership.");
       }
 
       const s = await computeDeleteSettlement(mem, !!waiveOverstayCharge, !!withholdLockerDeposit, !!waiveProratedRefund);
 
       if (s.netAmount > 0 && !paymentMode) {
-        return err(`₹${s.netAmount.toFixed(2)} still needs to be collected before deleting — choose a payment mode.`);
+        return err(`Collect ₹${s.netAmount.toFixed(2)} before deleting. Choose a payment mode.`);
       }
       // RSP W2a — waiving overstay needs a reason (checked before anything is written).
       const waiveReason = String(payload.waiveReason ?? "").trim();
@@ -6136,7 +6134,7 @@ async function handleStaffAction(db: ReturnType<typeof adminClient>, staff: Staf
         if (s.lockerDepositRefund > 0) {
           await recordPayout(db, {
             student_id: mem.student_id, branch_id: mem.branch_id, payout_type: "locker_deposit",
-            amount: s.lockerDepositRefund, notes: "Locker caution deposit returned — membership deleted",
+            amount: s.lockerDepositRefund, notes: "Locker caution deposit returned (membership deleted)",
             created_by_staff_id: staff.id,
           });
         }
@@ -6146,7 +6144,7 @@ async function handleStaffAction(db: ReturnType<typeof adminClient>, staff: Staf
         if (s.foodPassRefund > 0) {
           await recordPayout(db, {
             student_id: mem.student_id, branch_id: mem.branch_id, payout_type: "food_pass_refund",
-            amount: s.foodPassRefund, notes: "Unused Food Pass balance returned — membership deleted",
+            amount: s.foodPassRefund, notes: "Unused Food Pass balance returned (membership deleted)",
             created_by_staff_id: staff.id,
           });
         }
@@ -6159,14 +6157,14 @@ async function handleStaffAction(db: ReturnType<typeof adminClient>, staff: Staf
       if (s.cashbackAmount > 0) {
         await recordPayout(db, {
           student_id: mem.student_id, branch_id: mem.branch_id, payout_type: "cashback",
-          amount: s.cashbackAmount, notes: "Cashback settled — membership deleted",
+          amount: s.cashbackAmount, notes: "Cashback settled (membership deleted)",
           created_by_staff_id: staff.id,
         });
       }
       if (s.proratedRefund > 0) {
         await recordPayout(db, {
           student_id: mem.student_id, branch_id: mem.branch_id, payout_type: "membership_refund",
-          amount: s.proratedRefund, notes: `Refund for ${s.remainingDays} unused day(s) × ₹${s.refundDailyRate} (plan ₹${s.planAmount} ÷ ${s.totalDays} days) — membership deleted`,
+          amount: s.proratedRefund, notes: `Refund for ${s.remainingDays} unused day(s) × ₹${s.refundDailyRate} (plan ₹${s.planAmount} ÷ ${s.totalDays} days), membership deleted`,
           created_by_staff_id: staff.id,
         });
       }
@@ -6214,7 +6212,7 @@ async function handleStaffAction(db: ReturnType<typeof adminClient>, staff: Staf
       // from end_date vs today, which nothing here resets, so a second Quit would re-bill the
       // same days. Same re-entry guard delete_membership already uses.
       if (!mem.is_active) {
-        return err("This membership has already been ended — refresh to see its current state.");
+        return err("This membership has already ended. Refresh the page.");
       }
 
       const { data: locker } = await db.from("lockers").select("*")
@@ -6225,7 +6223,7 @@ async function handleStaffAction(db: ReturnType<typeof adminClient>, staff: Staf
         .eq("student_id", mem.student_id).is("billed_at", null).eq("excluded", false);
 
       if (await hasOpenSession(db, mem.student_id)) {
-        return err("This student is currently checked in — check them out before quitting the membership.");
+        return err("This student is checked in. Check them out before quitting the membership.");
       }
       const { bills: unpaidFoodBills, total: unpaidFoodTotal } = await unpaidFoodBillsFor(db, mem.student_id);
 
@@ -6256,7 +6254,7 @@ async function handleStaffAction(db: ReturnType<typeof adminClient>, staff: Staf
       const netAmount = totalOwed - totalCredit;
 
       if (netAmount > 0 && !paymentMode) {
-        return err(`₹${netAmount.toFixed(2)} still needs to be collected before closing — choose a payment mode.`);
+        return err(`Collect ₹${netAmount.toFixed(2)} before closing. Choose a payment mode.`);
       }
       // RSP W2a — waiving overstay needs a reason (checked before anything is written).
       const waiveReason = String(payload.waiveReason ?? "").trim();
@@ -6269,7 +6267,7 @@ async function handleStaffAction(db: ReturnType<typeof adminClient>, staff: Staf
       const { data: endedRows, error: endErr } = await db.from("memberships").update({ is_active: false, fee_due: 0 })
         .eq("id", membershipId).eq("is_active", true).select("id");
       if (endErr) return err(endErr.message);
-      if (!endedRows?.length) return err("This membership has already been ended — refresh to see its current state.");
+      if (!endedRows?.length) return err("This membership has already ended. Refresh the page.");
 
       // Quitting while on hold would otherwise leave the hold row open forever, showing
       // "Still on hold" in Hold History for a membership that's already ended.

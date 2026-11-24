@@ -8,8 +8,8 @@ import RenewalKindBanner from '../components/RenewalKindBanner'
 import ConfirmDialog from '../components/ConfirmDialog'
 
 const PAYMENT_OPTIONS = [
-  { value: 'cash', label: '💵 Cash' },
-  { value: 'upi', label: '📱 UPI' },
+  { value: 'cash', label: 'Cash' },
+  { value: 'upi', label: 'UPI' },
 ]
 
 // Fallback packages — used only until live rates are fetched from fee_config (Branch Settings)
@@ -72,7 +72,7 @@ function AttendanceModal({ studentId, branchId, booking, onClose, onDone }) {
           scheduledHours: scheduledHours !== '' ? Number(scheduledHours) : undefined,
         })
         if (res?.overtimeAlreadyBilled) {
-          window.alert('Attendance updated. Note: overtime for this session was already billed/collected, so its amount was not adjusted — check the Overtime History table if it needs a manual correction.')
+          window.alert('Attendance updated. Overtime for this session was already billed, so its amount was not changed. Correct it in Overtime History if needed.')
         }
       } else {
         await api('add_attendance', { studentId, branchId, startTime, endTime })
@@ -109,7 +109,7 @@ function AttendanceModal({ studentId, branchId, booking, onClose, onDone }) {
               onChange={(e) => setScheduledHours(e.target.value)}
             />
             <p style={{ fontSize: '0.75rem', color: 'var(--text-muted)', marginTop: '0.25rem' }}>
-              Used as the baseline for overtime — only change this if it looks wrong (e.g. from a record edited before this fix existed), not just because you're correcting the check-in/out time.
+              The basis for overtime. Change it only if it is wrong, not when correcting the check-in or check-out time.
             </p>
           </div>
         )}
@@ -201,7 +201,7 @@ function ChangePlanModal({ membership, tempPackages, permPackages, onClose, onDo
             <div className="form-group">
               <label>Hours / Day</label>
               <select value={hoursPerDay} onChange={(e) => setHoursPerDay(Number(e.target.value))}>
-                {packages.map(p => <option key={p.hours} value={p.hours}>{p.hours}h/day — {formatCurrency(p.fee)}/mo</option>)}
+                {packages.map(p => <option key={p.hours} value={p.hours}>{p.hours}h/day · {formatCurrency(p.fee)}/mo</option>)}
               </select>
             </div>
           </>
@@ -213,7 +213,7 @@ function ChangePlanModal({ membership, tempPackages, permPackages, onClose, onDo
             <p style={{ marginTop: '0.4rem', fontSize: '0.78rem', color: endDate >= todayISO() ? '#4ade80' : 'var(--text-muted)' }}>
               {endDate >= todayISO()
                 ? `Membership becomes active again until ${formatDate(endDate)}.`
-                : `Still expired — ${formatDate(endDate)} is in the past.`}
+                : `Still expired: ${formatDate(endDate)} is in the past.`}
             </p>
           )}
         </div>
@@ -276,7 +276,7 @@ function AddPaymentModal({ studentId, studentName, onClose, onDone }) {
         <h2>Add Payment History</h2>
         <p style={{ color: 'var(--text-muted)', fontSize: '0.85rem', marginBottom: '1rem' }}>
           Logs a payment for {studentName} that wasn't recorded automatically. This does not
-          clear any pending membership or locker fee — use those screens to settle a balance.
+          clear a pending membership or locker fee. Use those screens to settle a balance.
         </p>
         <div className="form-group">
           <label>Date</label>
@@ -788,10 +788,10 @@ export default function StudentProfilePage() {
         membershipId, discountType, discountValue: Number(discountValue), remarks: discountRemarks,
       })
       let msg = res.discountAmount > 0
-        ? `Discount of ${formatCurrency(res.discountAmount)} applied — new fee due ${formatCurrency(res.newFeeDue)}`
+        ? `Discount of ${formatCurrency(res.discountAmount)} applied. New fee due: ${formatCurrency(res.newFeeDue)}`
         : ''
       if (res.bankedAsCashback > 0) {
-        msg += `${msg ? ' — ' : ''}🎁 ${formatCurrency(res.bankedAsCashback)} banked as cashback`
+        msg += `${msg ? '. ' : ''}${formatCurrency(res.bankedAsCashback)} saved as cashback`
       }
       if (res.cashbackBankedNote) msg += ` (${res.cashbackBankedNote})`
       setDiscountSuccess(msg)
@@ -1123,14 +1123,14 @@ export default function StudentProfilePage() {
         <h1>{student.name}</h1>
         <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap' }}>
           <button type="button" className="btn btn-ghost" onClick={openEditDetails}>
-            ✏️ Edit Details
+            Edit Details
           </button>
           {(memberships ?? []).length > 0 && (
             <button
               type="button" className="btn btn-ghost"
               onClick={() => { setTransferBranchId(''); setTransferError(''); setTransferOpen(true) }}
             >
-              🔀 Transfer Branch
+              Transfer Branch
             </button>
           )}
           <Link to="/students" className="btn btn-ghost">← Students</Link>
@@ -1200,16 +1200,16 @@ export default function StudentProfilePage() {
         {/* The rest of these were full cards — shrunk to buttons that open the same content in a modal */}
         <div style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem' }}>
           {activeMem && (
-            <button type="button" className="btn btn-ghost btn-glass" style={{ width: '100%', flex: 1, maxHeight: 60 }} onClick={() => setOpenPanel('membership')}>⚙ Membership Control</button>
+            <button type="button" className="btn btn-ghost btn-glass" style={{ width: '100%', flex: 1, maxHeight: 60 }} onClick={() => setOpenPanel('membership')}>Membership Control</button>
           )}
           {activeMem?.fee_due > 0 && (
-            <button type="button" className="btn btn-ghost btn-glass" style={{ width: '100%', flex: 1, maxHeight: 60 }} onClick={() => setOpenPanel('payment')}>💳 Record Payment</button>
+            <button type="button" className="btn btn-ghost btn-glass" style={{ width: '100%', flex: 1, maxHeight: 60 }} onClick={() => setOpenPanel('payment')}>Record Payment</button>
           )}
           {activeMem && (
-            <button type="button" className="btn btn-ghost btn-glass" style={{ width: '100%', flex: 1, maxHeight: 60 }} onClick={() => setOpenPanel('discount')}>🏷️ Discount</button>
+            <button type="button" className="btn btn-ghost btn-glass" style={{ width: '100%', flex: 1, maxHeight: 60 }} onClick={() => setOpenPanel('discount')}>Discount</button>
           )}
           {activeMem && pendingCashback && (
-            <button type="button" className="btn btn-ghost btn-glass" style={{ width: '100%', flex: 1, maxHeight: 60 }} onClick={() => setOpenPanel('cashback')}>🎁 Cashback</button>
+            <button type="button" className="btn btn-ghost btn-glass" style={{ width: '100%', flex: 1, maxHeight: 60 }} onClick={() => setOpenPanel('cashback')}>Cashback</button>
           )}
           {activeMem && (
             <button
@@ -1217,7 +1217,7 @@ export default function StudentProfilePage() {
               style={{ width: '100%', flex: 1, maxHeight: 60, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '0.5rem' }}
               onClick={() => setOpenPanel('foodpass')}
             >
-              <span>🎫 Food Pass</span>
+              <span>Food Pass</span>
               {foodPass && (
                 <span className="mono" style={{ fontSize: '0.78rem', fontWeight: 700, color: Number(foodPass.balance) < 0 ? '#ff8888' : '#4ade80' }}>
                   ({formatCurrency(Number(foodPass.balance))})
@@ -1225,7 +1225,7 @@ export default function StudentProfilePage() {
               )}
             </button>
           )}
-          <button type="button" className="btn btn-ghost btn-glass" style={{ width: '100%', flex: 1, maxHeight: 60 }} onClick={() => setOpenPanel('locker')}>🔑 Locker</button>
+          <button type="button" className="btn btn-ghost btn-glass" style={{ width: '100%', flex: 1, maxHeight: 60 }} onClick={() => setOpenPanel('locker')}>Locker</button>
         </div>
       </div>
 
@@ -1240,7 +1240,7 @@ export default function StudentProfilePage() {
                   Starts on {formatDate(activeMem.start_date)} · period {formatDate(activeMem.start_date)} – {formatDate(activeMem.end_date)}
                 </p>
                 <p style={{ color: 'var(--text-muted)', fontSize: '0.78rem', margin: '0.3rem 0 0' }}>
-                  Paid at registration; check-in opens on the start date. Change Plan is available once the period starts. If it was entered by mistake, Delete Membership below refunds it.
+                  Paid at registration. Check-in and Change Plan open on the start date. If it was a mistake, Delete Membership below refunds it.
                 </p>
               </div>
             ) : notStartedYet ? (
@@ -1250,7 +1250,7 @@ export default function StudentProfilePage() {
                   Renewed early · new period {formatDate(activeMem.start_date)} – {formatDate(activeMem.end_date)}
                 </p>
                 <p style={{ color: 'var(--text-muted)', fontSize: '0.78rem', margin: '0.3rem 0 0.6rem' }}>
-                  The current plan runs till {formatDate(shiftDate(activeMem.start_date, -1))}; nothing to do on the start date. Change Plan and Delete are available once the new period starts — or cancel the early renewal to undo it.
+                  The current plan runs till {formatDate(shiftDate(activeMem.start_date, -1))}; nothing to do on the start date. Change Plan and Delete open when the new period starts, or cancel the early renewal to undo it.
                 </p>
                 <button
                   type="button" className="btn btn-ghost"
@@ -1266,7 +1266,7 @@ export default function StudentProfilePage() {
               <>
                 {isExpired && (
                   <p style={{ color: '#ff8888', fontWeight: 700, fontSize: '0.85rem', marginBottom: '0.75rem' }}>
-                    ⚠ Membership expired {formatDate(activeMem.end_date)} — renew to continue.
+                    ⚠ Membership expired {formatDate(activeMem.end_date)}. Renew to continue.
                   </p>
                 )}
                 <button
@@ -1286,7 +1286,7 @@ export default function StudentProfilePage() {
               <>
                 <p style={{ color: 'var(--text-muted)', fontSize: '0.85rem', marginBottom: '0.75rem' }}>
                   Membership is on hold. Days paused will be added back when resumed.
-                  {activeMem.category === 'permanent' && !activeMem.desk_id && ' Their cabin was released while on hold and given up for other students — pick a cabin to resume.'}
+                  {activeMem.category === 'permanent' && !activeMem.desk_id && ' Their cabin was released while on hold. Pick a cabin to resume.'}
                 </p>
                 <button
                   type="button" className="btn btn-primary"
@@ -1294,13 +1294,13 @@ export default function StudentProfilePage() {
                   onClick={() => activeMem.category === 'permanent' && !activeMem.desk_id ? setResumeCabinOpen(true) : handleResume(activeMem.id)}
                   disabled={holdLoading}
                 >
-                  {holdLoading ? 'Resuming…' : activeMem.category === 'permanent' && !activeMem.desk_id ? '🪑 Select Cabin & Resume' : '▶ Resume Membership'}
+                  {holdLoading ? 'Resuming…' : activeMem.category === 'permanent' && !activeMem.desk_id ? 'Select Cabin & Resume' : '▶ Resume Membership'}
                 </button>
               </>
             ) : (
               <>
                 <p style={{ color: 'var(--text-muted)', fontSize: '0.85rem', marginBottom: '0.75rem' }}>
-                  Put membership on hold — missed days will be redeemable on resume.
+                  Put the membership on hold. Missed days are added back on resume.
                 </p>
                 <button
                   type="button"
@@ -1326,7 +1326,7 @@ export default function StudentProfilePage() {
                 )}
                 {activeMem.category === 'permanent' && (
                   <button type="button" className="btn btn-ghost" style={{ width: '100%', fontSize: '0.85rem' }} onClick={() => setCabinChangeOpen(true)}>
-                    🪑 Change Cabin
+                    Change Cabin
                   </button>
                 )}
               </div>
@@ -1338,7 +1338,7 @@ export default function StudentProfilePage() {
                   style={{ width: '100%', fontSize: '0.85rem', marginTop: '0.25rem' }}
                   onClick={() => setPlanChangeOpen(true)}
                 >
-                  📅 Edit Expiry Date
+                  Edit Expiry Date
                 </button>
                 <p style={{ fontSize: '0.78rem', color: 'var(--text-muted)', marginTop: '0.35rem' }}>
                   Corrects a mistyped or lapsed date without recording a payment. Renew instead to change the plan or cabin.
@@ -1355,7 +1355,7 @@ export default function StudentProfilePage() {
                 }}
                 onClick={() => openDeleteMembership(activeMem.id)}
               >
-                🗑️ Delete Membership
+                Delete Membership
               </button>
             )}
             <div className="modal-actions">
@@ -1410,9 +1410,9 @@ export default function StudentProfilePage() {
         {activeMem && openPanel === 'discount' && (
           <div className="modal-overlay" onClick={() => setOpenPanel(null)}>
           <div className="modal" style={{ maxWidth: 420 }} onClick={(e) => e.stopPropagation()}>
-            <h2 style={{ color: 'var(--accent)', marginBottom: '0.5rem' }}>🏷️ Discount</h2>
+            <h2 style={{ color: 'var(--accent)', marginBottom: '0.5rem' }}>Discount</h2>
             <p style={{ color: 'var(--text-muted)', fontSize: '0.8rem', marginBottom: '0.75rem' }}>
-              {student.total_visits} visits · {student.total_hours_studied} hrs studied — reward loyalty with a discount.
+              {student.total_visits} visits · {student.total_hours_studied} hrs studied.
               {feeDueNum <= 0 && ' This membership has no pending fee, so the discount will be banked as a cashback.'}
             </p>
             <div className="form-group">
@@ -1485,12 +1485,12 @@ export default function StudentProfilePage() {
         {activeMem && pendingCashback && openPanel === 'cashback' && (
           <div className="modal-overlay" onClick={() => setOpenPanel(null)}>
           <div className="modal" style={{ maxWidth: 420 }} onClick={(e) => e.stopPropagation()}>
-            <h2 style={{ color: 'var(--accent)', marginBottom: '0.5rem' }}>🎁 Cashback</h2>
+            <h2 style={{ color: 'var(--accent)', marginBottom: '0.5rem' }}>Cashback</h2>
             <p className="mono" style={{ fontSize: '1.05rem', fontWeight: 700, color: 'var(--accent)', marginBottom: '0.3rem' }}>
               {pendingCashback.cashback_type === 'percent' ? `${pendingCashback.cashback_value}% Off` : formatCurrency(pendingCashback.cashback_value)}
             </p>
             <p style={{ fontSize: '0.82rem', color: 'var(--text-muted)' }}>
-              Pending — will be applied as a discount on the next renewal, or paid out in cash if the membership is closed instead.
+              Pending. Used as a discount on the next renewal, or paid in cash if the membership is closed.
             </p>
             {pendingCashback.notes && (
               <p style={{ fontSize: '0.78rem', color: 'var(--text-muted)', marginTop: '0.4rem', fontStyle: 'italic' }}>{pendingCashback.notes}</p>
@@ -1503,7 +1503,7 @@ export default function StudentProfilePage() {
                 onClick={handleRedeemCashbackNow}
                 disabled={redeemCashbackLoading}
               >
-                {redeemCashbackLoading ? 'Redeeming…' : '💵 Redeem Now'}
+                {redeemCashbackLoading ? 'Redeeming…' : 'Redeem Now'}
               </button>
             </div>
           </div>
@@ -1515,13 +1515,13 @@ export default function StudentProfilePage() {
         {activeMem && openPanel === 'foodpass' && (
           <div className="modal-overlay" onClick={() => setOpenPanel(null)}>
           <div className="modal" style={{ maxWidth: 420 }} onClick={(e) => e.stopPropagation()}>
-          <h2 style={{ color: 'var(--accent)', marginBottom: '0.75rem' }}>🎫 Food Pass</h2>
+          <h2 style={{ color: 'var(--accent)', marginBottom: '0.75rem' }}>Food Pass</h2>
           <p className="mono" style={{ fontSize: '1.1rem', fontWeight: 700, color: foodPass && Number(foodPass.balance) < 0 ? '#ff8888' : '#4ade80', marginBottom: '0.5rem' }}>
             Balance: {formatCurrency(Number(foodPass?.balance ?? 0))}
           </p>
           {foodPass && Number(foodPass.balance) < 0 && (
             <p style={{ fontSize: '0.78rem', color: '#ffaa44', marginBottom: '0.75rem' }}>
-              Balance is negative — please top up to settle.
+              Balance is negative. Top up to settle.
             </p>
           )}
           <div className="form-group">
@@ -1593,7 +1593,7 @@ export default function StudentProfilePage() {
                   type="button" className="btn btn-ghost" style={{ width: '100%', fontSize: '0.85rem', marginBottom: '0.75rem' }}
                   onClick={() => { setLockerDueDate(locker.locker_due_date); setEditingLockerDue(true) }}
                 >
-                  ✏️ Edit Due Date
+                  Edit Due Date
                 </button>
               )}
               {editingLockerNo ? (
@@ -1626,7 +1626,7 @@ export default function StudentProfilePage() {
                   type="button" className="btn btn-ghost" style={{ width: '100%', fontSize: '0.85rem', marginBottom: '0.75rem' }}
                   onClick={() => { setLockerNoEdit(''); setEditingLockerNo(true) }}
                 >
-                  ✏️ Edit Locker Number
+                  Edit Locker Number
                 </button>
               )}
               {Number(locker.fee_due) > 0 ? (
@@ -1709,7 +1709,7 @@ export default function StudentProfilePage() {
                       type="button" className="btn btn-ghost" style={{ width: '100%', fontSize: '0.85rem' }}
                       onClick={() => setRenewingLocker(true)}
                     >
-                      🔄 Renew Locker (+1 month)
+                      Renew Locker (+1 month)
                     </button>
                   )}
                 </div>
@@ -1840,7 +1840,7 @@ export default function StudentProfilePage() {
               </table>
             ) : (
               <p style={{ color: 'var(--text-muted)', fontSize: '0.8rem' }}>
-                Detailed pause/resume dates aren't available for holds taken before this history was added — only the total is known.
+                Pause and resume dates are not available for older holds. Only the total is known.
               </p>
             )}
           </div>
@@ -1849,7 +1849,7 @@ export default function StudentProfilePage() {
 
       {(discounts ?? []).length > 0 && (
         <div className="card" style={{ marginTop: '1rem' }}>
-          <h3 style={{ color: 'var(--accent)', marginBottom: '0.75rem' }}>🏷️ Discount History</h3>
+          <h3 style={{ color: 'var(--accent)', marginBottom: '0.75rem' }}>Discount History</h3>
           <table className="data-table">
             <thead>
               <tr><th>Date</th><th>Type</th><th>Value</th><th>Amount</th><th>Applied By</th><th>Remarks</th></tr>
@@ -1872,7 +1872,7 @@ export default function StudentProfilePage() {
 
       {(cashbacks ?? []).length > 0 && (
         <div className="card" style={{ marginTop: '1rem' }}>
-          <h3 style={{ color: 'var(--accent)', marginBottom: '0.75rem' }}>🎁 Cashback History</h3>
+          <h3 style={{ color: 'var(--accent)', marginBottom: '0.75rem' }}>Cashback History</h3>
           <table className="data-table">
             <thead>
               <tr><th>Date</th><th>Type</th><th>Value</th><th>Status</th><th>Redeemed/Settled Amount</th><th>Granted By</th><th>Notes</th></tr>
@@ -1928,7 +1928,7 @@ export default function StudentProfilePage() {
 
       {(edits ?? []).length > 0 && (
         <div className="card" style={{ marginTop: '1rem' }}>
-          <h3 style={{ color: 'var(--accent)', marginBottom: '0.75rem' }}>✏️ Edit History</h3>
+          <h3 style={{ color: 'var(--accent)', marginBottom: '0.75rem' }}>Edit History</h3>
           <table className="data-table">
             <thead>
               <tr><th>Date</th><th>Edit</th><th>From</th><th>To</th><th>Changed By</th></tr>
@@ -2046,7 +2046,7 @@ export default function StudentProfilePage() {
           <h3 style={{ color: 'var(--accent)', marginBottom: '0.75rem' }}>Overtime History</h3>
           <p style={{ color: 'var(--text-muted)', fontSize: '0.82rem', marginBottom: '0.75rem' }}>
             Total overtime: {(overtimeSessions ?? []).reduce((sum, s) => sum + s.overtime_minutes, 0)} minutes
-            {' '}(includes the 15 min grace period — billing itself still exempts it). Owed so far: {formatCurrency((overtimeSessions ?? []).filter(s => !s.billed_at && !s.excluded).reduce((sum, s) => sum + Number(s.billed_amount ?? 0), 0))}
+            {' '}(includes the 15 min grace period, which is not billed). Owed so far: {formatCurrency((overtimeSessions ?? []).filter(s => !s.billed_at && !s.excluded).reduce((sum, s) => sum + Number(s.billed_amount ?? 0), 0))}
           </p>
           <table className="data-table">
             <thead>
@@ -2094,7 +2094,7 @@ export default function StudentProfilePage() {
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.75rem', gap: '0.75rem', flexWrap: 'wrap' }}>
           <h3 style={{ color: 'var(--accent)', margin: 0 }}>Payment History</h3>
           <button type="button" className="btn btn-ghost" style={{ fontSize: '0.85rem' }} onClick={() => setAddPaymentOpen(true)}>
-            ➕ Add Payment History
+            Add Payment History
           </button>
         </div>
         <table className="data-table">
@@ -2173,7 +2173,7 @@ export default function StudentProfilePage() {
               <label>Hours per Day</label>
               <select value={renewHoursPerDay} disabled={renewPlanLocked} onChange={(e) => setRenewHoursPerDay(e.target.value === 'custom' ? 'custom' : Number(e.target.value))}>
                 {renewPackages.map(p => (
-                  <option key={p.hours} value={p.hours}>{p.hours} hrs/day — {formatCurrency(p.fee)}/mo</option>
+                  <option key={p.hours} value={p.hours}>{p.hours} hrs/day · {formatCurrency(p.fee)}/mo</option>
                 ))}
                 <option value="custom">Custom Plan</option>
               </select>
@@ -2221,7 +2221,7 @@ export default function StudentProfilePage() {
                     value={renewCustomDays} onChange={(e) => setRenewCustomDays(e.target.value)}
                   />
                   <input
-                    type="number" min={0} placeholder="Amount Collected (₹) — auto-calculated, editable"
+                    type="number" min={0} placeholder="Amount collected (₹), filled in automatically"
                     value={renewCustomDaysAmount} onChange={(e) => setRenewCustomDaysAmount(e.target.value)}
                   />
                 </div>
@@ -2232,7 +2232,7 @@ export default function StudentProfilePage() {
               <div className="form-group">
                 <label>Start Date</label>
                 {renewInfo.fixed ? (
-                  <p className="mono" style={{ fontSize: '0.9rem' }}>{formatDate(renewStartDate)} <span style={{ color: 'var(--text-muted)', fontSize: '0.75rem' }}>(fixed — the day after the current plan ends)</span></p>
+                  <p className="mono" style={{ fontSize: '0.9rem' }}>{formatDate(renewStartDate)} <span style={{ color: 'var(--text-muted)', fontSize: '0.75rem' }}>(fixed: the day after the current plan ends)</span></p>
                 ) : (
                   <input type="date" value={renewStartDate} min={renewInfo.minStart} max={renewInfo.maxStart} onChange={(e) => setRenewStartDate(e.target.value)} />
                 )}
@@ -2272,10 +2272,10 @@ export default function StudentProfilePage() {
                 <p className="mono" style={{ color: 'var(--text-muted)' }}>Renewal: {formatCurrency(renewBeforeCashback)}</p>
               )}
               {renewCashbackAmount > 0 && (
-                <p className="mono" style={{ color: '#4ade80' }}>🎁 Cashback applied: -{formatCurrency(renewCashbackAmount)}</p>
+                <p className="mono" style={{ color: '#4ade80' }}>Cashback applied: -{formatCurrency(renewCashbackAmount)}</p>
               )}
               {renewOvertimeDue > 0 && (
-                <p className="mono" style={{ color: '#ff8888' }}>⏱ Unbilled overtime: +{formatCurrency(renewOvertimeDue)}</p>
+                <p className="mono" style={{ color: '#ff8888' }}>Unbilled overtime: +{formatCurrency(renewOvertimeDue)}</p>
               )}
               <p className="mono">Total: {formatCurrency(renewTotal)}</p>
               {renewPayType === 'pending' && (
@@ -2338,7 +2338,7 @@ export default function StudentProfilePage() {
       {editOpen && (
         <div className="modal-overlay" onClick={() => setEditOpen(false)}>
           <div className="modal" style={{ maxWidth: 420 }} onClick={(e) => e.stopPropagation()}>
-            <h2 style={{ color: 'var(--accent)', marginBottom: '0.75rem' }}>✏️ Edit Student Details</h2>
+            <h2 style={{ color: 'var(--accent)', marginBottom: '0.75rem' }}>Edit Student Details</h2>
             <div className="form-group">
               <label>Name</label>
               <input value={editForm.name} onChange={(e) => setEditForm(f => ({ ...f, name: e.target.value }))} />
@@ -2382,7 +2382,7 @@ export default function StudentProfilePage() {
       {transferOpen && (
         <div className="modal-overlay" onClick={() => setTransferOpen(false)}>
           <div className="modal" style={{ maxWidth: 420 }} onClick={(e) => e.stopPropagation()}>
-            <h2 style={{ color: 'var(--accent)', marginBottom: '0.5rem' }}>🔀 Transfer Branch</h2>
+            <h2 style={{ color: 'var(--accent)', marginBottom: '0.5rem' }}>Transfer Branch</h2>
             <p style={{ color: 'var(--text-muted)', fontSize: '0.82rem', marginBottom: '0.75rem' }}>
               Permanently moves {student.name} to another branch.
               {activeMem?.category === 'permanent'
@@ -2404,7 +2404,7 @@ export default function StudentProfilePage() {
                 {transferDesks === null ? (
                   <p style={{ color: 'var(--text-muted)' }}>Loading…</p>
                 ) : transferDesks.length === 0 ? (
-                  <p style={{ color: '#ff8888', fontSize: '0.82rem' }}>No free cabins at this branch — transfer isn't possible until one opens up.</p>
+                  <p style={{ color: '#ff8888', fontSize: '0.82rem' }}>No free cabins at this branch. Transfer is possible once one is free.</p>
                 ) : (
                   <select value={transferDeskId} onChange={(e) => setTransferDeskId(e.target.value)}>
                     <option value="">Select a cabin</option>
@@ -2434,9 +2434,9 @@ export default function StudentProfilePage() {
       {deleteMembershipOpen && activeMem && (
         <div className="modal-overlay" onClick={() => setDeleteMembershipOpen(false)}>
           <div className="modal" style={{ maxWidth: 440 }} onClick={(e) => e.stopPropagation()}>
-            <h2 style={{ color: '#ff8888', marginBottom: '0.5rem' }}>🗑️ Delete Membership — {student.name}</h2>
+            <h2 style={{ color: '#ff8888', marginBottom: '0.5rem' }}>Delete Membership: {student.name}</h2>
             <p style={{ color: 'var(--text-muted)', fontSize: '0.82rem', marginBottom: '0.75rem' }}>
-              Ends the membership immediately{activeMem.category === 'permanent' ? ' and releases their cabin' : ''} — runs the same locker/Food Pass/cashback/overtime settlement as Quit Membership, plus a prorated refund for unused days. This can't be undone.
+              Ends the membership immediately{activeMem.category === 'permanent' ? ' and releases their cabin' : ''}. Settles locker, Food Pass, cashback and overtime as Quit Membership does, plus a refund for unused days. This can't be undone.
             </p>
 
             {deleteMembershipError && <p className="error-msg">{deleteMembershipError}</p>}
@@ -2458,7 +2458,7 @@ export default function StudentProfilePage() {
                     </p>
                   )}
                   {deleteSummary.overstayDays === 0 && activeMem.end_date < todayISO() && (
-                    <p style={{ fontSize: '0.78rem', color: 'var(--text-muted)' }}>No member check-ins since the plan ended — no overstay charged.</p>
+                    <p style={{ fontSize: '0.78rem', color: 'var(--text-muted)' }}>No check-ins since the plan ended, so no overstay charge.</p>
                   )}
                   <p className="mono" style={{ fontWeight: 700, marginTop: '0.3rem' }}>
                     Total: {formatCurrency(deleteSummary.totalOwed - (deleteWaiveOverstay ? deleteSummary.overstayCharge : 0))}
@@ -2516,7 +2516,7 @@ export default function StudentProfilePage() {
                       onChange={(e) => setDeleteWithholdLockerDeposit(e.target.checked)}
                       style={{ marginTop: '0.15rem' }}
                     />
-                    <span>Don't refund the locker deposit (e.g. locker damage) — it's forfeited instead of paid back.</span>
+                    <span>Keep the locker deposit instead of refunding it (for example, if the locker is damaged).</span>
                   </label>
                 )}
 
@@ -2527,7 +2527,7 @@ export default function StudentProfilePage() {
                       onChange={(e) => setDeleteWaiveProratedRefund(e.target.checked)}
                       style={{ marginTop: '0.15rem' }}
                     />
-                    <span>Don't refund the {deleteSummary.remainingDays} unused day{deleteSummary.remainingDays === 1 ? '' : 's'} — student is quitting early by choice, no refund owed.</span>
+                    <span>Don't refund the {deleteSummary.remainingDays} unused day{deleteSummary.remainingDays === 1 ? '' : 's'} . The student is leaving early by choice, so no refund is owed.</span>
                   </label>
                 )}
 
@@ -2542,7 +2542,7 @@ export default function StudentProfilePage() {
                     </p>
                   ) : (
                     <p className="mono" style={{ fontWeight: 700, fontSize: '1.05rem', color: '#4ade80' }}>
-                      Fully settled — nothing to collect or refund
+                      Fully settled. Nothing to collect or refund.
                     </p>
                   )}
                 </div>
@@ -2605,7 +2605,7 @@ export default function StudentProfilePage() {
           <div className="modal" style={{ maxWidth: 400 }} onClick={(e) => e.stopPropagation()}>
             <h2 style={{ color: '#ff8888', marginBottom: '0.5rem' }}>✕ Remove Locker</h2>
             <p style={{ color: 'var(--text-muted)', fontSize: '0.82rem', marginBottom: '0.75rem' }}>
-              Locker-only settlement — this doesn't touch their membership fee or any other pending balance.
+              Locker only. The membership fee and other balances are not affected.
             </p>
 
             {removeLockerError && <p className="error-msg">{removeLockerError}</p>}
@@ -2634,7 +2634,7 @@ export default function StudentProfilePage() {
                     </p>
                   ) : (
                     <p className="mono" style={{ fontWeight: 700, marginTop: '0.3rem', color: '#4ade80' }}>
-                      Fully settled — nothing to collect or refund
+                      Fully settled. Nothing to collect or refund.
                     </p>
                   )}
                 </div>
@@ -2646,7 +2646,7 @@ export default function StudentProfilePage() {
                       onChange={(e) => setWithholdLockerDepositOnRemove(e.target.checked)}
                       style={{ marginTop: '0.15rem' }}
                     />
-                    <span>Don't refund the locker deposit (e.g. locker damage) — it's forfeited instead of paid back.</span>
+                    <span>Keep the locker deposit instead of refunding it (for example, if the locker is damaged).</span>
                   </label>
                 )}
 
@@ -2683,7 +2683,7 @@ export default function StudentProfilePage() {
       {deleteMembershipNotice != null && (
         <div className="modal-overlay" onClick={() => setDeleteMembershipNotice(null)}>
           <div className="modal" style={{ maxWidth: 400 }} onClick={(e) => e.stopPropagation()}>
-            <h2>🗑️ Membership Deleted</h2>
+            <h2>Membership Deleted</h2>
             <div className="card" style={{ margin: '1rem 0', background: 'rgba(255,255,255,0.03)' }}>
               {deleteMembershipNotice.refundAmount > 0 ? (
                 <p className="mono" style={{ color: '#4ade80', fontSize: '1.2rem', fontWeight: 700 }}>
@@ -2757,7 +2757,7 @@ export default function StudentProfilePage() {
       {redeemCashbackNotice != null && (
         <div className="modal-overlay" onClick={() => setRedeemCashbackNotice(null)}>
           <div className="modal" style={{ maxWidth: 380 }} onClick={(e) => e.stopPropagation()}>
-            <h2>🎁 Cashback Redeemed</h2>
+            <h2>Cashback Redeemed</h2>
             <div className="card" style={{ margin: '1rem 0', background: 'rgba(74,222,128,0.06)' }}>
               <p className="mono" style={{ color: '#4ade80', fontSize: '1.2rem', fontWeight: 700 }}>
                 {formatCurrency(redeemCashbackNotice)}

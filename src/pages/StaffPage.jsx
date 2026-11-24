@@ -251,8 +251,8 @@ export default function StaffPage() {
     const isSelf = s.id === currentStaff?.id
     setConfirmDialog({
       message: isSelf
-        ? `Deactivate YOUR OWN account? This logs you out immediately and cannot be undone — this account can never be reactivated, and you will need another owner or admin account to get back in. Are you absolutely sure?`
-        : `Permanently remove ${s.display_name || s.username}? This cannot be undone — they will be logged out immediately and can never be reactivated.`,
+        ? `Deactivate your own account? This logs you out now and cannot be undone. The account can never be reactivated, and you will need another owner or admin account to get back in.`
+        : `Permanently remove ${s.display_name || s.username}? This cannot be undone. They are logged out now and can never be reactivated.`,
       onConfirm: async () => {
         try {
           await api('update_staff', { staffId: s.id, isActive: false })
@@ -422,7 +422,7 @@ export default function StaffPage() {
       {editTarget && (
         <div className="modal-overlay" onClick={() => setEditTarget(null)}>
           <div className="modal" style={{ maxWidth: 420 }} onClick={(e) => e.stopPropagation()}>
-            <h2>Edit Staff — {editTarget.display_name || editTarget.username}</h2>
+            <h2>Edit Staff · {editTarget.display_name || editTarget.username}</h2>
             <div className="form-group">
               <label>Username</label>
               <input value={editUsername} onChange={(e) => setEditUsername(e.target.value)} required />

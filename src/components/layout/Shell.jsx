@@ -313,7 +313,7 @@ export default function Shell() {
                   {[...branches].sort((a, b) => (a.name === 'Ram Nagar' ? -1 : b.name === 'Ram Nagar' ? 1 : 0)).map(b => (
                     <option key={b.id} value={b.id}>{b.name}</option>
                   ))}
-                  <option value={COMBINED_HALL_ID}>🏢 Combined Hall</option>
+                  <option value={COMBINED_HALL_ID}>Combined Hall</option>
                 </select>
               </div>
             )}
@@ -400,7 +400,7 @@ export default function Shell() {
           <div className="modal" style={{ maxWidth: 380 }} onClick={(e) => e.stopPropagation()}>
             <h2>End Session</h2>
             <p style={{ color: 'var(--text-muted)', fontSize: '0.9rem', marginBottom: '1rem' }}>
-              This logs you out immediately and locks your account for the rest of today — enter your password to confirm.
+              This logs you out now and locks your account until tomorrow. Enter your password to confirm.
             </p>
             <form onSubmit={confirmEndSession}>
               <div className="form-group">

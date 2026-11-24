@@ -68,7 +68,7 @@ function TaskTable({ tasks, allBranches, onToggle, currentStaffId, isOwner }) {
 }
 
 function IncompleteTaskTable({ tasks, allBranches, onComplete, currentStaffId, isOwner }) {
-  if (tasks.length === 0) return <p style={{ color: 'var(--text-muted)' }}>No incomplete tasks in the last 7 days. 🎉</p>
+  if (tasks.length === 0) return <p style={{ color: 'var(--text-muted)' }}>No incomplete tasks in the last 7 days.</p>
   return (
     <table className="data-table">
       <thead>
@@ -228,7 +228,7 @@ export default function TasksPage() {
       <div className="page-header">
         <h1>Actions</h1>
         {isCombinedHall ? (
-          <span style={{ fontSize: '0.85rem', color: 'var(--text-muted)' }}>🏢 All branches (Combined Hall)</span>
+          <span style={{ fontSize: '0.85rem', color: 'var(--text-muted)' }}>All branches (Combined Hall)</span>
         ) : isOwner && (
           <label style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', fontSize: '0.85rem', color: 'var(--text-muted)' }}>
             <input type="checkbox" checked={allBranches} onChange={(e) => setAllBranches(e.target.checked)} />

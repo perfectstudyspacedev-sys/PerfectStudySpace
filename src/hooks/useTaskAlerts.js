@@ -66,7 +66,7 @@ export function useTaskAlerts(currentStaffId) {
           message: `New task assigned: "${t.title}"`,
           createdAt: Date.now(),
         })
-        fireNativeNotification('📋 New Task Assigned', t.title)
+        fireNativeNotification('New Task Assigned', t.title)
       }
       if (sawUnseen) saveSeen(currentStaffId, seen.current)
       if (newToasts.length) setToasts(prev => [...prev, ...newToasts])

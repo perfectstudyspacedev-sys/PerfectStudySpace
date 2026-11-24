@@ -109,7 +109,7 @@ function ActiveMembersTab({ branchId, tempPackages, permPackages }) {
       openWhatsApp(m.student_phone, buildStudyReportMessage({ name: m.student_name, bookings: bookings ?? [], from, to }))
       setReportDialog(null)
     } catch (err) {
-      setReportDialog((d) => (d ? { ...d, error: err.message || 'Could not load attendance details — please try again.' } : d))
+      setReportDialog((d) => (d ? { ...d, error: err.message || 'Could not load attendance details. Please try again.' } : d))
     } finally {
       setWaLoadingId(null)
     }
@@ -134,7 +134,7 @@ function ActiveMembersTab({ branchId, tempPackages, permPackages }) {
       // that picker only lives on the student's profile page, so send staff there instead
       // of failing silently.
       if (err.message?.toLowerCase().includes('cabin') && studentId) {
-        window.alert(`${err.message} — opening their profile to pick one.`)
+        window.alert(`${err.message.replace(/\.$/, '')}. Opening their profile to pick one.`)
         navigate(`/students/${studentId}`)
       } else {
         window.alert(err.message)
@@ -314,7 +314,7 @@ function ActiveMembersTab({ branchId, tempPackages, permPackages }) {
       {expiringSoon.length > 0 && (
         <div style={{ marginBottom: '1rem', background: 'rgba(255,150,0,0.07)', border: '1px solid rgba(255,150,0,0.3)', borderRadius: 6, padding: '0.65rem 1rem' }}>
           <span style={{ color: '#ffaa44', fontWeight: 700, fontSize: '0.85rem' }}>
-            ⚠ {expiringSoon.length} membership{expiringSoon.length > 1 ? 's' : ''} expiring within the next 7 days — remind them to renew:
+            ⚠ {expiringSoon.length} membership{expiringSoon.length > 1 ? 's' : ''} expiring within 7 days. Remind them to renew:
           </span>
           <span style={{ color: 'var(--text-muted)', fontSize: '0.82rem', marginLeft: 8 }}>
             {expiringSoon.map(m => m.student_name).join(', ')}
@@ -508,7 +508,7 @@ function ActiveMembersTab({ branchId, tempPackages, permPackages }) {
               <label>Hours per Day</label>
               <select value={renewHoursPerDay} disabled={renewPlanLocked} onChange={(e) => setRenewHoursPerDay(e.target.value === 'custom' ? 'custom' : Number(e.target.value))}>
                 {renewPackages.map(p => (
-                  <option key={p.hours} value={p.hours}>{p.hours} hrs/day — {formatCurrency(p.fee)}/mo</option>
+                  <option key={p.hours} value={p.hours}>{p.hours} hrs/day · {formatCurrency(p.fee)}/mo</option>
                 ))}
                 <option value="custom">Custom Plan</option>
               </select>
@@ -556,7 +556,7 @@ function ActiveMembersTab({ branchId, tempPackages, permPackages }) {
                     value={renewCustomDays} onChange={(e) => setRenewCustomDays(e.target.value)}
                   />
                   <input
-                    type="number" min={0} placeholder="Amount Collected (₹) — auto-calculated, editable"
+                    type="number" min={0} placeholder="Amount collected (₹), filled in automatically"
                     value={renewCustomDaysAmount} onChange={(e) => setRenewCustomDaysAmount(e.target.value)}
                   />
                 </div>
@@ -566,7 +566,7 @@ function ActiveMembersTab({ branchId, tempPackages, permPackages }) {
             <div className="form-group">
               <label>Start Date</label>
               {renewModal.renewal.fixed ? (
-                <p className="mono" style={{ fontSize: '0.9rem' }}>{formatDate(renewStartDate)} <span style={{ color: 'var(--text-muted)', fontSize: '0.75rem' }}>(fixed — the day after the current plan ends)</span></p>
+                <p className="mono" style={{ fontSize: '0.9rem' }}>{formatDate(renewStartDate)} <span style={{ color: 'var(--text-muted)', fontSize: '0.75rem' }}>(fixed: the day after the current plan ends)</span></p>
               ) : (
                 <input type="date" value={renewStartDate} min={renewModal.renewal.minStart} max={renewModal.renewal.maxStart} onChange={(e) => setRenewStartDate(e.target.value)} />
               )}
@@ -605,10 +605,10 @@ function ActiveMembersTab({ branchId, tempPackages, permPackages }) {
                 <p className="mono" style={{ color: 'var(--text-muted)' }}>Renewal: {formatCurrency(renewBeforeCashback)}</p>
               )}
               {renewCashbackAmount > 0 && (
-                <p className="mono" style={{ color: '#4ade80' }}>🎁 Cashback applied: -{formatCurrency(renewCashbackAmount)}</p>
+                <p className="mono" style={{ color: '#4ade80' }}>Cashback applied: -{formatCurrency(renewCashbackAmount)}</p>
               )}
               {renewOvertimeDue > 0 && (
-                <p className="mono" style={{ color: '#ff8888' }}>⏱ Unbilled overtime: +{formatCurrency(renewOvertimeDue)}</p>
+                <p className="mono" style={{ color: '#ff8888' }}>Unbilled overtime: +{formatCurrency(renewOvertimeDue)}</p>
               )}
               <p className="mono">Total: {formatCurrency(renewTotal)}</p>
               {renewPayType === 'pending' && (
@@ -639,7 +639,7 @@ function ActiveMembersTab({ branchId, tempPackages, permPackages }) {
       {closeModal && (
         <div className="modal-overlay" onClick={() => setCloseModal(null)}>
           <div className="modal" style={{ maxWidth: 420 }} onClick={(e) => e.stopPropagation()}>
-            <h2>Quit Membership — {closeModal.studentName}</h2>
+            <h2>Quit Membership · {closeModal.studentName}</h2>
 
             {!closeSummary ? (
               <p>Checking final settlement…</p>
@@ -670,7 +670,7 @@ function ActiveMembersTab({ branchId, tempPackages, permPackages }) {
                     </p>
                   )}
                   {closeSummary.overstayDays === 0 && closeSummary.planEndDate < todayISO() && (
-                    <p style={{ fontSize: '0.78rem', color: 'var(--text-muted)' }}>No member check-ins since the plan ended — no overstay charged.</p>
+                    <p style={{ fontSize: '0.78rem', color: 'var(--text-muted)' }}>No check-ins since the plan ended, so no overstay charge.</p>
                   )}
                   <p className="mono" style={{ fontWeight: 700, marginTop: '0.3rem' }}>
                     Total: {formatCurrency(closeSummary.totalOwed - (waiveOverstayCharge ? closeSummary.overstayCharge : 0))}
@@ -721,7 +721,7 @@ function ActiveMembersTab({ branchId, tempPackages, permPackages }) {
                       onChange={(e) => setWithholdLockerDeposit(e.target.checked)}
                       style={{ marginTop: '0.15rem' }}
                     />
-                    <span>Don't refund the locker deposit (e.g. locker damage) — it's forfeited instead of paid back.</span>
+                    <span>Keep the locker deposit instead of refunding it (for example, if the locker is damaged).</span>
                   </label>
                 )}
 
@@ -736,7 +736,7 @@ function ActiveMembersTab({ branchId, tempPackages, permPackages }) {
                     </p>
                   ) : (
                     <p className="mono" style={{ fontWeight: 700, fontSize: '1.05rem', color: '#4ade80' }}>
-                      Fully settled — nothing to collect or refund
+                      Fully settled. Nothing to collect or refund.
                     </p>
                   )}
                 </div>
@@ -745,7 +745,7 @@ function ActiveMembersTab({ branchId, tempPackages, permPackages }) {
                   <div className="form-group">
                     <label>Payment Mode</label>
                     <div style={{ display: 'flex', gap: '0.5rem' }}>
-                      {[{ value: 'cash', label: '💵 Cash' }, { value: 'upi', label: '📱 UPI' }].map(({ value, label }) => (
+                      {[{ value: 'cash', label: 'Cash' }, { value: 'upi', label: 'UPI' }].map(({ value, label }) => (
                         <button key={value} type="button" onClick={() => setClosePayMode(value)}
                           style={{ flex: 1, padding: '0.5rem', border: `1px solid ${closePayMode === value ? 'var(--accent)' : '#333'}`, borderRadius: 999, background: closePayMode === value ? 'rgba(255,215,0,0.08)' : '#141414', color: closePayMode === value ? 'var(--accent)' : 'var(--text-muted)', cursor: 'pointer', fontWeight: 600 }}
                         >{label}</button>
@@ -780,7 +780,7 @@ function ActiveMembersTab({ branchId, tempPackages, permPackages }) {
           onConfirm={sendAttendanceWhatsApp} onCancel={() => setReportDialog(null)}
         >
           <p style={{ marginBottom: '0.75rem' }}>
-            Study report for <strong style={{ color: 'var(--text)' }}>{reportDialog.m.student_name}</strong> — choose the dates it should cover (up to {STUDY_REPORT_MAX_DAYS} days).
+            Study report for <strong style={{ color: 'var(--text)' }}>{reportDialog.m.student_name}</strong>. Choose the dates to cover (up to {STUDY_REPORT_MAX_DAYS} days).
           </p>
           <div style={{ display: 'flex', gap: '0.75rem', flexWrap: 'wrap' }}>
             <div className="form-group" style={{ flex: '1 1 140px', marginBottom: '0.5rem' }}>
@@ -804,7 +804,7 @@ function ActiveMembersTab({ branchId, tempPackages, permPackages }) {
 
       {onHoldNotice && (
         <ConfirmDialog title="Membership on hold" testId="on-hold-dialog" onConfirm={() => setOnHoldNotice(null)}>
-          {onHoldNotice}'s membership is on hold — resume it from their profile before renewing.
+          {onHoldNotice}'s membership is on hold. Resume it from their profile before renewing.
         </ConfirmDialog>
       )}
 
@@ -842,13 +842,13 @@ function ActiveMembersTab({ branchId, tempPackages, permPackages }) {
       {settlementNotice && (
         <div className="modal-overlay" onClick={() => setSettlementNotice(null)}>
           <div className="modal" style={{ maxWidth: 400 }} onClick={(e) => e.stopPropagation()}>
-            <h2>💸 Refund Due</h2>
+            <h2>Refund Due</h2>
             <div className="card" style={{ margin: '1rem 0', background: 'rgba(74,222,128,0.05)' }}>
               <p className="mono" style={{ color: '#4ade80', fontSize: '1.3rem', fontWeight: 700 }}>
                 {formatCurrency(settlementNotice.refundAmount)}
               </p>
               <p style={{ fontSize: '0.85rem', color: 'var(--text-muted)', marginTop: '0.5rem' }}>
-                Please pay this back to the student now — it covers
+                Pay this back to the student now. It covers
                 {settlementNotice.lockerDepositRefund > 0 && ` their ${formatCurrency(settlementNotice.lockerDepositRefund)} locker deposit`}
                 {settlementNotice.lockerDepositRefund > 0 && settlementNotice.foodPassRefund > 0 && ','}
                 {settlementNotice.foodPassRefund > 0 && ` their ${formatCurrency(settlementNotice.foodPassRefund)} unused Food Pass balance`}
@@ -924,7 +924,7 @@ function NewMembershipForm({ branchId, onCreated, tempPackages, permPackages, si
     try {
       await api('update_welcome_template', { value: waTemplateDraft })
       setWaTemplate(waTemplateDraft)
-      setWaTemplateMsg('Saved — applies to every staff member now')
+      setWaTemplateMsg('Saved. All staff now use this message.')
     } catch (e) {
       setWaTemplateMsg(e.message)
     } finally {
@@ -1121,7 +1121,7 @@ function NewMembershipForm({ branchId, onCreated, tempPackages, permPackages, si
     e.preventDefault()
     if (!/^\d{10}$/.test(phone)) return setError('Phone must be 10 digits')
     if (blockedByActiveMembership) {
-      return setError(`${selectedStudent.name} already has an active membership on this phone number. Use Renew on their profile, or close/delete that membership before registering again.`)
+      return setError(`${selectedStudent.name} already has an active membership. Renew it from their profile, or close it before registering again.`)
     }
     if (name.trim().split(/\s+/).length < 2) return setError('Please enter the full name (first and last name)')
     if (!/^\d{10}$/.test(emergencyContact)) return setError('Emergency contact must be a 10 digit phone number')
@@ -1129,7 +1129,7 @@ function NewMembershipForm({ branchId, onCreated, tempPackages, permPackages, si
     if (!referralSource) return setError('Please select how the student heard about us')
     if (category === 'permanent' && !deskId) return setError('Select a cabin for this permanent membership')
     if (paymentType === 'partial' && (advanceNum <= 0 || advanceNum >= grandTotal)) {
-      return setError('Partial payment must be more than ₹0 and less than the total — use Full Paid or Full Pending otherwise')
+      return setError('A partial payment must be more than ₹0 and less than the total. Otherwise use Full Paid or Full Pending.')
     }
     if (isCustomPlan && !(Number(customAmount) > 0)) return setError('Enter a valid custom amount')
     if (isCustomPlan && !(Number(customWeekdayHours) > 0)) return setError('Enter valid weekday hours')
@@ -1195,7 +1195,7 @@ function NewMembershipForm({ branchId, onCreated, tempPackages, permPackages, si
         {receipt.phone && (
           <div style={{ marginTop: '1.1rem', paddingTop: '1rem', borderTop: '1px solid var(--border)' }}>
             <p style={{ color: waSent ? '#4ade80' : 'var(--text-muted)', fontSize: '0.82rem', marginBottom: '0.6rem' }}>
-              {waSent ? `💬 WhatsApp welcome message sent to ${receipt.phone}` : `A welcome message will be sent to ${receipt.phone}.`}
+              {waSent ? `WhatsApp welcome message sent to ${receipt.phone}` : `A welcome message will be sent to ${receipt.phone}.`}
             </p>
             <button
               type="button"
@@ -1206,7 +1206,7 @@ function NewMembershipForm({ branchId, onCreated, tempPackages, permPackages, si
                 background: 'rgba(74,222,128,0.1)', border: '1px solid rgba(74,222,128,0.4)', color: '#4ade80',
               }}
             >
-              💬 Resend WhatsApp Message
+              Resend WhatsApp Message
             </button>
           </div>
         )}
@@ -1245,7 +1245,7 @@ function NewMembershipForm({ branchId, onCreated, tempPackages, permPackages, si
     <div className="card registration-form" ref={formTopRef}>
       {activeSignup && (
         <div data-testid="signup-prefill-banner" style={{ background: 'rgba(244,114,182,0.08)', border: '1px solid rgba(244,114,182,0.4)', borderRadius: 6, padding: '0.55rem 0.7rem', marginBottom: '1rem', fontSize: '0.82rem' }}>
-          <strong style={{ color: '#f472b6' }}>From self sign-up #{activeSignup.ref}</strong> — check the details with the student, then choose the plan and payment and press Create Membership.
+          <strong style={{ color: '#f472b6' }}>From self sign-up #{activeSignup.ref}</strong>. Check the details with the student, choose the plan and payment, then press Create Membership.
           <button type="button" className="btn btn-ghost" style={{ marginLeft: '0.5rem', fontSize: '0.75rem', padding: '0.2rem 0.6rem' }} onClick={putBackSignup}>Put back</button>
         </div>
       )}
@@ -1286,13 +1286,13 @@ function NewMembershipForm({ branchId, onCreated, tempPackages, permPackages, si
               background: 'rgba(255,60,60,0.08)', border: '1px solid rgba(255,60,60,0.4)',
             }}>
               <p style={{ fontSize: '0.8rem', color: '#ff8888', fontWeight: 700, marginBottom: '0.25rem' }}>
-                ⛔ This phone already has an active membership
+                This phone already has an active membership
               </p>
               <p style={{ fontSize: '0.76rem', color: 'var(--text-muted)', lineHeight: 1.5 }}>
                 {selectedStudent.name} holds an active <span className="cap">{selectedStudent.active_membership?.category}</span> membership
                 {selectedStudent.active_branch_name ? ` at ${selectedStudent.active_branch_name}` : ''}
                 {selectedStudent.active_membership?.end_date ? `, valid until ${formatDate(selectedStudent.active_membership.end_date)}` : ''}.
-                Registering again would create a duplicate — use <strong>Renew</strong> on their profile to extend it, or close/delete that membership first.
+                Registering again would create a duplicate. Use <strong>Renew</strong> on their profile, or close the membership first.
               </p>
               <button
                 type="button" className="btn btn-ghost"
@@ -1357,7 +1357,7 @@ function NewMembershipForm({ branchId, onCreated, tempPackages, permPackages, si
             <p style={{ marginTop: '0.4rem', fontSize: '0.78rem', color: freeDesks.length ? 'var(--text-muted)' : '#ff8888' }}>
               {freeDesks.length
                 ? `${freeDesks.length} cabin${freeDesks.length === 1 ? '' : 's'} free at this branch`
-                : 'No cabins free at this branch — add them to the Waitlist tab instead'}
+                : 'No free cabins at this branch. Add them to the Waitlist tab instead.'}
             </p>
           </div>
         )}
@@ -1365,7 +1365,7 @@ function NewMembershipForm({ branchId, onCreated, tempPackages, permPackages, si
           <label>Hours per Day</label>
           <select value={hoursPerDay} onChange={(e) => setHoursPerDay(e.target.value === 'custom' ? 'custom' : Number(e.target.value))}>
             {packages.map(p => (
-              <option key={p.hours} value={p.hours}>{p.hours} hrs/day — {formatCurrency(p.fee)}/mo</option>
+              <option key={p.hours} value={p.hours}>{p.hours} hrs/day · {formatCurrency(p.fee)}/mo</option>
             ))}
             <option value="custom">Custom Plan</option>
           </select>
@@ -1407,7 +1407,7 @@ function NewMembershipForm({ branchId, onCreated, tempPackages, permPackages, si
                 value={customDays} onChange={(e) => setCustomDays(e.target.value)}
               />
               <input
-                type="number" min={0} placeholder="Amount Collected (₹) — auto-calculated, editable"
+                type="number" min={0} placeholder="Amount collected (₹), filled in automatically"
                 value={customDaysAmount} onChange={(e) => setCustomDaysAmount(e.target.value)}
               />
             </div>
@@ -1418,7 +1418,7 @@ function NewMembershipForm({ branchId, onCreated, tempPackages, permPackages, si
           <input type="date" value={startDate} max={shiftDate(todayISO(), 60)} onChange={(e) => setStartDate(e.target.value)} />
           {startDate > todayISO() && (
             <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)', marginTop: '0.3rem' }}>
-              Starts on {formatDate(startDate)}: the payment is recorded today, check-in opens on the start date.
+              Starts on {formatDate(startDate)}. The payment counts today; check-in opens on the start date.
             </div>
           )}
         </div>
@@ -1432,7 +1432,7 @@ function NewMembershipForm({ branchId, onCreated, tempPackages, permPackages, si
                 borderRadius: 999, background: !withLocker ? 'rgba(255,215,0,0.08)' : '#141414',
                 color: !withLocker ? 'var(--accent)' : 'var(--text-muted)', cursor: 'pointer', fontWeight: 600, fontSize: '0.88rem',
               }}
-            >🕓 Avail Later</button>
+            >Avail Later</button>
             <button
               type="button" onClick={() => setWithLocker(true)}
               disabled={lockerStatus != null && lockerStatus.available <= 0}
@@ -1442,7 +1442,7 @@ function NewMembershipForm({ branchId, onCreated, tempPackages, permPackages, si
                 color: withLocker ? 'var(--accent)' : 'var(--text-muted)', cursor: 'pointer', fontWeight: 600, fontSize: '0.88rem',
                 opacity: (lockerStatus != null && lockerStatus.available <= 0) ? 0.4 : 1,
               }}
-            >🔐 Avail Now</button>
+            >Avail Now</button>
           </div>
 
           {lockerStatus && (
@@ -1461,7 +1461,7 @@ function NewMembershipForm({ branchId, onCreated, tempPackages, permPackages, si
             </div>
           ) : (
             <p style={{ marginTop: '0.4rem', fontSize: '0.78rem', color: 'var(--text-muted)' }}>
-              No locker charged now — one can be added anytime later from the student's profile page.
+              No locker charge now. A locker can be added later from the student's profile.
             </p>
           )}
         </div>
@@ -1530,10 +1530,10 @@ function NewMembershipForm({ branchId, onCreated, tempPackages, permPackages, si
 
     {isOwner && (
       <div className="card registration-extra">
-        <h3 style={{ color: 'var(--accent)', marginBottom: '0.5rem' }}>💬 WhatsApp Welcome Message</h3>
+        <h3 style={{ color: 'var(--accent)', marginBottom: '0.5rem' }}>WhatsApp Welcome Message</h3>
         <p style={{ color: 'var(--text-muted)', fontSize: '0.8rem', marginBottom: '0.75rem' }}>
           Sent automatically to the phone number above as soon as the membership is created. Use <code>{'{name}'}</code> where
-          the student's name should go — it's filled in for each new membership. Shared across every staff member and device —
+          the student's name should go; it is filled in for each new membership. Shared by all staff and devices:
           saving here changes what everyone sends.
         </p>
         <div className="form-group" style={{ marginBottom: '0.5rem' }}>
@@ -1607,7 +1607,7 @@ function WaitlistTab({ branchId }) {
         <h3 style={{ color: 'var(--accent)', marginBottom: '0.5rem' }}>Waitlist</h3>
         <p style={{ color: 'var(--text-muted)', fontSize: '0.88rem' }}>
           The waitlist activates only once every permanent seat at this branch is occupied.
-          There {data.freeDesks === 1 ? 'is' : 'are'} currently <strong style={{ color: 'var(--accent)' }}>{data.freeDesks}</strong> free desk{data.freeDesks === 1 ? '' : 's'} — register new permanent members directly from the "New Registration" tab.
+          There {data.freeDesks === 1 ? 'is' : 'are'} currently <strong style={{ color: 'var(--accent)' }}>{data.freeDesks}</strong> free desk{data.freeDesks === 1 ? '' : 's'}. Register new permanent members directly from the "New Registration" tab.
         </p>
       </div>
     )
@@ -1618,7 +1618,7 @@ function WaitlistTab({ branchId }) {
       <div className="card">
         <h3 style={{ color: 'var(--accent)', marginBottom: '0.5rem' }}>Add to Waitlist</h3>
         <p style={{ color: 'var(--text-muted)', fontSize: '0.82rem', marginBottom: '1rem' }}>
-          All permanent seats are occupied — new sign-ups queue here, first come first served.
+          All permanent seats are taken. New sign-ups wait here, first come first served.
         </p>
         <form onSubmit={handleAdd}>
           <div className="form-group">
@@ -1783,7 +1783,7 @@ function CombinedMembershipView() {
 
   return (
     <>
-      <div className="page-header"><h1>Membership — Combined Hall</h1></div>
+      <div className="page-header"><h1>Membership · Combined Hall</h1></div>
       {error && <p className="error-msg" style={{ marginBottom: '1rem' }}>{error}</p>}
       {members && allGroups.length > 0 && (
         <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap', marginBottom: '1rem' }}>

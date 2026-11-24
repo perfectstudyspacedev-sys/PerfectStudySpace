@@ -203,14 +203,12 @@ export function getMultiMonthDiscount(months) {
 // via the get_welcome_template/update_welcome_template actions) so every staff member's
 // device sends the same message; this is only the local fallback used before that first
 // fetch resolves or if it fails.
-export const DEFAULT_WELCOME_TEMPLATE = `Hi {name}, welcome to Perfect Study Space! 🎉
+export const DEFAULT_WELCOME_TEMPLATE = `Hi {name}, welcome to Perfect Study Space.
 
-Thanks for joining us — we're excited to have you with us. Please take a moment to fill out this form so we can complete your registration:
-
-📝 Fill out the form here:
+Please fill in this form to complete your registration:
 https://docs.google.com/forms/d/e/1FAIpQLSeolzoVIDAsOq35SZ0MbsJb1qBrBcInBG4VER6As5yc8A0oEA/viewform?usp=header
 
-If you have any questions, feel free to reach out anytime. We're happy to help! 😊`
+For any questions, please contact the front desk.`
 
 // How a student heard about us — shared by registration and the profile's Edit Details form.
 // Values must match the students.referral_source CHECK constraint (024 migration).

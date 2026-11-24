@@ -80,7 +80,7 @@ export default function MessagesPage() {
           <div style={{ padding: '0.85rem 1rem', borderBottom: '1px solid #262626' }}>
             {isCombinedHall ? (
               <div className="period-toggle">
-                <button type="button" className="active">🌐 All Staff</button>
+                <button type="button" className="active">All Staff</button>
               </div>
             ) : (
               <div className="period-toggle">
@@ -88,14 +88,14 @@ export default function MessagesPage() {
                   🏢 {activeBranch?.name ?? 'Branch'} Team
                 </button>
                 <button type="button" className={channel === 'all' ? 'active' : ''} onClick={() => setChannel('all')}>
-                  🌐 All Staff
+                  All Staff
                 </button>
               </div>
             )}
             <p style={{ fontSize: '0.75rem', color: 'var(--text-muted)', marginTop: '0.5rem' }}>
               {isCombinedHall
-                ? 'Combined Hall shows the All Staff channel — switch to a specific branch to see that branch\'s team chat.'
-                : 'Internal messages between owner and staff only — not visible to students.'}
+                ? 'Combined Hall shows the All Staff channel. Switch to a branch to see its team chat.'
+                : 'Messages between owner and staff only. Students can\'t see them.'}
             </p>
           </div>
 
@@ -108,7 +108,7 @@ export default function MessagesPage() {
             }}
           >
             {messages.length === 0 && (
-              <p style={{ color: 'var(--text-muted)', fontSize: '0.85rem', margin: 'auto' }}>No messages yet. Say hello 👋</p>
+              <p style={{ color: 'var(--text-muted)', fontSize: '0.85rem', margin: 'auto' }}>No messages yet.</p>
             )}
             {[...messages].reverse().map((m, i, arr) => {
               const isMe = m.sender_staff_id === staff?.id
